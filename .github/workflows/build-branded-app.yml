@@ -31,9 +31,9 @@ on:
         required: true
         default: "1.0.0"
       api_base_url:
-        description: "Live Backend URL (e.g. https://api.vaultra.in)"
+        description: "Live Backend URL (e.g. http://54.152.192.240)"
         required: true
-        default: "https://api.vaultra.in"
+        default: "http://54.152.192.240"
       platform:
         description: "Target Platform"
         required: true
