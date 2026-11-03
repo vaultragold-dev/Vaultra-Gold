@@ -91,6 +91,12 @@ jobs:
               store_short = ""
               store_long = ""
               store_keywords = ""
+              address = ""
+              state = ""
+              pincode = ""
+              owner_name = ""
+              def __getattr__(self, _):
+                  return ""
 
           j = JewellerStub()
           base_url = os.environ["API_BASE_URL"].rstrip("/")
