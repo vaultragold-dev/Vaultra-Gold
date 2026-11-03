@@ -1,0 +1,31 @@
+version: "3.9"
+
+services:
+  db:
+    image: postgres:15-alpine
+    restart: always
+    environment:
+      POSTGRES_USER: vaultra
+      POSTGRES_PASSWORD: vaultra_secure_db_password
+      POSTGRES_DB: vaultra_digigold
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  backend:
+    build: ./backend
+    restart: always
+    depends_on:
+      - db
+    ports:
+      - "8001:8001"
+    env_file:
+      - ./backend/.env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://vaultra:vaultra_secure_db_password@db:5432/vaultra_digigold
+    volumes:
+      - ./backend/uploads:/app/uploads
+
+volumes:
+  pgdata:

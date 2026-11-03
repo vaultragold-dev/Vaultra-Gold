@@ -1,0 +1,249 @@
+name: Build Branded Jeweller App (Android & iOS)
+
+on:
+  workflow_dispatch:
+    inputs:
+      tenant_id:
+        description: "Jeweller Tenant ID (e.g. jeweller_sharma)"
+        required: true
+        default: "jeweller_sharma"
+      app_name:
+        description: "App Name shown on phone (e.g. Sharma Gold)"
+        required: true
+        default: "Sharma Gold"
+      bundle_id:
+        description: "Android Package & iOS Bundle ID (e.g. in.vaultra.sharmagold)"
+        required: true
+        default: "in.vaultra.sharmagold"
+      theme_preset:
+        description: "Theme Preset"
+        required: true
+        type: choice
+        options:
+          - royal_gold
+          - emerald_vault
+          - ruby_heritage
+          - midnight_bullion
+          - ivory_minimal
+        default: "royal_gold"
+      app_version:
+        description: "App Version"
+        required: true
+        default: "1.0.0"
+      api_base_url:
+        description: "Live Backend URL (e.g. https://api.vaultra.in)"
+        required: true
+        default: "https://api.vaultra.in"
+      platform:
+        description: "Target Platform"
+        required: true
+        type: choice
+        options:
+          - all
+          - android
+          - ios
+        default: "android"
+
+jobs:
+  prepare-branding:
+    name: "1. Generate Branded Assets & Config"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Pillow & Requests
+        run: pip install Pillow requests
+
+      - name: Generate tenant.config.json & Branded Icons/Splash
+        env:
+          TENANT_ID: ${{ inputs.tenant_id }}
+          APP_NAME: ${{ inputs.app_name }}
+          BUNDLE_ID: ${{ inputs.bundle_id }}
+          THEME_PRESET: ${{ inputs.theme_preset }}
+          APP_VERSION: ${{ inputs.app_version }}
+          API_BASE_URL: ${{ inputs.api_base_url }}
+        run: |
+          python - << 'EOF'
+          import os, sys, json, zipfile, io, requests
+          from pathlib import Path
+          sys.path.insert(0, str(Path("backend").resolve()))
+          import white_label as wl
+
+          class JewellerStub:
+              id = os.environ["TENANT_ID"]
+              business_name = os.environ["APP_NAME"]
+              app_name = os.environ["APP_NAME"]
+              bundle_id = os.environ["BUNDLE_ID"]
+              theme_preset = os.environ["THEME_PRESET"]
+              app_version = os.environ["APP_VERSION"]
+              city = "India"
+              phone = ""
+              email = "support@vaultra.in"
+              support_email = "support@vaultra.in"
+              store_short = ""
+              store_long = ""
+              store_keywords = ""
+
+          j = JewellerStub()
+          base_url = os.environ["API_BASE_URL"].rstrip("/")
+          logo_bytes = None
+          splash_bytes = None
+          try:
+              r = requests.get(f"{base_url}/api/tenant/{j.id}/config", timeout=10)
+              if r.status_code == 200:
+                  data = r.json()
+                  j.business_name = data.get("business_name") or j.business_name
+                  assets = data.get("assets") or {}
+                  if assets.get("logoUrl"):
+                      lr = requests.get(assets["logoUrl"], timeout=10)
+                      if lr.status_code == 200:
+                          logo_bytes = lr.content
+                  if assets.get("splashUrl"):
+                      sr = requests.get(assets["splashUrl"], timeout=10)
+                      if sr.status_code == 200:
+                          splash_bytes = sr.content
+          except Exception as e:
+              print(f"Notice: Using generated monogram logo ({e})")
+
+          kit_bytes, cfg = wl.build_app_kit(j, base_url, {}, logo_bytes, splash_bytes)
+          Path("app-kit.zip").write_bytes(kit_bytes)
+
+          # Apply config.json and assets into frontend/
+          Path("frontend/tenant.config.json").write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+          assets_dir = Path("frontend/tenant-assets")
+          assets_dir.mkdir(parents=True, exist_ok=True)
+          with zipfile.ZipFile(io.BytesIO(kit_bytes)) as zf:
+              for name in ("icon.png", "adaptive-icon.png", "splash.png"):
+                  (assets_dir / name).write_bytes(zf.read(f"assets/{name}"))
+          print("Successfully generated white-label branding for:", j.app_name, j.bundle_id)
+          EOF
+
+      - name: Upload Branded App Kit & Store Graphics (.zip)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.bundle_id }}-store-kit
+          path: |
+            app-kit.zip
+            frontend/tenant.config.json
+            frontend/tenant-assets/
+
+  build-android:
+    name: "2. Build Android (.apk & .aab)"
+    needs: prepare-branding
+    if: ${{ inputs.platform == 'android' || inputs.platform == 'all' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download Branded Assets
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.bundle_id }}-store-kit
+          path: .
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Frontend Dependencies
+        working-directory: frontend
+        run: |
+          corepack enable
+          yarn install --no-immutable || npm install --legacy-peer-deps
+
+      - name: Expo Prebuild (Generate Native Android Project)
+        working-directory: frontend
+        env:
+          EXPO_PUBLIC_BACKEND_URL: ${{ inputs.api_base_url }}
+        run: npx expo prebuild --platform android --clean
+
+      - name: Build Signed Release APK & Play Store AAB
+        working-directory: frontend/android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease bundleRelease --no-daemon
+
+      - name: Upload Ready-to-Install Android APK & Play Store AAB
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.bundle_id }}-android-builds
+          path: |
+            frontend/android/app/build/outputs/apk/release/*.apk
+            frontend/android/app/build/outputs/bundle/release/*.aab
+
+  build-ios:
+    name: "3. Build iOS (.ipa / Xcode Archive)"
+    needs: prepare-branding
+    if: ${{ inputs.platform == 'ios' || inputs.platform == 'all' }}
+    runs-on: macos-14
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download Branded Assets
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.bundle_id }}-store-kit
+          path: .
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Frontend Dependencies
+        working-directory: frontend
+        run: |
+          corepack enable
+          yarn install --no-immutable || npm install --legacy-peer-deps
+
+      - name: Expo Prebuild (Generate Native iOS Project)
+        working-directory: frontend
+        env:
+          EXPO_PUBLIC_BACKEND_URL: ${{ inputs.api_base_url }}
+        run: npx expo prebuild --platform ios --clean
+
+      - name: Build iOS via EAS (if EXPO_TOKEN is configured) or Xcode Archive
+        working-directory: frontend
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          EXPO_PUBLIC_BACKEND_URL: ${{ inputs.api_base_url }}
+        run: |
+          if [ -n "$EXPO_TOKEN" ]; then
+            npx eas-cli build --platform ios --profile production --non-interactive
+          else
+            cd ios
+            pod install --repo-update
+            WORKSPACE=$(ls -d *.xcworkspace | head -n 1)
+            SCHEME="${WORKSPACE%.xcworkspace}"
+            xcodebuild -workspace "$WORKSPACE" -scheme "$SCHEME" -configuration Release -sdk iphoneos -archivePath "$RUNNER_TEMP/app.xcarchive" archive CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=""
+            mkdir -p "$RUNNER_TEMP/Payload"
+            cp -r "$RUNNER_TEMP/app.xcarchive/Products/Applications/"*.app "$RUNNER_TEMP/Payload/"
+            cd "$RUNNER_TEMP"
+            zip -r "$GITHUB_WORKSPACE/frontend/ios-unsigned.ipa" Payload
+          fi
+
+      - name: Upload iOS Build Artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.bundle_id }}-ios-build
+          path: |
+            frontend/*.ipa

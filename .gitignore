@@ -1,0 +1,52 @@
+# IDE and editors
+.idea/
+.vscode/
+
+# Dependencies
+node_modules/
+/node_modules
+/.pnp
+.pnp.js
+.yarn/install-state.gz
+
+# Testing & coverage
+/coverage
+.pytest_cache/
+
+# Builds
+/build
+dist/
+frontend/android/
+frontend/ios/
+frontend/.expo/
+
+# Environment & credentials
+.env
+.env.*
+*.env
+!.env.example
+*token.json*
+*credentials.json*
+*.key
+*.keystore
+*.jks
+*.p8
+*.p12
+*.mobileprovision
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# Local storage & databases
+pgdata/
+backups/
+backend/uploads/
+
+# Logs & OS
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.DS_Store

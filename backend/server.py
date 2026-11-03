@@ -1,0 +1,3796 @@
+"""Vaultra DigiGold — Multi-tenant Digital Gold Platform Backend
+FastAPI + PostgreSQL (SQLAlchemy async)
+"""
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Query
+from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from dotenv import load_dotenv
+from starlette.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
+from typing import Optional, List
+from pathlib import Path
+from datetime import datetime, timezone, timedelta
+from sqlalchemy import select, update, delete, func, and_, or_, desc, asc, text, case
+from sqlalchemy.ext.asyncio import AsyncSession
+import time
+import os, re, json, logging, uuid, random, asyncio, hmac, hashlib, secrets, math
+import white_label as wl
+import bcrypt, jwt
+
+ROOT_DIR = Path(__file__).parent
+load_dotenv(ROOT_DIR / '.env')
+
+from database import get_db, init_db, AsyncSessionLocal
+from models import (
+    Jeweller, Customer, OtpChallenge, Transaction, Order, PoolAccumulator,
+    PoolContribution, BifurcationInvoice, Product, Pickup, SIP, Alert, Goal,
+    Gift, Notification, WalletTransaction, Quote, MasterAdmin
+)
+
+JWT_SECRET = os.environ['JWT_SECRET']
+SETU_CLIENT_ID = os.environ.get('SETU_CLIENT_ID', '')
+SETU_CLIENT_SECRET = os.environ.get('SETU_CLIENT_SECRET', '')
+
+app = FastAPI(title="Vaultra DigiGold API")
+api = APIRouter(prefix="/api")
+bearer = HTTPBearer(auto_error=False)
+logger = logging.getLogger("vaultra")
+logging.getLogger("httpx").setLevel(logging.WARNING)  # request URLs carry the feed API key
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
+GST_RATE = 0.03
+SELL_SPREAD = 0.97
+QUOTE_SECONDS = 120  # price freeze shown to the customer
+POOL_THRESHOLD = 10.0  # grams
+
+# ─── Price Engine (MT5 live feed, simulated fallback) ────────────────────────
+MT5_RATES_URL = os.environ.get('MT5_RATES_URL', '').strip()
+MT5_API_KEY = os.environ.get('MT5_API_KEY', '').strip()
+MT5_GOLD_SYMBOL = os.environ.get('MT5_GOLD_SYMBOL', 'GOLDDEC').strip()
+MT5_SILVER_SYMBOL = os.environ.get('MT5_SILVER_SYMBOL', 'SILVERDEC').strip()
+MT5_GOLD_UNIT_GRAMS = float(os.environ.get('MT5_GOLD_UNIT_GRAMS') or 10)      # MCX gold quoted per 10g
+MT5_SILVER_UNIT_GRAMS = float(os.environ.get('MT5_SILVER_UNIT_GRAMS') or 1000)  # MCX silver quoted per kg
+MT5_POLL_SECONDS = 0.1  # pause between live MT5 reads (each read itself takes ~0.4s over the tunnel)
+METAAPI_TOKEN = os.environ.get('METAAPI_TOKEN', '').strip()
+METAAPI_ACCOUNT_ID = os.environ.get('METAAPI_ACCOUNT_ID', '').strip()
+METAAPI_REGION = (os.environ.get('METAAPI_REGION') or 'new-york').strip()
+MT5_LOGIN = os.environ.get('MT5_LOGIN', '').strip()
+MT5_INVESTOR_PASSWORD = os.environ.get('MT5_INVESTOR_PASSWORD', '').strip()
+MT5_SERVER = os.environ.get('MT5_SERVER', '').strip()
+METAAPI_PROVISIONING = "https://mt-provisioning-api-v1.agiliumtrade.agiliumtrade.ai"
+METAAPI_INVALID = ""
+if METAAPI_TOKEN and not re.fullmatch(r"[A-Za-z0-9._\-]{20,}", METAAPI_TOKEN):
+    METAAPI_INVALID = "MetaApi token looks invalid (it should be one long code with no spaces)"
+    METAAPI_TOKEN = ""
+if METAAPI_ACCOUNT_ID and not re.fullmatch(r"[0-9a-fA-F-]{20,64}", METAAPI_ACCOUNT_ID):
+    METAAPI_ACCOUNT_ID = ""  # will auto-provision from MT5 login if available
+# Runtime MetaApi state (account may be created automatically from MT5 login details)
+META = {"account_id": METAAPI_ACCOUNT_ID, "state": "", "connection": "", "ready": False, "checked_at": 0.0}
+METAAPI_PREV: dict = {}  # symbol -> (prev_close, fetched_at_epoch)
+MT5_STALE_SECONDS = 15
+
+PRICE = {"base": 7285.50, "open": 7285.50, "prev": 7285.50, "anchor": 7285.50, "updated_at": None}
+SILVER_PRICE = {"base": 92.50, "open": 92.50, "prev": 92.50, "anchor": 92.50, "updated_at": None}
+RATE_FEED = {"source": "simulated", "last_live_at": None,
+             "error": ("" if MT5_RATES_URL else METAAPI_INVALID) or ("" if (MT5_RATES_URL or METAAPI_TOKEN) else "Live rate feed not configured")}
+
+DEFAULT_MARGIN = {"gold_buy": 0.0, "gold_sell": 3.0, "silver_buy": 0.0, "silver_sell": 3.0}
+MARGINS: dict = {}  # jeweller_id -> margin dict (percent)
+
+
+def cache_margins(j):
+    MARGINS[j.id] = {
+        "gold_buy": j.gold_buy_markup_pct or 0.0, "gold_sell": j.gold_sell_discount_pct or 0.0,
+        "silver_buy": j.silver_buy_markup_pct or 0.0, "silver_sell": j.silver_sell_discount_pct or 0.0,
+        "gold_comm": j.gold_commission_per_g or 0.0, "silver_comm": j.silver_commission_per_g or 0.0,
+        "gold22_comm": j.gold22_commission_per_g or 0.0, "gold18_comm": j.gold18_commission_per_g or 0.0,
+    }
+
+
+def karat_rates(jid=None):
+    """24K/22K/18K per-gram rates: live 24K scaled by purity (22/24, 18/24) + that karat's margin (+/- ₹/g)."""
+    m = MARGINS.get(jid) or DEFAULT_MARGIN
+    base = PRICE["base"]
+    return {"24K": gold_rate(jid)[0],
+            "22K": r2(base * 22 / 24 + m.get("gold22_comm", 0.0)),
+            "18K": r2(base * 18 / 24 + m.get("gold18_comm", 0.0))}
+
+
+def now_utc():
+    return datetime.now(timezone.utc)
+
+
+def now_iso():
+    return now_utc().isoformat()
+
+
+def r4(x):
+    return math.floor(x * 10000) / 10000
+
+
+def r2(x):
+    return round(x + 1e-9, 2)
+
+
+def _apply_margin(base, metal, jid):
+    m = MARGINS.get(jid) or DEFAULT_MARGIN
+    buy = base * (1 + m[f"{metal}_buy"] / 100) + m.get(f"{metal}_comm", 0.0)
+    return r2(buy), r2(base * (1 - m[f"{metal}_sell"] / 100))
+
+
+def gold_rate(jid: Optional[str] = None):
+    return _apply_margin(PRICE["base"], "gold", jid)
+
+
+def silver_rate(jid: Optional[str] = None):
+    return _apply_margin(SILVER_PRICE["base"], "silver", jid)
+
+
+def price_payload(jid: Optional[str] = None):
+    buy, sell = gold_rate(jid)
+    change = r2(PRICE["base"] - PRICE["open"])
+    silver_buy, silver_sell = silver_rate(jid)
+    silver_change = r2(SILVER_PRICE["base"] - SILVER_PRICE["open"])
+    live = RATE_FEED["source"] == "mt5"
+    ctl = controls_for(jid)
+    if not ctl["rates"]:  # rates hidden by Master for this shop / all shops: never send numbers
+        return {"purity": "24K (99.9%)", "buy": 0, "sell": 0, "change": 0, "change_pct": 0, "direction": "up",
+                "gst_rate": GST_RATE, "updated_at": now_iso(), "source": "hidden", "live": False, "offline": False,
+                "has_live": False, "rates_hidden": True, "booking_enabled": ctl["booking"], "min_investment": ctl["min_investment"],
+                "base_rate": 0, "karats": {"24K": 0, "22K": 0, "18K": 0},
+                "silver": {"buy": 0, "sell": 0, "change": 0, "change_pct": 0, "direction": "up", "base_rate": 0}}
+    return {
+        "purity": "24K (99.9%)", "buy": buy, "sell": sell,
+        "rates_hidden": False, "booking_enabled": ctl["booking"], "min_investment": ctl["min_investment"],
+        "change": change, "change_pct": r2(change / PRICE["open"] * 100) if PRICE["open"] else 0,
+        "direction": "up" if PRICE["base"] >= PRICE["open"] else "down",
+        "gst_rate": GST_RATE, "updated_at": PRICE["updated_at"] or now_iso(),
+        "source": RATE_FEED["source"], "live": live, "offline": RATE_FEED["source"] == "offline",
+        "has_live": RATE_FEED["source"] != "offline" or bool(PRICE.get("real")),
+        "base_rate": r2(PRICE["base"]),
+        "karats": karat_rates(jid),
+        "silver": {
+            "buy": silver_buy, "sell": silver_sell,
+            "change": silver_change,
+            "change_pct": r2(silver_change / SILVER_PRICE["open"] * 100) if SILVER_PRICE["open"] else 0,
+            "direction": "up" if SILVER_PRICE["base"] >= SILVER_PRICE["open"] else "down",
+            "base_rate": r2(SILVER_PRICE["base"]),
+        },
+    }
+
+
+def require_live_rates():
+    """Never charge customers at a frozen/stale rate while the live feed is down."""
+    if RATE_FEED["source"] == "offline":
+        raise HTTPException(503, "Live rates are temporarily unavailable. Please try again in a few minutes.")
+
+
+# ─── Platform controls (Master → Security & Controls) ─────────────────────────
+CONTROLS = {"global": {"rates": True, "booking": True, "min_investment": 500.0}, "shops": {}}
+
+
+def controls_for(jid):
+    g = CONTROLS["global"]
+    s = CONTROLS["shops"].get(jid or "", {})
+    return {"rates": bool(g.get("rates", True) and s.get("rates", True)),
+            "booking": bool(g.get("booking", True) and s.get("booking", True)),
+            "min_investment": float(g.get("min_investment", 500.0))}
+
+
+def shown_gold_rate(jid):
+    """Gold rate customers may see; 0 when Master has hidden rates for this shop (prices then show as —)."""
+    return gold_rate(jid)[0] if controls_for(jid)["rates"] else 0.0
+
+
+def require_booking(jid, amount=None):
+    ctl = controls_for(jid)
+    if not ctl["rates"] or not ctl["booking"]:
+        raise HTTPException(403, "Booking is currently turned off for this store. Please try again later.")
+    if amount is not None and amount < ctl["min_investment"]:
+        raise HTTPException(400, f"Minimum investment is ₹{ctl['min_investment']:,.0f}")
+
+
+def _mt5_url():
+    u = MT5_RATES_URL.rstrip("/")
+    return u if u.endswith("/rates") else u + "/rates"
+
+
+def _per_gram(data: dict, symbol: str, unit: float):
+    v = data.get(symbol) or {}
+    if not isinstance(v, dict) or v.get("error"):
+        raise ValueError(f"{symbol}: {v.get('error') if isinstance(v, dict) else 'missing'}")
+    bid, ask = v.get("bid") or 0, v.get("ask") or 0
+    px = (bid + ask) / 2 if bid and ask else (v.get("last") or bid or ask)
+    if not px:
+        raise ValueError(f"{symbol}: no price yet")
+    prev = v.get("prev_close") or v.get("open") or px
+    return px / unit, prev / unit
+
+
+async def fetch_mt5(client):
+    headers = {"ngrok-skip-browser-warning": "1"}
+    params = {"symbols": f"{MT5_GOLD_SYMBOL},{MT5_SILVER_SYMBOL}"}
+    if MT5_API_KEY:
+        headers["X-API-Key"] = MT5_API_KEY
+        params["key"] = MT5_API_KEY
+    r = await client.get(_mt5_url(), params=params, headers=headers)
+    r.raise_for_status()
+    data = r.json()
+    return _per_gram(data, MT5_GOLD_SYMBOL, MT5_GOLD_UNIT_GRAMS), _per_gram(data, MT5_SILVER_SYMBOL, MT5_SILVER_UNIT_GRAMS)
+
+
+async def _setting(key: str, value: Optional[str] = None):
+    async with AsyncSessionLocal() as db:
+        if value is None:
+            r = await db.execute(text("SELECT value FROM app_settings WHERE key = :k"), {"k": key})
+            return r.scalar_one_or_none()
+        await db.execute(text("INSERT INTO app_settings(key, value) VALUES (:k, :v) ON CONFLICT (key) DO UPDATE SET value = :v"), {"k": key, "v": value})
+        await db.commit()
+
+
+async def ensure_metaapi(client) -> bool:
+    """Make sure a deployed MetaApi account exists. Creates one from MT5 login details if needed."""
+    loop_t = asyncio.get_event_loop().time()
+    if META["ready"] and loop_t - META["checked_at"] < 600:
+        return True
+    if not META["ready"] and loop_t - META["checked_at"] < 20:
+        return False
+    META["checked_at"] = loop_t
+    h = {"auth-token": METAAPI_TOKEN, "Accept": "application/json"}
+    if not META["account_id"]:
+        META["account_id"] = await _setting("metaapi_account_id") or ""
+    if not META["account_id"]:
+        if not (MT5_LOGIN and MT5_INVESTOR_PASSWORD and MT5_SERVER):
+            RATE_FEED["error"] = "Add MT5 login, investor password and server (or a MetaApi account ID)"
+            return False
+        txid = await _setting("metaapi_txid")
+        if not txid:
+            txid = uuid.uuid4().hex
+            await _setting("metaapi_txid", txid)
+        r = await client.post(f"{METAAPI_PROVISIONING}/users/current/accounts", headers=h | {"transaction-id": txid}, json={
+            "name": f"vaultra-rates-{MT5_LOGIN}", "login": MT5_LOGIN, "password": MT5_INVESTOR_PASSWORD,
+            "server": MT5_SERVER, "platform": "mt5", "magic": 0, "region": METAAPI_REGION})
+        if r.status_code == 202:
+            RATE_FEED["error"] = "MetaApi is connecting your MT5 account…"
+            return False
+        if r.status_code >= 400:
+            try:
+                msg = r.json().get("message", "")
+            except Exception:
+                msg = ""
+            RATE_FEED["error"] = f"MetaApi could not add the MT5 account ({r.status_code}). {msg}"[:200]
+            return False
+        META["account_id"] = r.json().get("id", "")
+        await _setting("metaapi_account_id", META["account_id"])
+    r = await client.get(f"{METAAPI_PROVISIONING}/users/current/accounts/{META['account_id']}", headers=h)
+    if r.status_code >= 400:
+        RATE_FEED["error"] = f"MetaApi account not reachable ({r.status_code})"
+        return False
+    a = r.json()
+    META.update(state=a.get("state", ""), connection=a.get("connectionStatus", ""))
+    if META["state"] in ("UNDEPLOYED", "DRAFT"):
+        await client.post(f"{METAAPI_PROVISIONING}/users/current/accounts/{META['account_id']}/deploy", headers=h)
+        RATE_FEED["error"] = "Starting the MT5 connection on MetaApi…"
+        return False
+    if META["state"] != "DEPLOYED" or META["connection"] != "CONNECTED":
+        RATE_FEED["error"] = f"MetaApi account is {META['state'].lower() or 'starting'} / {META['connection'].lower() or 'connecting'}"
+        return False
+    META["ready"] = True
+    return True
+
+
+async def _metaapi_symbol(client, symbol: str, unit: float):
+    base = f"https://mt-client-api-v1.{METAAPI_REGION}.agiliumtrade.ai/users/current/accounts/{META['account_id']}"
+    h = {"auth-token": METAAPI_TOKEN, "Accept": "application/json"}
+    r = await client.get(f"{base}/symbols/{symbol}/current-price", params={"keepSubscription": "true"}, headers=h)
+    if r.status_code == 404:
+        raise ValueError(f"Symbol {symbol} not found on your MT5 account — check the exact symbol name in MT5 Market Watch")
+    if r.status_code >= 400:
+        META["ready"] = r.status_code not in (401, 403, 409)
+        raise ValueError(f"MetaApi {symbol}: HTTP {r.status_code}")
+    d = r.json()
+    bid, ask = d.get("bid") or 0, d.get("ask") or 0
+    px = (bid + ask) / 2 if bid and ask else (bid or ask)
+    if not px:
+        raise ValueError(f"MetaApi {symbol}: no price")
+    prev, at = METAAPI_PREV.get(symbol, (None, 0))
+    loop_t = asyncio.get_event_loop().time()
+    if prev is None or loop_t - at > 900:
+        try:
+            md = f"https://mt-market-data-client-api-v1.{METAAPI_REGION}.agiliumtrade.ai/users/current/accounts/{META['account_id']}"
+            c = await client.get(f"{md}/historical-market-data/symbols/{symbol}/timeframes/1d/candles", params={"limit": 2}, headers=h)
+            candles = c.json() if c.status_code < 400 else []
+            if isinstance(candles, list) and len(candles) >= 2:
+                prev = sorted(candles, key=lambda x: x.get("time", ""))[-2].get("close") or prev
+        except Exception:
+            pass
+        METAAPI_PREV[symbol] = (prev or px, loop_t)
+        prev = prev or px
+    return px / unit, prev / unit
+
+
+async def fetch_metaapi(client):
+    g = await _metaapi_symbol(client, MT5_GOLD_SYMBOL, MT5_GOLD_UNIT_GRAMS)
+    sv = await _metaapi_symbol(client, MT5_SILVER_SYMBOL, MT5_SILVER_UNIT_GRAMS)
+    return g, sv
+
+
+def _set_live(state, px, prev):
+    state["real"] = True
+    state["prev"] = state["base"]
+    state["base"] = r2(px)
+    state["open"] = r2(prev)
+    state["anchor"] = state["base"]
+    state["updated_at"] = now_iso()
+
+
+def _simulate(state, jitter):
+    state["prev"] = state["base"]
+    drift = (state["anchor"] - state["base"]) * 0.05
+    lo, hi = state["anchor"] * 0.95, state["anchor"] * 1.05
+    state["base"] = r2(max(lo, min(hi, state["base"] + drift + random.uniform(-jitter, jitter * 1.06))))
+    state["updated_at"] = now_iso()
+
+
+async def price_loop():
+    import httpx
+    last_err_log = 0.0
+    last_save = 0.0
+    async with httpx.AsyncClient(timeout=5) as client:
+        while True:
+            live_cfg = bool(METAAPI_TOKEN) or bool(MT5_RATES_URL)
+            await asyncio.sleep(MT5_POLL_SECONDS if live_cfg else 3)
+            if live_cfg:
+                try:
+                    if METAAPI_TOKEN and not MT5_RATES_URL:
+                        if not await ensure_metaapi(client):
+                            raise ValueError(RATE_FEED["error"] or "MetaApi not ready")
+                        (g, gp), (s, sp) = await fetch_metaapi(client)
+                    else:
+                        (g, gp), (s, sp) = await fetch_mt5(client)
+                    _set_live(PRICE, g, gp)
+                    _set_live(SILVER_PRICE, s, sp)
+                    RATE_FEED.update(source="mt5", last_live_at=now_utc(), error="")
+                    if asyncio.get_event_loop().time() - last_save > 60:
+                        last_save = asyncio.get_event_loop().time()
+                        await _setting("last_live_rates", json.dumps({"g": g, "gp": gp, "s": s, "sp": sp, "at": now_iso()}))
+                    continue
+                except Exception as e:  # feed down / tunnel closed / market closed
+                    msg = str(e).replace(MT5_API_KEY, "***") if MT5_API_KEY else str(e)
+                    RATE_FEED["error"] = msg[:200]
+                    if asyncio.get_event_loop().time() - last_err_log > 60:
+                        logger.warning(f"MT5 rate feed error: {msg[:300]}")
+                        last_err_log = asyncio.get_event_loop().time()
+                    last = RATE_FEED["last_live_at"]
+                    if last and (now_utc() - last).total_seconds() < MT5_STALE_SECONDS:
+                        continue  # keep last live price briefly
+                    # Live feed configured but down: freeze last price and block new quotes (never invent prices)
+                    RATE_FEED["source"] = "offline"
+                    continue
+            RATE_FEED["source"] = "simulated"
+            _simulate(PRICE, PRICE["anchor"] * 0.0006)
+            _simulate(SILVER_PRICE, SILVER_PRICE["anchor"] * 0.0016)
+
+
+# ─── Auth Helpers ─────────────────────────────────────────────────────────────
+def make_token(sub: str, role: str, extra: dict = None, days: int = 7):
+    n = now_utc()
+    payload = {"sub": sub, "role": role, "iat": n, "exp": n + timedelta(days=days)}
+    if extra:
+        payload.update(extra)
+    return jwt.encode(payload, JWT_SECRET, algorithm="HS256")
+
+
+def decode_token(creds: Optional[HTTPAuthorizationCredentials], role: str):
+    if not creds:
+        raise HTTPException(401, "Not authenticated")
+    try:
+        p = jwt.decode(creds.credentials, JWT_SECRET, algorithms=["HS256"])
+    except jwt.InvalidTokenError:
+        raise HTTPException(401, "Invalid token")
+    if p.get("role") != role:
+        raise HTTPException(403, "Forbidden")
+    return p
+
+
+async def get_current_customer(request: Request, creds: Optional[HTTPAuthorizationCredentials] = Depends(bearer), db: AsyncSession = Depends(get_db)):
+    p = decode_token(creds, "customer")
+    result = await db.execute(select(Customer).where(Customer.id == p["sub"]))
+    customer = result.scalar_one_or_none()
+    if not customer:
+        raise HTTPException(401, "Customer not found")
+    # Branded apps send X-Tenant-ID: a token from another jeweller's app is never accepted
+    tid = request.headers.get("x-tenant-id", "").strip()
+    if tid and tid != customer.jeweller_id:
+        raise HTTPException(403, "This account belongs to a different store")
+    return customer
+
+
+async def get_current_jeweller(creds: Optional[HTTPAuthorizationCredentials] = Depends(bearer), db: AsyncSession = Depends(get_db)):
+    p = decode_token(creds, "jeweller")
+    result = await db.execute(select(Jeweller).where(Jeweller.id == p["sub"]))
+    jeweller = result.scalar_one_or_none()
+    if not jeweller:
+        raise HTTPException(401, "Jeweller not found")
+    return jeweller
+
+
+async def get_master_admin(creds: Optional[HTTPAuthorizationCredentials] = Depends(bearer), db: AsyncSession = Depends(get_db)):
+    p = decode_token(creds, "master_admin")
+    result = await db.execute(select(MasterAdmin).where(MasterAdmin.id == p["sub"]))
+    admin = result.scalar_one_or_none()
+    if not admin:
+        raise HTTPException(401, "Admin not found")
+    return admin
+
+
+def otp_digest(code: str):
+    return hmac.new(JWT_SECRET.encode(), code.encode(), hashlib.sha256).hexdigest()
+
+
+def norm_phone(p: str):
+    d = "".join(c for c in p if c.isdigit())
+    return d[-10:]
+
+
+def gen_wallet_id():
+    return "VW" + secrets.token_hex(4).upper()
+
+
+def gen_referral_code():
+    return "VDG" + secrets.token_hex(3).upper()[:5]
+
+
+def invoice_no():
+    return "VDG" + now_utc().strftime("%y%m%d") + str(random.randint(10000, 99999))
+
+
+def customer_dict(c: Customer):
+    """Serialize customer for API response."""
+    grams = c.gold_grams or 0
+    return {
+        "id": c.id, "phone": c.phone, "wallet_id": c.wallet_id, "tenant": c.jeweller_id,
+        "first_name": c.first_name, "last_name": c.last_name,
+        "name": f"{c.first_name} {c.last_name}".strip() or "Gold Saver",
+        "email": c.email, "dob": c.dob, "gender": c.gender,
+        "jeweller_id": c.jeweller_id,
+        "gold_grams": r4(grams), "silver_grams": r4(c.silver_grams or 0),
+        "invested": r2(c.invested or 0),
+        "avg_buy_price": r2(c.invested / grams) if grams > 0 else 0,
+        "kyc_status": c.kyc_status, "kyc": c.kyc_data or {},
+        "referral_code": c.referral_code,
+        "referral_balance": r2(c.referral_balance or 0),
+        "wallet_balance": r2(c.wallet_balance or 0),
+        "referred_by": c.referred_by,
+        "created_at": c.created_at.isoformat() if c.created_at else "",
+    }
+
+
+def jeweller_dict(j: Jeweller):
+    return {
+        "id": j.id, "business_name": j.business_name, "owner_name": j.owner_name,
+        "phone": j.phone, "email": j.email, "address": j.address,
+        "city": j.city, "state": j.state, "pincode": j.pincode,
+        "logo_url": j.logo_url, "primary_color": j.primary_color,
+        "secondary_color": j.secondary_color, "domain": j.domain,
+        "admin_domain": j.admin_domain or "",
+        "gold_buy_markup_pct": j.gold_buy_markup_pct, "gold_sell_discount_pct": j.gold_sell_discount_pct,
+        "silver_buy_markup_pct": j.silver_buy_markup_pct, "silver_sell_discount_pct": j.silver_sell_discount_pct,
+        "gold_commission_per_g": j.gold_commission_per_g or 0, "silver_commission_per_g": j.silver_commission_per_g or 0,
+        "gold22_commission_per_g": j.gold22_commission_per_g or 0, "gold18_commission_per_g": j.gold18_commission_per_g or 0,
+        "commission_updated_at": j.updated_at.isoformat() if getattr(j, "updated_at", None) else None,
+        "min_redemption_grams": j.min_redemption_grams,
+        "status": j.status,
+        "created_at": j.created_at.isoformat() if j.created_at else "",
+    }
+
+
+def txn_dict(t: Transaction):
+    return {
+        "id": t.id, "invoice_no": t.invoice_no, "customer_id": t.customer_id,
+        "jeweller_id": t.jeweller_id, "tenant": t.jeweller_id, "type": t.type, "metal": t.metal,
+        "grams": r4(t.grams), "rate": r2(t.rate), "amount": r2(t.amount),
+        "gst": r2(t.gst), "total": r2(t.total), "method": t.method,
+        "status": t.status, "note": t.note, "extra": t.extra or {},
+        "created_at": t.created_at.isoformat() if t.created_at else "",
+    }
+
+
+# ─── Pydantic Models ─────────────────────────────────────────────────────────
+class OtpRequest(BaseModel):
+    phone: str = Field(min_length=10, max_length=15)
+    jeweller_id: str = ""
+
+
+class OtpVerify(BaseModel):
+    challenge_id: str
+    otp: str = Field(pattern=r"^\d{6}$")
+    jeweller_id: str = ""
+    tenant: str = ""
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    email: Optional[str] = None
+    dob: Optional[str] = None
+    gender: Optional[str] = None
+    referral_code: Optional[str] = None
+
+
+class BuyRequest(BaseModel):
+    quote_id: str
+    mode: str = "rupees"
+    value: float = Field(gt=0)
+    method: str = "upi"
+
+
+class MockConfirm(BaseModel):
+    method: str = "upi"
+    success: bool = True
+
+
+class SellRequest(BaseModel):
+    grams: float = Field(gt=0)
+
+
+class RedeemRequest(BaseModel):
+    kind: str  # coin | product
+    coin_grams: Optional[float] = None
+    product_id: Optional[str] = None
+
+
+class SipCreate(BaseModel):
+    amount: float = Field(ge=100, le=100000)
+    frequency: str = Field("monthly", pattern="^(daily|weekly|monthly)$")
+    metal: str = Field("gold", pattern="^(gold|silver)$")
+
+
+class GiftCreate(BaseModel):
+    phone: str
+    recipient_name: Optional[str] = None
+    mode: str = "grams"
+    value: float = Field(gt=0)
+    theme: str = "diwali"
+    message: str = Field(default="", max_length=240)
+
+
+class AlertCreateModel(BaseModel):
+    target: float = Field(gt=0)
+    metal: str = "gold"
+    alert_type: str = "alert"  # alert | book
+    buy_amount: Optional[float] = None
+
+
+class GoalCreate(BaseModel):
+    name: str = Field(min_length=2, max_length=40)
+    occasion: str = "custom"
+    target_grams: float = Field(gt=0, le=100000)
+    months: int = Field(ge=1, le=120)
+    metal: str = Field("gold", pattern="^(gold|silver)$")
+
+
+class KycSubmit(BaseModel):
+    full_name: str = Field(min_length=2)
+    aadhaar: str = Field(min_length=12, max_length=12)
+    pan: str = Field(min_length=10, max_length=10)
+    dob: str = ""
+    photo_id: str = ""
+
+
+class WalletDeposit(BaseModel):
+    amount: float = Field(gt=0, le=500000)
+
+
+class WalletWithdraw(BaseModel):
+    amount: float = Field(gt=0)
+
+
+class JewellerOnboard(BaseModel):
+    business_name: str = Field(min_length=2)
+    owner_name: str = Field(min_length=2)
+    phone: str = Field(min_length=10, max_length=15)
+    email: str
+    password: str = Field(min_length=4)
+    pan: str = ""
+    aadhaar: str = ""
+    address: str = ""
+    city: str = ""
+    state: str = ""
+    pincode: str = ""
+    logo_url: str = ""
+    primary_color: str = "#D4AF37"
+    secondary_color: str = "#1A1A2E"
+    domain: str = ""
+    min_redemption_grams: float = 1.0
+
+
+class JewellerLogin(BaseModel):
+    email: str
+    password: str
+
+
+class MasterAdminLogin(BaseModel):
+    username: str
+    password: str
+
+
+class RedemptionApprove(BaseModel):
+    wallet_id: str
+    grams: float = Field(gt=0)
+    item: str = "Physical Gold"
+    note: str = ""
+
+
+class ProductCreate(BaseModel):
+    name: str = Field(min_length=2)
+    category: str = ""
+    grams: float = Field(gt=0)
+    making_charges: float = 0
+    making_pct: float = Field(default=12, ge=0, le=40)
+    purity: str = Field(default="22K", pattern="^(24K|22K|18K)$")
+    image_url: str = ""
+    tag: str = ""
+    description: str = ""
+
+
+class PoolThresholdUpdate(BaseModel):
+    threshold: float = Field(gt=0)
+
+
+class MinRedemptionUpdate(BaseModel):
+    min_grams: float = Field(gt=0)
+
+
+# ─── Pool Logic ───────────────────────────────────────────────────────────────
+async def add_to_pool(db: AsyncSession, txn: Transaction, customer: Customer):
+    """Add grams to the active pool and check threshold."""
+    result = await db.execute(
+        select(PoolAccumulator).where(PoolAccumulator.status == "accumulating").order_by(desc(PoolAccumulator.created_at))
+    )
+    pool = result.scalar_one_or_none()
+    if not pool:
+        pool = PoolAccumulator(id=str(uuid.uuid4()), total_grams=0.0, threshold_grams=POOL_THRESHOLD)
+        db.add(pool)
+        await db.flush()
+
+    contrib = PoolContribution(
+        id=str(uuid.uuid4()), pool_id=pool.id, transaction_id=txn.id,
+        customer_id=customer.id, jeweller_id=txn.jeweller_id, grams=txn.grams
+    )
+    db.add(contrib)
+    pool.total_grams = r4(pool.total_grams + txn.grams)
+
+    triggered = False
+    if pool.total_grams >= pool.threshold_grams:
+        pool.status = "triggered"
+        pool.triggered_at = now_utc()
+        triggered = True
+        # Generate bifurcation invoice
+        contribs = await db.execute(
+            select(PoolContribution).where(PoolContribution.pool_id == pool.id)
+        )
+        details = []
+        for c in contribs.scalars().all():
+            j_result = await db.execute(select(Jeweller.business_name).where(Jeweller.id == c.jeweller_id))
+            j_name = j_result.scalar_one_or_none() or "Unknown"
+            cust_result = await db.execute(
+                select(Customer.first_name, Customer.last_name).where(Customer.id == c.customer_id)
+            )
+            cust_row = cust_result.one_or_none()
+            cust_name = f"{cust_row[0]} {cust_row[1]}".strip() if cust_row else "Customer"
+            details.append({
+                "jeweller_id": c.jeweller_id, "jeweller_name": j_name,
+                "customer_id": c.customer_id, "customer_name": cust_name,
+                "grams": r4(c.grams)
+            })
+        invoice = BifurcationInvoice(
+            id=str(uuid.uuid4()), pool_id=pool.id,
+            total_grams=r4(pool.total_grams), details=details
+        )
+        db.add(invoice)
+        # Start a new pool
+        new_pool = PoolAccumulator(id=str(uuid.uuid4()), total_grams=0.0, threshold_grams=pool.threshold_grams)
+        db.add(new_pool)
+
+    await db.flush()
+    return pool, triggered
+
+
+# ═══════════════════ PUBLIC ROUTES ════════════════════════════════════════════
+@api.get("/")
+async def root():
+    return {"app": "Vaultra DigiGold", "version": "2.0"}
+
+
+@api.get("/price")
+async def get_price(request: Request, jeweller_id: str = "", tenant: str = ""):
+    return price_payload(jeweller_id or tenant or request.headers.get("x-tenant-id") or None)
+
+
+@api.get("/config")
+async def config():
+    return {"gst_rate": GST_RATE, "coins": [1, 2, 5, 10]}
+
+
+@api.get("/health")
+async def health():
+    return {"status": "ok", "db": "postgresql"}
+
+
+# ─── Jeweller Config (for white-label) ────────────────────────────────────────
+@api.get("/jeweller/{jeweller_id}/config")
+async def jeweller_config(jeweller_id: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Jeweller).where(Jeweller.id == jeweller_id, Jeweller.status == "active"))
+    j = result.scalar_one_or_none()
+    if not j:
+        raise HTTPException(404, "Jeweller not found")
+    return {
+        "id": j.id, "business_name": j.business_name,
+        "logo_url": j.logo_url, "primary_color": j.primary_color,
+        "secondary_color": j.secondary_color,
+        "min_redemption_grams": j.min_redemption_grams,
+    }
+
+
+@api.get("/jewellers/list")
+async def list_jewellers_public(db: AsyncSession = Depends(get_db)):
+    """Public list of active jewellers for app selection."""
+    result = await db.execute(select(Jeweller).where(Jeweller.status == "active").order_by(Jeweller.business_name))
+    return [{"id": j.id, "business_name": j.business_name, "city": j.city, "logo_url": j.logo_url, "support_phone": j.phone} for j in result.scalars().all()]
+
+
+# ─── Products (Public) ────────────────────────────────────────────────────────
+MAKING_OPTIONS = [9, 12, 14, 18, 22, 24]
+
+
+PURITIES = ("24K", "22K", "18K")
+PURITY_PCT = {"24K": 100.0, "22K": 22 / 24 * 100, "18K": 18 / 24 * 100}  # same factors as karat_rates()
+
+
+def product_making(p, rate):
+    """rate = shop's 24K rate shown to customers (0 when rates hidden). 22K/18K use the karat rate."""
+    purity = p.purity if p.purity in PURITIES else "22K"
+    if rate and purity != "24K":
+        rate = karat_rates(p.jeweller_id)[purity]
+    metal = (p.grams or 0) * rate
+    pct = p.making_pct if p.making_pct is not None else 12
+    return r2(metal), r2(metal * pct / 100), pct
+
+
+CATEGORY_IMAGE = {"necklaces": "heritage-necklace", "bangles": "minimalist-bangle", "rings": "rings",
+                  "chains": "chain", "kadas": "kada", "pendant-sets": "pendant-set", "watches": "watch"}
+
+
+def product_image_key(p) -> str:
+    if "mangalsutra" in (p.name or "").lower() or "tanmaniya" in (p.name or "").lower():
+        return "tanmaniya"
+    return CATEGORY_IMAGE.get(p.category, "necklace")
+
+
+@api.get("/products")
+async def list_products(request: Request, jeweller_id: str = "", category: str = "", db: AsyncSession = Depends(get_db)):
+    jeweller_id = jeweller_id or request.headers.get("x-tenant-id", "")
+    q = select(Product).join(Jeweller, Jeweller.id == Product.jeweller_id).where(Product.is_active == True, Jeweller.status == "active")
+    if jeweller_id:
+        q = q.where(Product.jeweller_id == jeweller_id)
+    if category:
+        q = q.where(Product.category == category)
+    result = await db.execute(q.order_by(Product.created_at.desc()))
+    prods = result.scalars().all()
+    rates = {}
+    return [{
+        "id": p.id, "name": p.name, "category": p.category, "grams": p.grams,
+        "making_charges": p.making_charges, "image_url": p.image_url, "tag": p.tag,
+        "image": product_image_key(p),
+        "description": p.description, "jeweller_id": p.jeweller_id,
+        "gold_value": product_making(p, rates.setdefault(p.jeweller_id, shown_gold_rate(p.jeweller_id)))[0],
+        "making_pct": product_making(p, rates[p.jeweller_id])[2],
+        "making_amount": product_making(p, rates[p.jeweller_id])[1],
+        "making_charges": product_making(p, rates[p.jeweller_id])[1],
+        "total_price": r2(sum(product_making(p, rates[p.jeweller_id])[:2])),
+        "live_rate": rates[p.jeweller_id], "purity": p.purity or "22K",
+        "fine_grams": r4((p.grams or 0) * PURITY_PCT.get(p.purity, PURITY_PCT["22K"]) / 100),
+    } for p in prods]
+
+
+@api.get("/products/{product_id}")
+async def get_product(product_id: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Product).where(Product.id == product_id))
+    p = result.scalar_one_or_none()
+    if not p:
+        raise HTTPException(404, "Product not found")
+    buy = shown_gold_rate(p.jeweller_id)
+    return {
+        "id": p.id, "name": p.name, "category": p.category, "grams": p.grams,
+        "making_charges": p.making_charges, "image_url": p.image_url, "tag": p.tag,
+        "image": product_image_key(p),
+        "description": p.description, "jeweller_id": p.jeweller_id,
+        "gold_value": product_making(p, buy)[0], "making_pct": product_making(p, buy)[2],
+        "making_amount": product_making(p, buy)[1], "total_price": r2(sum(product_making(p, buy)[:2])), "making_charges": product_making(p, buy)[1],
+        "live_rate": buy, "purity": p.purity or "22K",
+        "fine_grams": r4((p.grams or 0) * PURITY_PCT.get(p.purity, PURITY_PCT["22K"]) / 100),
+        "features": [{"24K": "24K 99.9% Pure Gold", "18K": "18K Gold (75%)"}.get(p.purity, "22K Gold (91.6%)"), "BIS Hallmarked",
+                      "Insured Delivery", "Lifetime Buyback Guarantee"],
+    }
+
+
+# ═══════════════════ CUSTOMER AUTH ════════════════════════════════════════════
+@api.post("/auth/otp/request")
+async def otp_request(body: OtpRequest, request: Request, db: AsyncSession = Depends(get_db)):
+    phone = norm_phone(body.phone)
+    if len(phone) != 10:
+        raise HTTPException(400, "Enter a valid 10-digit mobile number")
+
+    # Jeweller: body, else the app's X-Tenant-ID (must be an active store), else the default store
+    jeweller_id = body.jeweller_id or request.headers.get("x-tenant-id", "").strip()
+    if jeweller_id:
+        ok = (await db.execute(select(Jeweller.id).where(Jeweller.id == jeweller_id, Jeweller.status == "active"))).first()
+        if not ok:
+            raise HTTPException(400, "This store is not available")
+    if not jeweller_id:
+        result = await db.execute(select(Jeweller).where(Jeweller.status == "active").order_by(Jeweller.created_at).limit(1))
+        j = result.scalar_one_or_none()
+        if j:
+            jeweller_id = j.id
+        else:
+            raise HTTPException(400, "No active jeweller found")
+
+    # Rate limiting
+    cutoff = now_utc() - timedelta(minutes=1)
+    count_result = await db.execute(
+        select(func.count()).select_from(OtpChallenge).where(
+            OtpChallenge.phone == phone, OtpChallenge.created_at > cutoff
+        )
+    )
+    if count_result.scalar() >= 5:
+        raise HTTPException(429, "Too many requests. Try again in a minute")
+
+    code = f"{secrets.randbelow(1_000_000):06d}"
+    cid = str(uuid.uuid4())
+    challenge = OtpChallenge(
+        id=cid, phone=phone, jeweller_id=jeweller_id,
+        digest=otp_digest(code), expires_at=now_utc() + timedelta(minutes=5)
+    )
+    db.add(challenge)
+    await db.commit()
+
+    # Check if user exists
+    exists = await db.execute(
+        select(Customer.id).where(Customer.phone == phone, Customer.jeweller_id == jeweller_id)
+    )
+    is_new = exists.scalar_one_or_none() is None
+
+    return {"challenge_id": cid, "demo_otp": code, "expires_in": 300, "is_new_user": is_new, "jeweller_id": jeweller_id}
+
+
+@api.post("/auth/otp/verify")
+async def otp_verify(body: OtpVerify, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(OtpChallenge).where(OtpChallenge.id == body.challenge_id))
+    c = result.scalar_one_or_none()
+    if not c or c.used or c.expires_at <= now_utc() or c.attempts >= 5:
+        raise HTTPException(401, "Invalid or expired code")
+
+    if not hmac.compare_digest(c.digest, otp_digest(body.otp)):
+        c.attempts += 1
+        await db.commit()
+        raise HTTPException(401, f"Incorrect OTP. {4 - c.attempts + 1} attempts left")
+
+    c.used = True
+    await db.flush()
+
+    # The store is fixed when the OTP was requested; it cannot be swapped at verify time
+    jeweller_id = c.jeweller_id
+
+    # Find or create customer
+    cust_result = await db.execute(
+        select(Customer).where(Customer.phone == c.phone, Customer.jeweller_id == jeweller_id)
+    )
+    customer = cust_result.scalar_one_or_none()
+
+    if not customer:
+        fname = (body.first_name or "").strip()
+        lname = (body.last_name or "").strip()
+        customer = Customer(
+            id=str(uuid.uuid4()), jeweller_id=jeweller_id, phone=c.phone,
+            first_name=fname or "Gold", last_name=lname,
+            email=(body.email or "").strip(), dob=(body.dob or "").strip(),
+            gender=(body.gender or "").strip(),
+            wallet_id=gen_wallet_id(), referral_code=gen_referral_code(),
+        )
+        # Handle referral
+        if body.referral_code:
+            ref_result = await db.execute(
+                select(Customer).where(Customer.referral_code == body.referral_code.strip().upper(),
+                                       Customer.jeweller_id == customer.jeweller_id)  # referrals stay within one store
+            )
+            referrer = ref_result.scalar_one_or_none()
+            if referrer and referrer.id != customer.id:
+                reward = await referral_reward(customer.jeweller_id)
+                customer.referred_by = referrer.id
+                customer.referral_balance = reward
+                referrer.referral_balance = (referrer.referral_balance or 0) + reward
+                # Notifications
+                db.add(Notification(
+                    id=str(uuid.uuid4()), customer_id=referrer.id,
+                    title="Referral Bonus!", type="referral",
+                    message=f"Your friend {fname} joined! ₹50 added to your rewards."
+                ))
+                db.add(Notification(
+                    id=str(uuid.uuid4()), customer_id=customer.id,
+                    title="Welcome Bonus!", type="referral",
+                    message="₹50 referral bonus credited to your rewards!"
+                ))
+        db.add(customer)
+
+    await db.commit()
+    await db.refresh(customer)
+
+    token = make_token(customer.id, "customer", {"jeweller_id": jeweller_id})
+    return {"access_token": token, "user": customer_dict(customer)}
+
+
+# ═══════════════════ CUSTOMER ENDPOINTS ═══════════════════════════════════════
+@api.get("/me")
+async def me(customer: Customer = Depends(get_current_customer)):
+    return customer_dict(customer)
+
+
+@api.patch("/me")
+async def update_me(
+    first_name: Optional[str] = None, last_name: Optional[str] = None,
+    customer: Customer = Depends(get_current_customer), db: AsyncSession = Depends(get_db)
+):
+    if first_name:
+        customer.first_name = first_name.strip()
+    if last_name:
+        customer.last_name = last_name.strip()
+    await db.commit()
+    await db.refresh(customer)
+    return customer_dict(customer)
+
+
+# ─── KYC ──────────────────────────────────────────────────────────────────────
+@api.post("/kyc/submit")
+async def kyc_submit(body: KycSubmit, customer: Customer = Depends(get_current_customer), db: AsyncSession = Depends(get_db)):
+    if customer.kyc_status in ("pending", "approved"):
+        raise HTTPException(400, f"KYC already {customer.kyc_status}")
+    customer.kyc_status = "pending"
+    customer.kyc_data = {
+        "full_name": body.full_name, "aadhaar": body.aadhaar,
+        "pan": body.pan, "dob": body.dob, "submitted_at": now_iso(), "photo_id": body.photo_id,
+    }
+    if body.photo_id:  # the photo must be one this customer uploaded
+        u = (await db.execute(select(Upload).where(Upload.id == body.photo_id, Upload.owner == f"kyc:{customer.id}"))).scalar_one_or_none()
+        if not u:
+            raise HTTPException(400, "Photo not found. Please upload it again")
+    await db.commit()
+    await db.refresh(customer)
+    return customer_dict(customer)
+
+
+# ─── Vault ────────────────────────────────────────────────────────────────────
+@api.get("/vault")
+async def vault(customer: Customer = Depends(get_current_customer), db: AsyncSession = Depends(get_db)):
+    buy, sell = gold_rate(customer.jeweller_id)
+    pk = await db.execute(select(Pickup).where(Pickup.customer_id == customer.id, Pickup.status == "pending").order_by(desc(Pickup.created_at)))
+    pending = [{"id": x.id, "item": x.item, "grams": r4(x.grams), "otp": x.otp, "status": x.status,
+                "tenant": x.jeweller_id, "created_at": x.created_at.isoformat() if x.created_at else ""} for x in pk.scalars().all()]
+    cu = customer_dict(customer)
+    value = r2(cu["gold_grams"] * sell)
+    pnl = r2(value - cu["invested"])
+    pnl_pct = r2(pnl / cu["invested"] * 100) if cu["invested"] > 0 else 0
+    return {
+        "user": cu, "buy_rate": buy, "sell_rate": sell,
+        "current_value": value, "unrealized_pnl": pnl, "unrealized_pct": pnl_pct,
+        "pending_pickups": pending,
+    }
+
+
+# ─── Transactions ─────────────────────────────────────────────────────────────
+@api.get("/transactions")
+async def my_transactions(
+    type: Optional[str] = None,
+    customer: Customer = Depends(get_current_customer), db: AsyncSession = Depends(get_db)
+):
+    q = select(Transaction).where(Transaction.customer_id == customer.id)
+    if type and type != "all":
+        type_groups = {"buy": ["buy", "buy_silver"], "gift": ["gift_sent", "gift_received"]}
+        q = q.where(Transaction.type.in_(type_groups[type]) if type in type_groups else Transaction.type == type)
+    q = q.order_by(desc(Transaction.created_at)).limit(200)
+    result = await db.execute(q)
+    return [txn_dict(t) for t in result.scalars().all()]
+
+
+# ─── Quote & Buy ──────────────────────────────────────────────────────────────
+class QuoteBody(BaseModel):
+    tenant: str = ""
+    metal: str = ""
+
+
+async def _quote_jeweller(creds, tenant: str, db: AsyncSession) -> str:
+    if creds:
+        try:
+            p = jwt.decode(creds.credentials, JWT_SECRET, algorithms=["HS256"])
+            if p.get("role") == "customer":
+                c = (await db.execute(select(Customer.jeweller_id).where(Customer.id == p["sub"]))).scalar_one_or_none()
+                if c:
+                    return c
+        except jwt.InvalidTokenError:
+            pass
+    if tenant:
+        j = (await db.execute(select(Jeweller.id).where(Jeweller.id == tenant, Jeweller.status == "active"))).scalar_one_or_none()
+        if j:
+            return j
+    j = (await db.execute(select(Jeweller.id).where(Jeweller.status == "active").order_by(Jeweller.created_at))).scalars().first()
+    if not j:
+        raise HTTPException(404, "No active jeweller")
+    return j
+
+
+@api.post("/quote/silver")
+async def create_silver_quote(body: Optional[QuoteBody] = None, creds: Optional[HTTPAuthorizationCredentials] = Depends(bearer), db: AsyncSession = Depends(get_db)):
+    return await create_quote("silver", body, creds, db)
+
+
+@api.post("/quote")
+async def create_quote(
+    metal: str = "gold", body: Optional[QuoteBody] = None,
+    creds: Optional[HTTPAuthorizationCredentials] = Depends(bearer), db: AsyncSession = Depends(get_db)
+):
+    if body and body.metal:
+        metal = body.metal
+    require_live_rates()
+    jid = await _quote_jeweller(creds, body.tenant if body else "", db)
+    require_booking(jid)
+    if metal == "silver":
+        buy, sell = silver_rate(jid)
+    else:
+        buy, sell = gold_rate(jid)
+    exp = now_utc() + timedelta(seconds=QUOTE_SECONDS)
+    q = Quote(
+        id=str(uuid.uuid4()), jeweller_id=jid,
+        metal=metal, buy=buy, sell=sell, expires_at=exp
+    )
+    db.add(q)
+    await db.commit()
+    return {"id": q.id, "metal": metal, "buy": buy, "sell": sell,
+            "expires_at": exp.isoformat(), "lock_seconds": QUOTE_SECONDS}
+
+
+@api.post("/orders/buy-silver")
+async def buy_silver(body: BuyRequest, customer: Customer = Depends(get_current_customer), db: AsyncSession = Depends(get_db)):
+    return await buy(body, customer, db)
+
+
+@api.get("/orders/{order_id}")
+async def order_status(order_id: str, customer: Customer = Depends(get_current_customer), db: AsyncSession = Depends(get_db)):
+    o = (await db.execute(select(Order).where(Order.id == order_id, Order.customer_id == customer.id))).scalar_one_or_none()
+    if not o:
+        raise HTTPException(404, "Order not found")
+    txns = (await db.execute(select(Transaction).where(Transaction.customer_id == customer.id, Transaction.extra["order_id"].as_string() == o.id))).scalars().first()
+    return {"order": {"id": o.id, "metal": o.metal, "grams": r4(o.grams), "rate": r2(o.rate), "amount": r2(o.amount),
+                      "gst": r2(o.gst), "total": r2(o.total), "status": o.status, "tenant": o.jeweller_id},
+            "transaction": txn_dict(txns) if txns else None}
+
+
+@api.post("/orders/buy")
+async def buy(body: BuyRequest, customer: Customer = Depends(get_current_customer), db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Quote).where(Quote.id == body.quote_id))
+    q = result.scalar_one_or_none()
+    if not q:
+        raise HTTPException(400, "Price quote not found")
+    if q.expires_at <= now_utc():
+        raise HTTPException(409, "Price lock expired. Refresh the rate")
+    if q.jeweller_id != customer.jeweller_id:
+        raise HTTPException(400, "Price quote not valid for your store. Refresh the rate")
+
+    rate = q.buy
+    metal = q.metal or "gold"
+    # GST-inclusive: the customer pays exactly the shown amount; 3% GST comes out of the grams
+    if body.mode == "grams":
+        total = r2(body.value * rate)
+    else:
+        total = r2(body.value)
+    require_booking(customer.jeweller_id, total)
+    gst = r2(total * GST_RATE)
+    amount = r2(total - gst)
+    grams = r4(amount / rate)
+
+    order = Order(
+        id=str(uuid.uuid4()), customer_id=customer.id, jeweller_id=customer.jeweller_id,
+        metal=metal, grams=grams, rate=rate, amount=amount, gst=gst, total=total,
+        provider="mock"
+    )
+    db.add(order)
+    await db.commit()
+    return {
+        "id": order.id, "metal": metal, "grams": r4(grams), "rate": rate,
+        "amount": r2(amount), "gst": r2(gst), "total": r2(total), "tenant": customer.jeweller_id,
+        "status": "created", "provider": "mock"
+    }
+
+
+@api.post("/orders/{order_id}/mock-confirm")
+async def mock_confirm(order_id: str, body: MockConfirm,
+                       customer: Customer = Depends(get_current_customer), db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Order).where(Order.id == order_id, Order.customer_id == customer.id))
+    order = result.scalar_one_or_none()
+    if not order:
+        raise HTTPException(404, "Order not found")
+    if order.status != "created":
+        raise HTTPException(400, "Order already processed")
+    if not body.success:
+        order.status = "failed"
+        await db.commit()
+        raise HTTPException(402, "Payment declined")
+
+    order.status = "paid"
+    order.method = body.method
+    order.payment_id = "pay_mock_" + uuid.uuid4().hex[:14]
+    order.paid_at = now_utc()
+
+    # Credit gold/silver
+    metal = order.metal or "gold"
+    if metal == "silver":
+        customer.silver_grams = r4((customer.silver_grams or 0) + order.grams)
+    else:
+        customer.gold_grams = r4((customer.gold_grams or 0) + order.grams)
+        customer.invested = r2((customer.invested or 0) + order.amount)
+
+    txn_type = f"buy{'_silver' if metal == 'silver' else ''}"
+    txn = Transaction(
+        id=str(uuid.uuid4()), invoice_no=invoice_no(), customer_id=customer.id,
+        jeweller_id=customer.jeweller_id, type=txn_type, metal=metal,
+        grams=order.grams, rate=order.rate, amount=order.amount,
+        gst=order.gst, total=order.total, method=body.method,
+        status="completed", extra={"order_id": order.id, "payment_id": order.payment_id,
+                                   "commission": r2(order.grams * (MARGINS.get(customer.jeweller_id) or {}).get(f"{metal}_comm", 0.0)),
+                                   "base_rate": r2((SILVER_PRICE if metal == "silver" else PRICE)["base"])},
+        pool_contribution=True
+    )
+    db.add(txn)
+    await db.flush()
+
+    # Add to pool
+    if metal == "gold":
+        await add_to_pool(db, txn, customer)
+
+    await db.commit()
+    await db.refresh(customer)
+    mt5_cover(metal, order.grams)
+    return {"status": "paid", "transaction": txn_dict(txn), "user": customer_dict(customer)}
+
+
+# ─── Sell ─────────────────────────────────────────────────────────────────────
+@api.post("/sell")
+async def sell_disabled(customer: Customer = Depends(get_current_customer)):
+    raise HTTPException(403, "Selling is not available. You can redeem your gold at the store.")
+
+
+@api.post("/redeem")
+async def redeem(body: RedeemRequest, customer: Customer = Depends(get_current_customer), db: AsyncSession = Depends(get_db)):
+    # Check minimum redemption for their jeweller
+    j_result = await db.execute(select(Jeweller).where(Jeweller.id == customer.jeweller_id))
+    jeweller = j_result.scalar_one_or_none()
+    min_grams = jeweller.min_redemption_grams if jeweller else 1.0
+
+    coins = [1, 2, 5, 10]
+    making = 0
+    if body.kind == "coin":
+        if body.coin_grams not in coins:
+            raise HTTPException(400, "Invalid coin denomination")
+        grams = float(body.coin_grams)
+        item = f"{body.coin_grams:g}g 24K Gold Coin"
+        making = 250
+    else:
+        prod_result = await db.execute(select(Product).where(Product.id == body.product_id, Product.jeweller_id == customer.jeweller_id))
+        p = prod_result.scalar_one_or_none()
+        if not p:
+            raise HTTPException(404, "Product not found")
+        grams, item = r4(p.grams * PURITY_PCT.get(p.purity, PURITY_PCT["22K"]) / 100), p.name  # 24K-equivalent fine gold
+        making = product_making(p, gold_rate(customer.jeweller_id)[0])[1]
+
+    if grams < min_grams:
+        raise HTTPException(400, f"Minimum redemption is {min_grams}g for your jeweller")
+    if grams > (customer.gold_grams or 0):
+        raise HTTPException(400, "Insufficient vault balance")
+
+    buy_rate, _ = gold_rate(customer.jeweller_id)
+    avg = (customer.invested / customer.gold_grams) if customer.gold_grams > 0 else 0
+    customer.gold_grams = r4(customer.gold_grams - grams)
+    customer.invested = r2(customer.invested - avg * grams)
+    amount = r2(grams * buy_rate)
+
+    otp = f"{secrets.randbelow(1_000_000):06d}"
+    txn = Transaction(
+        id=str(uuid.uuid4()), invoice_no=invoice_no(), customer_id=customer.id,
+        jeweller_id=customer.jeweller_id, type="redemption", grams=grams, rate=buy_rate,
+        amount=amount, gst=0, total=making, method="vault_gold", status="processing",
+        note=f"{item} · In-store pickup", extra={"item": item, "making_charges": making}
+    )
+    db.add(txn)
+    await db.flush()
+
+    pickup = Pickup(
+        id=str(uuid.uuid4()), customer_id=customer.id, jeweller_id=customer.jeweller_id,
+        transaction_id=txn.id, item=item, grams=grams, making_charges=making, otp=otp
+    )
+    db.add(pickup)
+    await db.commit()
+    return {
+        "transaction": txn_dict(txn),
+        "pickup": {"id": pickup.id, "item": item, "grams": grams, "otp": otp, "status": "pending", "tenant": customer.jeweller_id},
+        "wallet_id": customer.wallet_id,
+    }
+
+
+# ─── SIP ──────────────────────────────────────────────────────────────────────
+@api.get("/sips")
+async def list_sips(customer: Customer = Depends(get_current_customer), db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(SIP).where(SIP.customer_id == customer.id, SIP.status != "cancelled").order_by(desc(SIP.created_at))
+    )
+    return [_sip_out(s_) for s_ in result.scalars().all()]
+
+
+@api.post("/sips")
+async def create_sip(body: SipCreate, customer: Customer = Depends(get_current_customer), db: AsyncSession = Depends(get_db)):
+    require_live_rates()
+    require_booking(customer.jeweller_id, body.amount)
+    sip = SIP(
+        id=str(uuid.uuid4()), customer_id=customer.id, jeweller_id=customer.jeweller_id,
+        amount=r2(body.amount), frequency=body.frequency, metal=body.metal, status="active",
+        installments=0, grams_accumulated=0.0,
+        mandate_ref="UPIMD" + uuid.uuid4().hex[:12].upper(),  # demo UPI AutoPay mandate
+    )
+    db.add(sip)
+    await db.flush()
+    _, metal, grams = await _sip_debit(db, sip, customer)  # first instalment is debited right away
+    await db.commit()
+    mt5_cover(metal, grams)
+    return _sip_out(sip)
+
+
+@api.post("/sips/{sip_id}/toggle")
+async def toggle_sip(sip_id: str, customer: Customer = Depends(get_current_customer), db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(SIP).where(SIP.id == sip_id, SIP.customer_id == customer.id))
+    sip = result.scalar_one_or_none()
+    if not sip:
+        raise HTTPException(404, "SIP not found")
+    sip.status = "paused" if sip.status == "active" else "active"
+    await db.commit()
+    return {"id": sip.id, "status": sip.status}
+
+
+@api.delete("/sips/{sip_id}")
+async def cancel_sip(sip_id: str, customer: Customer = Depends(get_current_customer), db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(SIP).where(SIP.id == sip_id, SIP.customer_id == customer.id))
+    sip = result.scalar_one_or_none()
+    if not sip:
+        raise HTTPException(404, "SIP not found")
+    sip.status = "cancelled"
+    await db.commit()
+    return {"ok": True}
+
+
+SIP_DAYS = {"daily": 1, "weekly": 7, "monthly": 30}
+
+
+def _sip_out(s_):
+    return {"id": s_.id, "amount": r2(s_.amount), "frequency": s_.frequency, "status": s_.status, "metal": s_.metal or "gold",
+            "installments": s_.installments or 0, "grams_accumulated": r4(s_.grams_accumulated or 0),
+            "mandate_ref": s_.mandate_ref or "", "last_status": s_.last_status or "", "last_error": s_.last_error or "",
+            "last_run": s_.last_run.isoformat() if s_.last_run else "",
+            "next_run": s_.next_run.isoformat() if s_.next_run else "", "created_at": s_.created_at.isoformat() if s_.created_at else ""}
+
+
+async def _sip_debit(db, sip, customer, advance=True):
+    """Auto-debit one SIP instalment through the UPI AutoPay mandate (demo payment) and credit metal at the live rate.
+    advance=False for an extra manual payment: the next scheduled auto-debit date stays the same."""
+    metal = sip.metal or "gold"
+    rate, _ = (silver_rate if metal == "silver" else gold_rate)(customer.jeweller_id)
+    gst = r2(sip.amount * GST_RATE)  # GST-inclusive: comes out of the grams, customer pays only the SIP amount
+    grams = r4((sip.amount - gst) / rate)
+    if metal == "silver":
+        customer.silver_grams = r4((customer.silver_grams or 0) + grams)
+    else:
+        customer.gold_grams = r4((customer.gold_grams or 0) + grams)
+        customer.invested = r2((customer.invested or 0) + sip.amount - gst)  # same basis as one-time buys (ex-GST)
+    txn = Transaction(
+        id=str(uuid.uuid4()), invoice_no=invoice_no(), customer_id=customer.id,
+        jeweller_id=customer.jeweller_id, type="sip", metal=metal, grams=grams, rate=rate,
+        amount=r2(sip.amount - gst), gst=gst, total=r2(sip.amount), method="upi_autopay",
+        status="completed", note=f"{sip.frequency.title()} SIP instalment",
+        extra={"sip_id": sip.id, "mandate": sip.mandate_ref,
+               "commission": r2(grams * (MARGINS.get(customer.jeweller_id) or {}).get(f"{metal}_comm", 0.0))},
+        pool_contribution=metal == "gold"
+    )
+    db.add(txn)
+    sip.installments = (sip.installments or 0) + 1
+    sip.grams_accumulated = r4((sip.grams_accumulated or 0) + grams)
+    sip.last_run, sip.last_status, sip.last_error = now_utc(), "debited", ""
+    if advance or not sip.next_run:
+        sip.next_run = now_utc() + timedelta(days=SIP_DAYS.get(sip.frequency, 30))
+    db.add(Notification(id=str(uuid.uuid4()), customer_id=customer.id, type="sip", title="SIP instalment successful",
+                        message=f"₹{sip.amount:,.0f} auto-debited via UPI AutoPay. {grams:g}g {metal} added to your vault."))
+    await db.flush()
+    if metal == "gold":
+        await add_to_pool(db, txn, customer)
+    return txn, metal, grams
+
+
+@api.post("/sips/{sip_id}/run")
+async def run_sip(sip_id: str, customer: Customer = Depends(get_current_customer), db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(SIP).where(SIP.id == sip_id, SIP.customer_id == customer.id, SIP.status == "active"))
+    sip = result.scalar_one_or_none()
+    if not sip:
+        raise HTTPException(404, "Active SIP not found")
+    require_live_rates()
+    require_booking(customer.jeweller_id)
+    txn, metal, grams = await _sip_debit(db, sip, customer, advance=False)
+    await db.commit()
+    mt5_cover(metal, grams)
+    return txn_dict(txn)
+
+
+async def sip_scheduler():
+    """Every minute: auto-debit every active SIP whose date has come. If rates/booking are off, retry on the next pass."""
+    while True:
+        await asyncio.sleep(60)
+        try:
+            async with AsyncSessionLocal() as db:
+                due_ids = (await db.execute(select(SIP.id).where(SIP.status == "active", SIP.next_run <= now_utc()).limit(500))).scalars().all()
+            for sid in due_ids:  # one transaction per SIP: a failure never rolls back other customers
+                try:
+                    async with AsyncSessionLocal() as db:
+                        sip = (await db.execute(select(SIP).where(SIP.id == sid, SIP.status == "active", SIP.next_run <= now_utc())
+                                                .with_for_update(skip_locked=True))).scalar_one_or_none()
+                        if not sip:
+                            continue  # already handled by another worker
+                        customer = (await db.execute(select(Customer).where(Customer.id == sip.customer_id))).scalar_one_or_none()
+                        if not customer:
+                            continue
+                        ctl = controls_for(customer.jeweller_id)
+                        if RATE_FEED["source"] == "offline" or not ctl["rates"] or not ctl["booking"]:
+                            sip.last_status, sip.last_error = "waiting", "Waiting for live rates / booking to be on"
+                            await db.commit()
+                            continue
+                        _, metal, grams = await _sip_debit(db, sip, customer)
+                        await db.commit()
+                    mt5_cover(metal, grams)  # only after the credit is saved
+                except Exception as e:
+                    logger.warning(f"SIP auto-debit failed for {sid}: {type(e).__name__}: {str(e)[:200]}")
+        except Exception as e:
+            logger.warning(f"SIP scheduler error: {type(e).__name__}: {str(e)[:200]}")
+
+
+# ─── Gifts ────────────────────────────────────────────────────────────────────
+GIFT_THEMES = ("diwali", "birthday", "wedding", "thank_you", "congrats")
+
+
+@api.post("/gifts")
+async def send_gift(body: GiftCreate, customer: Customer = Depends(get_current_customer), db: AsyncSession = Depends(get_db)):
+    raise HTTPException(410, "Gifting has been discontinued")
+    require_live_rates()
+    phone = norm_phone(body.phone)
+    if len(phone) != 10:
+        raise HTTPException(400, "Enter a valid 10-digit mobile number")
+    if phone == customer.phone:
+        raise HTTPException(400, "You can't gift gold to yourself")
+    if body.theme not in GIFT_THEMES:
+        raise HTTPException(400, "Invalid greeting card")
+
+    rate, _ = gold_rate(customer.jeweller_id)
+    g = r4(body.value) if body.mode == "grams" else r4(body.value / rate)
+    if g < 0.001:
+        raise HTTPException(400, "Minimum gift is 0.001g")
+    if g > (customer.gold_grams or 0):
+        raise HTTPException(400, "Insufficient vault balance")
+
+    avg = (customer.invested / customer.gold_grams) if customer.gold_grams > 0 else 0
+    customer.gold_grams = r4(customer.gold_grams - g)
+    customer.invested = r2(customer.invested - avg * g)
+    amount = r2(g * rate)
+
+    # Find or create recipient
+    rec_result = await db.execute(select(Customer).where(Customer.phone == phone, Customer.jeweller_id == customer.jeweller_id))
+    rec = rec_result.scalar_one_or_none()
+    if not rec:
+        rec = Customer(
+            id=str(uuid.uuid4()), jeweller_id=customer.jeweller_id, phone=phone,
+            first_name=(body.recipient_name or "Gold").strip(), last_name="",
+            wallet_id=gen_wallet_id(), referral_code=gen_referral_code(),
+        )
+        db.add(rec)
+        await db.flush()
+
+    rec.gold_grams = r4((rec.gold_grams or 0) + g)
+    rec.invested = r2((rec.invested or 0) + amount)
+
+    gift = Gift(
+        id=str(uuid.uuid4()), sender_id=customer.id, recipient_id=rec.id,
+        jeweller_id=customer.jeweller_id, grams=g, rate=rate, amount=amount,
+        theme=body.theme, message=body.message.strip()
+    )
+    db.add(gift)
+    # Create transactions
+    t1 = Transaction(id=str(uuid.uuid4()), invoice_no=invoice_no(), customer_id=customer.id,
+                     jeweller_id=customer.jeweller_id, type="gift_sent", grams=g, rate=rate,
+                     amount=amount, total=amount, method="vault_gold", note=f"Gift to {rec.first_name}")
+    t2 = Transaction(id=str(uuid.uuid4()), invoice_no=invoice_no(), customer_id=rec.id,
+                     jeweller_id=customer.jeweller_id, type="gift_received", grams=g, rate=rate,
+                     amount=amount, total=amount, method="vault_gold",
+                     note=f"Gift from {customer.first_name}")
+    db.add(t1)
+    db.add(t2)
+    await db.commit()
+    sender_name = f"{customer.first_name or ''} {customer.last_name or ''}".strip()
+    return {"id": gift.id, "grams": r4(g), "amount": r2(amount), "recipient_phone": phone,
+            "recipient_name": (body.recipient_name or rec.first_name or "").strip(), "sender_name": sender_name,
+            "sender_phone": customer.phone, "theme": gift.theme, "message": gift.message,
+            "created_at": now_iso()}
+
+
+@api.post("/gifts/mark-seen")
+async def gifts_mark_seen(customer: Customer = Depends(get_current_customer), db: AsyncSession = Depends(get_db)):
+    await db.execute(update(Gift).where(Gift.recipient_id == customer.id, Gift.seen == False).values(seen=True))
+    await db.commit()
+    return {"ok": True}
+
+
+@api.get("/gifts")
+async def list_gifts(customer: Customer = Depends(get_current_customer), db: AsyncSession = Depends(get_db)):
+    sent = await db.execute(select(Gift).where(Gift.sender_id == customer.id).order_by(desc(Gift.created_at)))
+    received = await db.execute(select(Gift).where(Gift.recipient_id == customer.id).order_by(desc(Gift.created_at)))
+    sent_rows, rec_rows = sent.scalars().all(), received.scalars().all()
+    ids = {g.recipient_id for g in sent_rows} | {g.sender_id for g in rec_rows}
+    people = {}
+    if ids:
+        for c in (await db.execute(select(Customer).where(Customer.id.in_(ids)))).scalars().all():
+            people[c.id] = (f"{c.first_name or ''} {c.last_name or ''}".strip(), c.phone)
+    me = (f"{customer.first_name or ''} {customer.last_name or ''}".strip(), customer.phone)
+
+    def gd(g, sender, recipient):
+        return {"id": g.id, "grams": r4(g.grams), "amount": r2(g.amount), "theme": g.theme,
+                "message": g.message, "seen": g.seen, "created_at": g.created_at.isoformat(),
+                "sender_name": sender[0], "sender_phone": sender[1],
+                "recipient_name": recipient[0], "recipient_phone": recipient[1]}
+    sent_list = [gd(g, me, people.get(g.recipient_id, ("", ""))) for g in sent_rows]
+    rec_list = [gd(g, people.get(g.sender_id, ("", "")), me) for g in rec_rows]
+    return {"sent": sent_list, "received": rec_list, "unseen": sum(1 for r in rec_list if not r.get("seen"))}
+
+
+# ─── Alerts ───────────────────────────────────────────────────────────────────
+@api.get("/alerts")
+async def list_alerts(customer: Customer = Depends(get_current_customer), db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(Alert).where(Alert.customer_id == customer.id, Alert.status != "deleted").order_by(desc(Alert.created_at))
+    )
+    return [alert_dict(a) for a in result.scalars().all()]
+
+
+def alert_dict(a: Alert):
+    return {"id": a.id, "target": r2(a.target), "metal": a.metal, "alert_type": a.alert_type,
+            "buy_amount": r2(a.buy_amount or 0), "status": a.status, "tenant": a.jeweller_id,
+            "triggered_at": a.triggered_at.isoformat() if a.triggered_at else None,
+            "triggered_price": a.triggered_price,
+            "created_at": a.created_at.isoformat() if a.created_at else ""}
+
+
+@api.post("/alerts/book")
+async def create_book_alert(body: AlertCreateModel, customer: Customer = Depends(get_current_customer), db: AsyncSession = Depends(get_db)):
+    body.alert_type = "book"
+    return await create_alert(body, customer, db)
+
+
+@api.post("/alerts/{alert_id}/trigger")
+async def trigger_alert(alert_id: str, customer: Customer = Depends(get_current_customer), db: AsyncSession = Depends(get_db)):
+    a = (await db.execute(select(Alert).where(Alert.id == alert_id, Alert.customer_id == customer.id))).scalar_one_or_none()
+    if not a:
+        raise HTTPException(404, "Alert not found")
+    buy_now = (silver_rate if a.metal == "silver" else gold_rate)(a.jeweller_id)[0]
+    if a.status == "active" and buy_now <= a.target:
+        a.status, a.triggered_at, a.triggered_price = "triggered", now_utc(), buy_now
+        await db.commit()
+    return alert_dict(a)
+
+
+@api.post("/alerts")
+async def create_alert(body: AlertCreateModel, customer: Customer = Depends(get_current_customer), db: AsyncSession = Depends(get_db)):
+    active = await db.execute(select(func.count()).select_from(Alert).where(Alert.customer_id == customer.id, Alert.status == "active"))
+    if (active.scalar() or 0) >= 5:
+        raise HTTPException(400, "You can have up to 5 active alerts")
+    alert = Alert(
+        id=str(uuid.uuid4()), customer_id=customer.id, jeweller_id=customer.jeweller_id,
+        target=r2(body.target), metal=body.metal, alert_type=body.alert_type,
+        buy_amount=r2(body.buy_amount or 0)
+    )
+    db.add(alert)
+    await db.commit()
+    await db.refresh(alert)
+    return alert_dict(alert)
+
+
+@api.delete("/alerts/{alert_id}")
+async def delete_alert(alert_id: str, customer: Customer = Depends(get_current_customer), db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Alert).where(Alert.id == alert_id, Alert.customer_id == customer.id))
+    a = result.scalar_one_or_none()
+    if not a:
+        raise HTTPException(404, "Alert not found")
+    a.status = "deleted"
+    await db.commit()
+    return {"ok": True}
+
+
+# ─── Goals ────────────────────────────────────────────────────────────────────
+@api.get("/goals")
+async def list_goals(customer: Customer = Depends(get_current_customer), db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Goal).where(Goal.customer_id == customer.id).order_by(Goal.created_at))
+    return [{"id": g.id, "name": g.name, "occasion": g.occasion, "target_grams": r4(g.target_grams), "metal": g.metal or "gold",
+             "months": g.months, "deadline": g.deadline.isoformat() if g.deadline else "",
+             "start_grams": r4(g.start_grams), "created_at": g.created_at.isoformat()} for g in result.scalars().all()]
+
+
+@api.post("/goals")
+async def create_goal(body: GoalCreate, customer: Customer = Depends(get_current_customer), db: AsyncSession = Depends(get_db)):
+    count = await db.execute(select(func.count()).select_from(Goal).where(Goal.customer_id == customer.id))
+    if count.scalar() >= 5:
+        raise HTTPException(400, "You can have up to 5 goals")
+    goal = Goal(
+        id=str(uuid.uuid4()), customer_id=customer.id, name=body.name.strip(),
+        occasion=body.occasion, target_grams=r4(body.target_grams), months=body.months,
+        deadline=now_utc() + timedelta(days=round(body.months * 30.44)),
+        metal=body.metal, start_grams=r4((customer.silver_grams if body.metal == "silver" else customer.gold_grams) or 0)
+    )
+    db.add(goal)
+    await db.commit()
+    return {"id": goal.id, "name": goal.name, "target_grams": r4(goal.target_grams), "months": goal.months, "metal": goal.metal}
+
+
+@api.delete("/goals/{goal_id}")
+async def delete_goal(goal_id: str, customer: Customer = Depends(get_current_customer), db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Goal).where(Goal.id == goal_id, Goal.customer_id == customer.id))
+    g = result.scalar_one_or_none()
+    if not g:
+        raise HTTPException(404, "Goal not found")
+    await db.delete(g)
+    await db.commit()
+    return {"ok": True}
+
+
+# ─── Wallet ───────────────────────────────────────────────────────────────────
+@api.get("/wallet")
+async def wallet_info(customer: Customer = Depends(get_current_customer), db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(WalletTransaction).where(WalletTransaction.customer_id == customer.id).order_by(desc(WalletTransaction.created_at)).limit(100)
+    )
+    txns = [{"id": t.id, "type": t.type, "amount": r2(t.amount), "description": t.description,
+             "created_at": t.created_at.isoformat()} for t in result.scalars().all()]
+    return {
+        "balance": r2(customer.wallet_balance or 0),
+        "referral_balance": r2(customer.referral_balance or 0),
+        "transactions": txns
+    }
+
+
+@api.post("/wallet/deposit")
+async def wallet_deposit(body: WalletDeposit, customer: Customer = Depends(get_current_customer), db: AsyncSession = Depends(get_db)):
+    txn = WalletTransaction(
+        id=str(uuid.uuid4()), customer_id=customer.id, type="deposit",
+        amount=r2(body.amount), description="Wallet deposit via UPI"
+    )
+    db.add(txn)
+    customer.wallet_balance = r2((customer.wallet_balance or 0) + body.amount)
+    await db.commit()
+    return {"ok": True, "balance": r2(customer.wallet_balance)}
+
+
+@api.post("/wallet/withdraw")
+async def wallet_withdraw(body: WalletWithdraw, customer: Customer = Depends(get_current_customer), db: AsyncSession = Depends(get_db)):
+    if body.amount > (customer.wallet_balance or 0):
+        raise HTTPException(400, "Insufficient wallet balance")
+    txn = WalletTransaction(
+        id=str(uuid.uuid4()), customer_id=customer.id, type="withdraw",
+        amount=r2(body.amount), description="Wallet withdrawal to bank"
+    )
+    db.add(txn)
+    customer.wallet_balance = r2((customer.wallet_balance or 0) - body.amount)
+    await db.commit()
+    return {"ok": True, "balance": r2(customer.wallet_balance)}
+
+
+# ─── Referral ─────────────────────────────────────────────────────────────────
+@api.get("/referral")
+async def referral_info(customer: Customer = Depends(get_current_customer), db: AsyncSession = Depends(get_db)):
+    count = await db.execute(select(func.count()).select_from(Customer).where(Customer.referred_by == customer.id))
+    refs = await db.execute(
+        select(Customer.first_name, Customer.last_name, Customer.created_at)
+        .where(Customer.referred_by == customer.id).order_by(desc(Customer.created_at)).limit(50)
+    )
+    referrals = [{"name": f"{r[0]} {r[1]}".strip(), "joined": r[2].isoformat() if r[2] else ""} for r in refs.all()]
+    return {
+        "referral_code": customer.referral_code,
+        "referral_balance": r2(customer.referral_balance or 0),
+        "referral_count": count.scalar(),
+        "referrals": referrals,
+    }
+
+
+# ─── Notifications ────────────────────────────────────────────────────────────
+@api.get("/notifications")
+async def list_notifications(customer: Customer = Depends(get_current_customer), db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(Notification).where(Notification.customer_id == customer.id).order_by(desc(Notification.created_at)).limit(50)
+    )
+    notifs = [{"id": n.id, "title": n.title, "message": n.message, "type": n.type,
+               "read": n.read, "created_at": n.created_at.isoformat()} for n in result.scalars().all()]
+    return {"notifications": notifs, "unread_count": sum(1 for n in notifs if not n.get("read"))}
+
+
+@api.post("/notifications/mark-read")
+async def mark_notifications_read(customer: Customer = Depends(get_current_customer), db: AsyncSession = Depends(get_db)):
+    await db.execute(
+        update(Notification).where(Notification.customer_id == customer.id, Notification.read == False).values(read=True)
+    )
+    await db.commit()
+    return {"ok": True}
+
+
+# ═══════════════════ JEWELLER ADMIN ═══════════════════════════════════════════
+LOGIN_FAILS: dict = {}  # key -> [failure timestamps]; blocks password guessing on panel logins
+LOGIN_MAX_FAILS, LOGIN_WINDOW = 5, 15 * 60
+
+
+def _client_ip(request: Request):
+    # right-most X-Forwarded-For entry is added by our ingress; earlier entries are client-controlled
+    xff = [p.strip() for p in (request.headers.get("x-forwarded-for") or "").split(",") if p.strip()]
+    return xff[-1] if xff else (request.client.host if request.client else "")
+
+
+def _login_guard(kind: str, ident: str, ip: str):
+    now = time.time()
+    if len(LOGIN_FAILS) > 5000:  # drop expired keys so random usernames cannot grow memory forever
+        for k in [k for k, v in LOGIN_FAILS.items() if not v or now - v[-1] >= LOGIN_WINDOW]:
+            LOGIN_FAILS.pop(k, None)
+    for key, limit in ((f"{kind}:{ident}", LOGIN_MAX_FAILS), (f"{kind}-ip:{ip}", LOGIN_MAX_FAILS * 4)):
+        fails = [t for t in LOGIN_FAILS.get(key, []) if now - t < LOGIN_WINDOW]
+        if fails:
+            LOGIN_FAILS[key] = fails
+        else:
+            LOGIN_FAILS.pop(key, None)
+        if len(fails) >= limit:
+            mins = int((LOGIN_WINDOW - (now - fails[0])) // 60) + 1
+            raise HTTPException(429, f"Too many failed attempts. Try again in {mins} min")
+
+
+def _login_failed(kind: str, ident: str, ip: str):
+    now = time.time()
+    for key in (f"{kind}:{ident}", f"{kind}-ip:{ip}"):
+        LOGIN_FAILS.setdefault(key, []).append(now)
+
+
+@api.post("/jeweller/login")
+async def jeweller_login(body: JewellerLogin, request: Request, db: AsyncSession = Depends(get_db)):
+    email, ip = body.email.strip().lower(), _client_ip(request)
+    _login_guard("jeweller", email, ip)
+    result = await db.execute(select(Jeweller).where(Jeweller.email == email))
+    j = result.scalar_one_or_none()
+    if not j or not bcrypt.checkpw(body.password.encode(), j.password_hash.encode()):
+        _login_failed("jeweller", email, ip)
+        raise HTTPException(401, "Invalid email or password")
+    LOGIN_FAILS.pop(f"jeweller:{email}", None)
+    if j.status != "active":
+        raise HTTPException(403, "Account suspended")
+    return {"access_token": make_token(j.id, "jeweller", days=1), "jeweller": jeweller_dict(j)}
+
+
+@api.get("/jeweller/me")
+async def jeweller_me(jeweller: Jeweller = Depends(get_current_jeweller)):
+    return jeweller_dict(jeweller)
+
+
+@api.get("/jeweller/dashboard")
+async def jeweller_dashboard(jeweller: Jeweller = Depends(get_current_jeweller), db: AsyncSession = Depends(get_db)):
+    # Customer count
+    cust_count = await db.execute(select(func.count()).select_from(Customer).where(Customer.jeweller_id == jeweller.id))
+    # Total grams
+    grams_result = await db.execute(
+        select(func.sum(Customer.gold_grams)).where(Customer.jeweller_id == jeweller.id)
+    )
+    # Total revenue
+    rev_result = await db.execute(
+        select(func.sum(Transaction.total)).where(
+            Transaction.jeweller_id == jeweller.id, Transaction.status == "completed",
+            Transaction.type.in_(["buy", "sip", "buy_silver"])
+        )
+    )
+    # Active wallets
+    active_wallets = await db.execute(
+        select(func.count()).select_from(Customer).where(Customer.jeweller_id == jeweller.id, Customer.gold_grams > 0)
+    )
+    # Pending pickups
+    pending_pickups = await db.execute(
+        select(func.count()).select_from(Pickup).where(Pickup.jeweller_id == jeweller.id, Pickup.status == "pending")
+    )
+    # Pending KYC
+    pending_kyc = await db.execute(
+        select(func.count()).select_from(Customer).where(Customer.jeweller_id == jeweller.id, Customer.kyc_status == "pending")
+    )
+    return {
+        "customers": cust_count.scalar() or 0,
+        "total_grams": r4(grams_result.scalar() or 0),
+        "total_revenue": r2(rev_result.scalar() or 0),
+        "active_wallets": active_wallets.scalar() or 0,
+        "pending_pickups": pending_pickups.scalar() or 0,
+        "pending_kyc": pending_kyc.scalar() or 0,
+        "min_redemption_grams": jeweller.min_redemption_grams,
+        "price": price_payload(jeweller.id),
+    }
+
+
+@api.get("/jeweller/customers")
+async def jeweller_customers(search: str = "", jeweller: Jeweller = Depends(get_current_jeweller), db: AsyncSession = Depends(get_db)):
+    q = select(Customer).where(Customer.jeweller_id == jeweller.id)
+    if search:
+        q = q.where(or_(Customer.phone.contains(search), Customer.first_name.ilike(f"%{search}%")))
+    result = await db.execute(q.order_by(desc(Customer.created_at)).limit(500))
+    return [customer_dict(c) for c in result.scalars().all()]
+
+
+@api.get("/jeweller/customers/lookup")
+async def jeweller_lookup(wallet_id: str = "", phone: str = "",
+                          jeweller: Jeweller = Depends(get_current_jeweller), db: AsyncSession = Depends(get_db)):
+    """Lookup customer by Wallet ID or phone for redemption."""
+    q = select(Customer).where(Customer.jeweller_id == jeweller.id)
+    if wallet_id:
+        q = q.where(Customer.wallet_id == wallet_id.strip().upper())
+    elif phone:
+        q = q.where(Customer.phone == norm_phone(phone))
+    else:
+        raise HTTPException(400, "Provide wallet_id or phone")
+    result = await db.execute(q)
+    c = result.scalar_one_or_none()
+    return {"found": bool(c), "customer": customer_dict(c) if c else None}
+
+
+@api.post("/jeweller/redemption/approve")
+async def jeweller_approve_redemption(body: RedemptionApprove, jeweller: Jeweller = Depends(get_current_jeweller), db: AsyncSession = Depends(get_db)):
+    """Jeweller verifies Wallet ID and approves redemption (deducts grams)."""
+    result = await db.execute(
+        select(Customer).where(Customer.wallet_id == body.wallet_id.strip().upper(), Customer.jeweller_id == jeweller.id)
+    )
+    customer = result.scalar_one_or_none()
+    if not customer:
+        raise HTTPException(404, "Customer not found with this Wallet ID")
+    if body.grams > (customer.gold_grams or 0):
+        raise HTTPException(400, f"Customer has only {r4(customer.gold_grams)}g available")
+    if body.grams < jeweller.min_redemption_grams:
+        raise HTTPException(400, f"Minimum redemption is {jeweller.min_redemption_grams}g")
+
+    avg = (customer.invested / customer.gold_grams) if customer.gold_grams > 0 else 0
+    customer.gold_grams = r4(customer.gold_grams - body.grams)
+    customer.invested = r2(customer.invested - avg * body.grams)
+    buy_rate, _ = gold_rate(jeweller.id)
+    amount = r2(body.grams * buy_rate)
+
+    txn = Transaction(
+        id=str(uuid.uuid4()), invoice_no=invoice_no(), customer_id=customer.id,
+        jeweller_id=jeweller.id, type="redemption", grams=body.grams, rate=buy_rate,
+        amount=amount, total=amount, method="in_store", status="completed",
+        note=f"{body.item} - Redeemed at store. {body.note}".strip(),
+        extra={"item": body.item, "approved_by": jeweller.owner_name}
+    )
+    db.add(txn)
+    await db.commit()
+    return {"ok": True, "transaction": txn_dict(txn), "customer": customer_dict(customer)}
+
+
+@api.get("/jeweller/transactions")
+async def jeweller_transactions(type: str = "", jeweller: Jeweller = Depends(get_current_jeweller), db: AsyncSession = Depends(get_db)):
+    q = select(Transaction).where(Transaction.jeweller_id == jeweller.id)
+    if type and type != "all":
+        q = q.where(Transaction.type == type)
+    result = await db.execute(q.order_by(desc(Transaction.created_at)).limit(200))
+    return [txn_dict(t) for t in result.scalars().all()]
+
+
+@api.get("/jeweller/pickups")
+async def jeweller_pickups(status: str = "pending", jeweller: Jeweller = Depends(get_current_jeweller), db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(Pickup).where(Pickup.jeweller_id == jeweller.id, Pickup.status == status).order_by(Pickup.created_at)
+    )
+    pickups = result.scalars().all()
+    out = []
+    for p in pickups:
+        c_result = await db.execute(select(Customer).where(Customer.id == p.customer_id))
+        c = c_result.scalar_one_or_none()
+        out.append({
+            "id": p.id, "item": p.item, "grams": r4(p.grams),
+            "making_charges": r2(p.making_charges), "status": p.status,
+            "customer_name": f"{c.first_name} {c.last_name}".strip() if c else "Customer",
+            "wallet_id": c.wallet_id if c else "",
+            "created_at": p.created_at.isoformat() if p.created_at else "",
+        })
+    return out
+
+
+@api.post("/jeweller/pickups/{pickup_id}/collect")
+async def jeweller_collect(pickup_id: str, otp: str = "",
+                           jeweller: Jeweller = Depends(get_current_jeweller), db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(Pickup).where(Pickup.id == pickup_id, Pickup.jeweller_id == jeweller.id, Pickup.status == "pending")
+    )
+    p = result.scalar_one_or_none()
+    if not p:
+        raise HTTPException(404, "Pending pickup not found")
+    if p.locked:
+        raise HTTPException(423, "Pickup locked after too many failed attempts")
+    if not hmac.compare_digest(p.otp, otp):
+        p.attempts += 1
+        if p.attempts >= 5:
+            p.locked = True
+        await db.commit()
+        raise HTTPException(400, f"Incorrect OTP. {5 - p.attempts} attempts left")
+    p.status = "collected"
+    p.collected_at = now_utc()
+    p.collected_by = jeweller.owner_name
+    await db.execute(update(Transaction).where(Transaction.id == p.transaction_id).values(status="completed"))
+    await db.commit()
+    return {"ok": True, "collected_at": p.collected_at.isoformat()}
+
+
+@api.get("/jeweller/kyc-queue")
+async def jeweller_kyc_queue(jeweller: Jeweller = Depends(get_current_jeweller), db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(Customer).where(Customer.jeweller_id == jeweller.id, Customer.kyc_status == "pending").order_by(Customer.created_at)
+    )
+    return [customer_dict(c) for c in result.scalars().all()]
+
+
+@api.post("/jeweller/kyc/{customer_id}/decide")
+async def jeweller_kyc_decide(customer_id: str, approve: bool = True, note: str = "",
+                              jeweller: Jeweller = Depends(get_current_jeweller), db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(Customer).where(Customer.id == customer_id, Customer.jeweller_id == jeweller.id, Customer.kyc_status == "pending")
+    )
+    c = result.scalar_one_or_none()
+    if not c:
+        raise HTTPException(404, "No pending KYC for this customer")
+    c.kyc_status = "approved" if approve else "rejected"
+    kyc = c.kyc_data or {}
+    kyc["reviewed_by"] = jeweller.owner_name
+    kyc["reviewed_at"] = now_iso()
+    kyc["note"] = note
+    c.kyc_data = kyc
+    await db.commit()
+    return customer_dict(c)
+
+
+@api.put("/jeweller/settings/min-redemption")
+async def update_min_redemption(body: MinRedemptionUpdate, jeweller: Jeweller = Depends(get_current_jeweller), db: AsyncSession = Depends(get_db)):
+    jeweller.min_redemption_grams = body.min_grams
+    await db.commit()
+    return {"ok": True, "min_redemption_grams": jeweller.min_redemption_grams}
+
+
+# ─── Jeweller Product Catalog ────────────────────────────────────────────────
+@api.get("/jeweller/products")
+async def jeweller_products(jeweller: Jeweller = Depends(get_current_jeweller), db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(Product).where(Product.jeweller_id == jeweller.id, Product.is_active == True).order_by(desc(Product.created_at))
+    )
+    buy, _ = gold_rate(jeweller.id)
+    return [{
+        "id": p.id, "name": p.name, "category": p.category, "grams": p.grams,
+        "making_charges": p.making_charges, "image_url": p.image_url, "tag": p.tag,
+        "description": p.description, "is_active": p.is_active,
+        "gold_value": r2(p.grams * buy), "total_price": r2(sum(product_making(p, buy)[:2])),
+    } for p in result.scalars().all()]
+
+
+@api.post("/jeweller/products")
+async def jeweller_add_product(body: ProductCreate, jeweller: Jeweller = Depends(get_current_jeweller), db: AsyncSession = Depends(get_db)):
+    p = Product(
+        id=str(uuid.uuid4()), jeweller_id=jeweller.id, name=body.name,
+        category=body.category, grams=body.grams, making_charges=body.making_charges,
+        making_pct=r2(body.making_pct), purity=body.purity,
+        image_url=body.image_url, tag=body.tag, description=body.description
+    )
+    await audit(db, "jeweller", jeweller, "product.add", body.name, {"grams": body.grams, "making_pct": body.making_pct}, jeweller.id)
+    db.add(p)
+    await db.commit()
+    return {"id": p.id, "name": p.name}
+
+
+@api.delete("/jeweller/products/{product_id}")
+async def jeweller_delete_product(product_id: str, jeweller: Jeweller = Depends(get_current_jeweller), db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Product).where(Product.id == product_id, Product.jeweller_id == jeweller.id))
+    p = result.scalar_one_or_none()
+    if not p:
+        raise HTTPException(404, "Product not found")
+    p.is_active = False
+    await audit(db, "jeweller", jeweller, "product.delete", p.name, jeweller_id=jeweller.id)
+    await db.commit()
+    return {"ok": True}
+
+
+# ═══════════════════ MASTER ADMIN ═════════════════════════════════════════════
+@api.post("/master/login")
+async def master_login(body: MasterAdminLogin, request: Request, db: AsyncSession = Depends(get_db)):
+    ip = _client_ip(request)
+    _login_guard("master", body.username, ip)
+    result = await db.execute(select(MasterAdmin).where(MasterAdmin.username == body.username))
+    admin = result.scalar_one_or_none()
+    if not admin or not bcrypt.checkpw(body.password.encode(), admin.password_hash.encode()):
+        _login_failed("master", body.username, ip)
+        raise HTTPException(401, "Invalid credentials")
+    LOGIN_FAILS.pop(f"master:{body.username}", None)
+    return {"access_token": make_token(admin.id, "master_admin", days=1), "admin": {"id": admin.id, "name": admin.name}}
+
+
+@api.get("/master/dashboard")
+async def master_dashboard(admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
+    jeweller_count = await db.execute(select(func.count()).select_from(Jeweller))
+    customer_count = await db.execute(select(func.count()).select_from(Customer))
+    total_grams = await db.execute(select(func.sum(Customer.gold_grams)))
+    total_revenue = await db.execute(
+        select(func.sum(Transaction.total)).where(Transaction.status == "completed", Transaction.type.in_(["buy", "sip", "buy_silver"]))
+    )
+    # Current pool
+    pool_result = await db.execute(
+        select(PoolAccumulator).where(PoolAccumulator.status == "accumulating").order_by(desc(PoolAccumulator.created_at)).limit(1)
+    )
+    pool = pool_result.scalar_one_or_none()
+
+    return {
+        "jewellers": jeweller_count.scalar() or 0,
+        "customers": customer_count.scalar() or 0,
+        "total_grams": r4(total_grams.scalar() or 0),
+        "total_revenue": r2(total_revenue.scalar() or 0),
+        "pool": {
+            "current_grams": r4(pool.total_grams) if pool else 0,
+            "threshold": pool.threshold_grams if pool else POOL_THRESHOLD,
+            "progress_pct": r2((pool.total_grams / pool.threshold_grams) * 100) if pool and pool.threshold_grams else 0,
+        },
+        "price": price_payload(),
+    }
+
+
+@api.get("/master/jewellers")
+async def master_jewellers(admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Jeweller).order_by(desc(Jeweller.created_at)))
+    jewellers = result.scalars().all()
+    out = []
+    for j in jewellers:
+        cust_count = await db.execute(select(func.count()).select_from(Customer).where(Customer.jeweller_id == j.id))
+        grams_sum = await db.execute(select(func.sum(Customer.gold_grams)).where(Customer.jeweller_id == j.id))
+        out.append(jeweller_dict(j) | {"customer_count": cust_count.scalar() or 0, "total_grams": r4(grams_sum.scalar() or 0)})
+    return out
+
+
+@api.post("/master/jewellers")
+async def master_onboard_jeweller(body: JewellerOnboard, admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
+    # Check uniqueness
+    existing = await db.execute(select(Jeweller).where(or_(Jeweller.email == body.email.lower(), Jeweller.phone == norm_phone(body.phone))))
+    if existing.scalar_one_or_none():
+        raise HTTPException(400, "Jeweller with this email or phone already exists")
+
+    j = Jeweller(
+        id=str(uuid.uuid4()), business_name=body.business_name.strip(),
+        owner_name=body.owner_name.strip(), phone=norm_phone(body.phone),
+        email=body.email.strip().lower(),
+        password_hash=bcrypt.hashpw(body.password.encode(), bcrypt.gensalt()).decode(),
+        pan=body.pan, aadhaar=body.aadhaar, address=body.address,
+        city=body.city, state=body.state, pincode=body.pincode,
+        logo_url=body.logo_url, primary_color=body.primary_color,
+        secondary_color=body.secondary_color, domain=normalize_domain(body.domain),
+        min_redemption_grams=body.min_redemption_grams,
+    )
+    db.add(j)
+
+    # Add default products for the jeweller
+    default_products = [
+        ("Heritage 24K Necklace", "necklaces", 12.5, 4850, "Trending"),
+        ("Minimalist Gold Bangle", "bangles", 8.2, 2650, "Bestseller"),
+        ("Classic Solitaire Ring", "rings", 3.4, 1150, "New"),
+        ("Rope Twist Chain", "chains", 6.8, 1980, "Trending"),
+        ("Royal Kada", "kadas", 15.0, 5200, "Premium"),
+        ("Lakshmi Pendant Set", "pendant-sets", 9.6, 3400, "Festive"),
+        ("Gold Dial Watch", "watches", 18.0, 7900, "Luxury"),
+        ("Tanmaniya Mangalsutra", "necklaces", 7.1, 2300, "Classic"),
+    ]
+    for name, cat, grams, mc, tag in default_products:
+        db.add(Product(
+            id=str(uuid.uuid4()), jeweller_id=j.id, name=name,
+            category=cat, grams=grams, making_charges=mc, tag=tag,
+            description=f"Exquisite {name} in hallmarked gold. Weight: {grams}g. BIS Hallmarked."
+        ))
+
+    await db.commit()
+    cache_margins(j)
+    return jeweller_dict(j)
+
+
+@api.post("/master/jewellers/{jeweller_id}/toggle")
+async def master_toggle_jeweller(jeweller_id: str, admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Jeweller).where(Jeweller.id == jeweller_id))
+    j = result.scalar_one_or_none()
+    if not j:
+        raise HTTPException(404, "Jeweller not found")
+    j.status = "suspended" if j.status == "active" else "active"
+    await db.commit()
+    return {"id": j.id, "status": j.status}
+
+
+@api.get("/master/pool")
+async def master_pool(admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
+    pools = await db.execute(select(PoolAccumulator).order_by(desc(PoolAccumulator.created_at)).limit(10))
+    return [{"id": p.id, "total_grams": r4(p.total_grams), "threshold": p.threshold_grams,
+             "status": p.status, "triggered_at": p.triggered_at.isoformat() if p.triggered_at else None,
+             "created_at": p.created_at.isoformat()} for p in pools.scalars().all()]
+
+
+@api.get("/master/bifurcation-invoices")
+async def master_invoices(admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(BifurcationInvoice).order_by(desc(BifurcationInvoice.created_at)).limit(20))
+    return [{"id": i.id, "pool_id": i.pool_id, "total_grams": r4(i.total_grams),
+             "details": i.details, "status": i.status,
+             "created_at": i.created_at.isoformat()} for i in result.scalars().all()]
+
+
+@api.get("/master/transactions")
+async def master_transactions(jeweller_id: str = "", type: str = "",
+                              admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
+    q = select(Transaction)
+    if jeweller_id:
+        q = q.where(Transaction.jeweller_id == jeweller_id)
+    if type and type != "all":
+        q = q.where(Transaction.type == type)
+    result = await db.execute(q.order_by(desc(Transaction.created_at)).limit(200))
+    return [txn_dict(t) for t in result.scalars().all()]
+
+
+@api.get("/master/customers")
+async def master_customers(jeweller_id: str = "", search: str = "",
+                           admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
+    q = select(Customer)
+    if jeweller_id:
+        q = q.where(Customer.jeweller_id == jeweller_id)
+    if search:
+        q = q.where(or_(Customer.phone.contains(search), Customer.first_name.ilike(f"%{search}%")))
+    result = await db.execute(q.order_by(desc(Customer.created_at)).limit(500))
+    return [customer_dict(c) for c in result.scalars().all()]
+
+
+@api.put("/master/pool/threshold")
+async def master_update_threshold(body: PoolThresholdUpdate, admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(PoolAccumulator).where(PoolAccumulator.status == "accumulating").order_by(desc(PoolAccumulator.created_at)).limit(1)
+    )
+    pool = result.scalar_one_or_none()
+    if pool:
+        pool.threshold_grams = body.threshold
+    await db.commit()
+    return {"ok": True, "threshold": body.threshold}
+
+
+@api.get("/master/rate")
+async def master_rate(admin: MasterAdmin = Depends(get_master_admin)):
+    return price_payload() | {"feed": rate_feed_status()}
+
+
+def rate_feed_status():
+    last = RATE_FEED["last_live_at"]
+    return {
+        "source": RATE_FEED["source"], "configured": bool(MT5_RATES_URL or METAAPI_TOKEN),
+        "metaapi_state": META["state"], "metaapi_connection": META["connection"],
+        "provider": "mt5_script" if MT5_RATES_URL else ("metaapi" if METAAPI_TOKEN else "none"),
+        "last_live_at": last.isoformat() if last else None, "error": RATE_FEED["error"],
+        "gold_symbol": MT5_GOLD_SYMBOL, "silver_symbol": MT5_SILVER_SYMBOL,
+        "gold_unit_grams": MT5_GOLD_UNIT_GRAMS, "silver_unit_grams": MT5_SILVER_UNIT_GRAMS,
+    }
+
+
+# ═══════════════════ CUSTOM DOMAINS ═══════════════════════════════════════════
+DOMAIN_RE = re.compile(r"^(?=.{4,200}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$")
+
+
+def normalize_domain(raw: str) -> str:
+    d = (raw or "").strip().lower()
+    d = re.sub(r"^[a-z]+://", "", d).split("/")[0].split("?")[0].split(":")[0].rstrip(".")
+    if d and not DOMAIN_RE.match(d):
+        raise HTTPException(400, f"'{raw}' is not a valid domain (example: gold.sharmajewellers.in)")
+    return d
+
+
+def request_host(request: Request) -> str:
+    h = request.headers.get("x-forwarded-host") or request.headers.get("host") or ""
+    return h.split(",")[0].strip().split(":")[0].lower()
+
+
+class DomainUpdate(BaseModel):
+    domain: str = ""
+    admin_domain: str = ""
+
+
+class MarginUpdate(BaseModel):
+    gold_buy_markup_pct: float = Field(ge=0, le=50)
+    gold_sell_discount_pct: float = Field(ge=0, le=50)
+    silver_buy_markup_pct: float = Field(ge=0, le=50)
+    silver_sell_discount_pct: float = Field(ge=0, le=50)
+
+
+@api.get("/tenant/resolve")
+async def tenant_resolve(request: Request, host: str = "", db: AsyncSession = Depends(get_db)):
+    h = (host or request_host(request)).strip().lower().split(":")[0]
+    if not h:
+        raise HTTPException(404, "No tenant for this domain")
+    result = await db.execute(select(Jeweller).where(
+        Jeweller.status == "active", or_(Jeweller.domain == h, Jeweller.admin_domain == h)))
+    j = result.scalars().first()
+    if not j:
+        raise HTTPException(404, "No tenant for this domain")
+    return {
+        "kind": "admin" if j.admin_domain == h else "app",
+        "jeweller": {
+            "id": j.id, "business_name": j.business_name, "logo_url": j.logo_url,
+            "primary_color": j.primary_color, "secondary_color": j.secondary_color,
+            "min_redemption_grams": j.min_redemption_grams,
+        },
+    }
+
+
+@api.put("/master/jewellers/{jeweller_id}/domains")
+async def master_set_domains(jeweller_id: str, body: DomainUpdate, admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
+    j = (await db.execute(select(Jeweller).where(Jeweller.id == jeweller_id))).scalar_one_or_none()
+    if not j:
+        raise HTTPException(404, "Jeweller not found")
+    app_d, admin_d = normalize_domain(body.domain), normalize_domain(body.admin_domain)
+    if app_d and app_d == admin_d:
+        raise HTTPException(400, "App domain and admin domain must be different")
+    for d in filter(None, (app_d, admin_d)):
+        clash = await db.execute(select(Jeweller.business_name).where(
+            Jeweller.id != j.id, or_(Jeweller.domain == d, Jeweller.admin_domain == d)))
+        name = clash.scalars().first()
+        if name:
+            raise HTTPException(409, f"{d} is already used by {name}")
+    j.domain, j.admin_domain = app_d, admin_d
+    await db.commit()
+    return jeweller_dict(j)
+
+
+async def _resolve_ips(host: str):
+    try:
+        infos = await asyncio.get_event_loop().getaddrinfo(host, 443, proto=6)
+        return sorted({i[4][0] for i in infos})
+    except Exception:
+        return []
+
+
+@api.get("/master/jewellers/{jeweller_id}/domain-check")
+async def master_domain_check(jeweller_id: str, request: Request, admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
+    j = (await db.execute(select(Jeweller).where(Jeweller.id == jeweller_id))).scalar_one_or_none()
+    if not j:
+        raise HTTPException(404, "Jeweller not found")
+    target = request_host(request)
+    target_ips = await _resolve_ips(target)
+    out = []
+    for kind, d in (("app", j.domain), ("admin", j.admin_domain)):
+        if not d:
+            continue
+        ips = await _resolve_ips(d)
+        out.append({"kind": kind, "domain": d, "resolves_to": ips,
+                    "points_here": bool(ips) and bool(set(ips) & set(target_ips))})
+    return {"cname_target": target, "target_ips": target_ips, "domains": out}
+
+
+@api.put("/jeweller/settings/margins")
+async def update_margins(body: MarginUpdate, jeweller: Jeweller = Depends(get_current_jeweller), db: AsyncSession = Depends(get_db)):
+    jeweller.gold_buy_markup_pct = body.gold_buy_markup_pct
+    jeweller.gold_sell_discount_pct = body.gold_sell_discount_pct
+    jeweller.silver_buy_markup_pct = body.silver_buy_markup_pct
+    jeweller.silver_sell_discount_pct = body.silver_sell_discount_pct
+    await db.commit()
+    cache_margins(jeweller)
+    return jeweller_dict(jeweller) | {"price": price_payload(jeweller.id)}
+
+
+# ═══════════════════ SEED DATA ════════════════════════════════════════════════
+async def seed_data():
+    """Seed demo jeweller, customers, and master admin."""
+    async with AsyncSessionLocal() as db:
+        # Check if already seeded
+        existing = await db.execute(select(MasterAdmin).where(MasterAdmin.username == "admin"))
+        if existing.scalar_one_or_none():
+            logger.info("Database already seeded")
+            return
+
+        # Master admin
+        admin = MasterAdmin(
+            id=str(uuid.uuid4()), username="admin", name="Vaultra Super Admin",
+            password_hash=bcrypt.hashpw("admin123".encode(), bcrypt.gensalt()).decode()
+        )
+        db.add(admin)
+
+        # Demo jeweller
+        jeweller = Jeweller(
+            id="demo-jeweller-001", business_name="Sharma Gold & Jewellers",
+            owner_name="Rajesh Sharma", phone="9999000001",
+            email="sharma@vaultra.in",
+            password_hash=bcrypt.hashpw("jeweller123".encode(), bcrypt.gensalt()).decode(),
+            address="Shop No. 12, Gold Market", city="Mumbai", state="Maharashtra",
+            pincode="400001", primary_color="#D4AF37", secondary_color="#1A1A2E",
+            min_redemption_grams=1.0,
+        )
+        db.add(jeweller)
+
+        # Second jeweller
+        jeweller2 = Jeweller(
+            id="demo-jeweller-002", business_name="Patel Jewellery House",
+            owner_name="Amit Patel", phone="9999000002",
+            email="patel@vaultra.in",
+            password_hash=bcrypt.hashpw("jeweller123".encode(), bcrypt.gensalt()).decode(),
+            address="15, Jewellers Lane", city="Ahmedabad", state="Gujarat",
+            pincode="380001", primary_color="#B8860B", secondary_color="#2D2D44",
+            min_redemption_grams=0.5,
+        )
+        db.add(jeweller2)
+
+        await db.flush()
+
+        # Default products for jewellers
+        for jid in [jeweller.id, jeweller2.id]:
+            products_data = [
+                ("Heritage 24K Necklace", "necklaces", 12.5, 4850, "Trending"),
+                ("Minimalist Gold Bangle", "bangles", 8.2, 2650, "Bestseller"),
+                ("Classic Solitaire Ring", "rings", 3.4, 1150, "New"),
+                ("Rope Twist Chain", "chains", 6.8, 1980, "Trending"),
+                ("Royal Kada", "kadas", 15.0, 5200, "Premium"),
+                ("Lakshmi Pendant Set", "pendant-sets", 9.6, 3400, "Festive"),
+                ("Gold Dial Watch", "watches", 18.0, 7900, "Luxury"),
+                ("Tanmaniya Mangalsutra", "necklaces", 7.1, 2300, "Classic"),
+            ]
+            for name, cat, grams, mc, tag in products_data:
+                db.add(Product(
+                    id=str(uuid.uuid4()), jeweller_id=jid, name=name,
+                    category=cat, grams=grams, making_charges=mc, tag=tag,
+                    description=f"Exquisite {name} in hallmarked gold. Weight: {grams}g. BIS Hallmarked."
+                ))
+
+        # Create initial pool
+        pool = PoolAccumulator(id=str(uuid.uuid4()), total_grams=0.0, threshold_grams=POOL_THRESHOLD)
+        db.add(pool)
+
+        # Demo customers for jeweller 1
+        base = now_utc()
+        demo_customers = [
+            ("9876543210", "Aarav", "Sharma", "approved"),
+            ("9812345670", "Diya", "Patel", "pending"),
+            ("9823456781", "Kabir", "Singh", "not_submitted"),
+            ("9834567892", "Meera", "Iyer", "approved"),
+        ]
+        for phone, fname, lname, kyc in demo_customers:
+            kyc_data = {}
+            if kyc != "not_submitted":
+                kyc_data = {
+                    "full_name": f"{fname} {lname}", "aadhaar": f"{random.randint(200000000000, 999999999999)}",
+                    "pan": f"{''.join(random.choice('ABCDEFGHJKL') for _ in range(5))}{random.randint(1000, 9999)}{'ABCFGHLPT'[random.randint(0,8)]}",
+                    "dob": f"19{random.randint(80, 99)}-0{random.randint(1,9)}-{random.randint(10,28)}",
+                    "submitted_at": now_iso(),
+                }
+                if kyc == "approved":
+                    kyc_data["reviewed_by"] = "Rajesh Sharma"
+                    kyc_data["reviewed_at"] = now_iso()
+
+            c = Customer(
+                id=str(uuid.uuid4()), jeweller_id=jeweller.id, phone=phone,
+                first_name=fname, last_name=lname,
+                wallet_id=gen_wallet_id(), referral_code=gen_referral_code(),
+                kyc_status=kyc, kyc_data=kyc_data,
+                gold_grams=0.0, silver_grams=0.0, invested=0.0,
+                created_at=base - timedelta(days=random.randint(10, 60))
+            )
+            db.add(c)
+            await db.flush()
+
+            # Seed some transactions
+            seed_txns = []
+            for _ in range(random.randint(2, 4)):
+                rate = r2(7120 + random.uniform(-60, 120))
+                amount = float(random.choice([1000, 2000, 2500, 5000]))
+                grams = r4(amount / rate)
+                c.gold_grams = r4(c.gold_grams + grams)
+                c.invested = r2(c.invested + amount)
+                gst = r2(amount * GST_RATE)
+                txn = Transaction(
+                    id=str(uuid.uuid4()), invoice_no=invoice_no(), customer_id=c.id,
+                    jeweller_id=jeweller.id, type=random.choice(["buy", "buy", "sip"]),
+                    grams=grams, rate=rate, amount=amount, gst=gst,
+                    total=r2(amount + gst), method="upi", status="completed",
+                    pool_contribution=True,
+                    created_at=base - timedelta(days=random.randint(1, 30))
+                )
+                db.add(txn)
+                seed_txns.append((txn, c, grams))
+                pool.total_grams = r4(pool.total_grams + grams)
+
+            # Flush transactions first so FKs are satisfied
+            await db.flush()
+            for txn, cust, g in seed_txns:
+                db.add(PoolContribution(
+                    id=str(uuid.uuid4()), pool_id=pool.id, transaction_id=txn.id,
+                    customer_id=cust.id, jeweller_id=jeweller.id, grams=g
+                ))
+
+        # Demo customers for jeweller 2
+        for phone, fname, lname, kyc in [("9845678903", "Rohan", "Gupta", "approved"), ("9856789014", "Ananya", "Reddy", "pending")]:
+            kyc_data = {}
+            if kyc != "not_submitted":
+                kyc_data = {"full_name": f"{fname} {lname}", "aadhaar": f"{random.randint(200000000000, 999999999999)}",
+                            "pan": f"ABCDE{random.randint(1000, 9999)}F", "submitted_at": now_iso()}
+                if kyc == "approved":
+                    kyc_data["reviewed_by"] = "Amit Patel"
+                    kyc_data["reviewed_at"] = now_iso()
+            c = Customer(
+                id=str(uuid.uuid4()), jeweller_id=jeweller2.id, phone=phone,
+                first_name=fname, last_name=lname,
+                wallet_id=gen_wallet_id(), referral_code=gen_referral_code(),
+                kyc_status=kyc, kyc_data=kyc_data,
+                gold_grams=r4(random.uniform(1, 5)), silver_grams=0.0,
+                invested=r2(random.uniform(5000, 30000)),
+                created_at=base - timedelta(days=random.randint(10, 40))
+            )
+            db.add(c)
+
+        await db.commit()
+        logger.info("Seeded demo data with 2 jewellers, 6 customers, master admin")
+
+
+# ═══════════════════ ADMIN WEB PANELS ═════════════════════════════════════════
+from fastapi.responses import FileResponse
+TEMPLATES = ROOT_DIR / "templates"
+
+
+# ═══════════════════ JEWELLER PANEL v3 ═══════════════════════════════════════
+BUY_TYPES = ["buy", "buy_silver", "sip"]
+ORDER_TYPES = BUY_TYPES + ["redemption"]
+
+
+def _range_bounds(range: str, start: str, end: str):
+    now = now_utc()
+    if range == "custom" and start:
+        try:
+            s_ = datetime.fromisoformat(start).replace(tzinfo=timezone.utc)
+            e_ = datetime.fromisoformat(end).replace(tzinfo=timezone.utc) + timedelta(days=1) if end else now
+            return s_, e_
+        except ValueError:
+            raise HTTPException(400, "Invalid custom date")
+    days = {"1d": 1, "3d": 3, "7d": 7, "30d": 30}.get(range, 1)
+    today0 = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    return today0 - timedelta(days=days - 1), now
+
+
+def _cname(c):
+    return (f"{c.first_name or ''} {c.last_name or ''}".strip() or "Customer") if c else "Customer"
+
+
+def _txn_metal(t):
+    return "silver" if (t.metal == "silver" or t.type == "buy_silver") else "gold"
+
+
+@api.get("/jeweller/v3/dashboard")
+async def jp_dashboard(range: str = "1d", start: str = "", end: str = "",
+                       jeweller: Jeweller = Depends(get_current_jeweller), db: AsyncSession = Depends(get_db)):
+    s_, e_ = _range_bounds(range, start, end)
+    jid = jeweller.id
+    total_c = (await db.execute(select(func.count()).select_from(Customer).where(Customer.jeweller_id == jid))).scalar() or 0
+    active_ids = (await db.execute(select(func.count(func.distinct(Transaction.customer_id))).where(
+        Transaction.jeweller_id == jid, Transaction.created_at >= s_, Transaction.created_at < e_, Transaction.status != "failed"))).scalar() or 0
+    new_c = (await db.execute(select(func.count()).select_from(Customer).where(
+        Customer.jeweller_id == jid, Customer.created_at >= s_, Customer.created_at < e_))).scalar() or 0
+    rows = (await db.execute(select(Transaction).where(
+        Transaction.jeweller_id == jid, Transaction.created_at >= s_, Transaction.created_at < e_,
+        Transaction.type.in_(ORDER_TYPES), Transaction.status != "failed"))).scalars().all()
+    st = {"gold_g": 0.0, "gold_amt": 0.0, "silver_g": 0.0, "silver_amt": 0.0, "orders": 0,
+          "redeemed_g": 0.0, "redemptions": 0, "gst": 0.0, "commission": 0.0}
+    series: dict = {}
+    for t in rows:
+        day = t.created_at.astimezone(timezone(timedelta(hours=5, minutes=30))).strftime("%Y-%m-%d")
+        if t.type in BUY_TYPES:
+            m = _txn_metal(t)
+            st[f"{m}_g"] += t.grams or 0
+            st[f"{m}_amt"] += t.total or 0
+            st["gst"] += t.gst or 0
+            st["orders"] += 1
+            st["commission"] += (t.extra or {}).get("commission", 0) or 0
+            d = series.setdefault(day, {"day": day, "gold_g": 0.0, "silver_g": 0.0, "amount": 0.0})
+            d[f"{m}_g"] += t.grams or 0
+            d["amount"] += t.total or 0
+        else:
+            st["redeemed_g"] += t.grams or 0
+            st["redemptions"] += 1
+    holdings = (await db.execute(select(func.sum(Customer.gold_grams), func.sum(Customer.silver_grams)).where(Customer.jeweller_id == jid))).one()
+    pend_p = (await db.execute(select(func.count()).select_from(Pickup).where(Pickup.jeweller_id == jid, Pickup.status == "pending"))).scalar() or 0
+    pend_k = (await db.execute(select(func.count()).select_from(Customer).where(Customer.jeweller_id == jid, Customer.kyc_status == "pending"))).scalar() or 0
+    recent = (await db.execute(select(Transaction, Customer).join(Customer, Customer.id == Transaction.customer_id).where(
+        Transaction.jeweller_id == jid, Transaction.type.in_(ORDER_TYPES)).order_by(desc(Transaction.created_at)).limit(8))).all()
+    return {
+        "range": {"from": s_.isoformat(), "to": e_.isoformat(), "key": range},
+        "customers": {"total": total_c, "active": active_ids, "inactive": max(total_c - active_ids, 0), "new": new_c},
+        "booked": {k: (r4(v) if k.endswith("_g") else (v if isinstance(v, int) else r2(v))) for k, v in st.items()},
+        "holdings": {"gold_g": r4(holdings[0] or 0), "silver_g": r4(holdings[1] or 0)},
+        "pending": {"pickups": pend_p, "kyc": pend_k},
+        "series": sorted(series.values(), key=lambda x: x["day"]),
+        "recent": [_order_row(t, c) for t, c in recent],
+        "price": price_payload(jid), "feed": rate_feed_status(),
+    }
+
+
+def _order_row(t, c):
+    return {"id": t.id, "invoice_no": t.invoice_no, "created_at": t.created_at.isoformat() if t.created_at else "",
+            "customer_name": _cname(c), "phone": c.phone if c else "", "wallet_id": c.wallet_id if c else "",
+            "side": "redeem" if t.type == "redemption" else "buy", "type": t.type, "metal": _txn_metal(t),
+            "grams": r4(t.grams or 0), "rate": r2(t.rate or 0), "amount": r2(t.amount or 0),
+            "gst": r2(t.gst or 0), "total": r2(t.total or 0), "status": t.status, "method": t.method}
+
+
+@api.get("/jeweller/v3/orders")
+async def jp_orders(side: str = "all", status: str = "all", metal: str = "all", search: str = "",
+                    range: str = "", start: str = "", end: str = "",
+                    jeweller: Jeweller = Depends(get_current_jeweller), db: AsyncSession = Depends(get_db)):
+    types = BUY_TYPES if side == "buy" else (["redemption"] if side == "redeem" else ORDER_TYPES)
+    q = select(Transaction, Customer).join(Customer, Customer.id == Transaction.customer_id).where(
+        Transaction.jeweller_id == jeweller.id, Transaction.type.in_(types))
+    if status != "all":
+        q = q.where(Transaction.status == status)
+    if metal == "silver":
+        q = q.where(or_(Transaction.metal == "silver", Transaction.type == "buy_silver"))
+    elif metal == "gold":
+        q = q.where(Transaction.metal != "silver", Transaction.type != "buy_silver")
+    if search:
+        q = q.where(or_(Customer.phone.contains(search), Customer.first_name.ilike(f"%{search}%"),
+                        Customer.last_name.ilike(f"%{search}%"), Transaction.invoice_no.ilike(f"%{search}%")))
+    if range:
+        s_, e_ = _range_bounds(range, start, end)
+        q = q.where(Transaction.created_at >= s_, Transaction.created_at < e_)
+    rows = (await db.execute(q.order_by(desc(Transaction.created_at)).limit(500))).all()
+    out = [_order_row(t, c) for t, c in rows]
+    buys = [o for o in out if o["side"] == "buy"]
+    return {
+        "summary": {
+            "buys": len(buys), "buy_amount": r2(sum(o["total"] for o in buys)),
+            "gold_g": r4(sum(o["grams"] for o in buys if o["metal"] == "gold")),
+            "silver_g": r4(sum(o["grams"] for o in buys if o["metal"] == "silver")),
+            "redeems": len(out) - len(buys), "redeemed_g": r4(sum(o["grams"] for o in out if o["side"] == "redeem")),
+            "pending": sum(1 for o in out if o["status"] in ("processing", "pending")),
+        },
+        "orders": out,
+    }
+
+
+@api.get("/jeweller/v3/orders/{txn_id}/bill")
+async def jp_bill(txn_id: str, jeweller: Jeweller = Depends(get_current_jeweller), db: AsyncSession = Depends(get_db)):
+    row = (await db.execute(select(Transaction, Customer).join(Customer, Customer.id == Transaction.customer_id).where(
+        Transaction.id == txn_id, Transaction.jeweller_id == jeweller.id))).first()
+    if not row:
+        raise HTTPException(404, "Order not found")
+    t, c = row
+    extra = t.extra or {}
+    charges = r2(extra.get("making_charges", 0) or 0)
+    if t.type == "redemption" and not charges:
+        pk = (await db.execute(select(Pickup).where(Pickup.transaction_id == t.id))).scalar_one_or_none()
+        charges = r2(pk.making_charges) if pk else 0
+    return {
+        "shop": {"name": jeweller.business_name, "address": jeweller.address, "city": jeweller.city,
+                 "phone": jeweller.phone, "gstin": getattr(jeweller, "gstin", "") or ""},
+        "customer": {"name": _cname(c), "phone": c.phone, "email": c.email, "wallet_id": c.wallet_id,
+                     "kyc_status": c.kyc_status},
+        "order": _order_row(t, c) | {"item": extra.get("item") or ("24K Digital Gold" if _txn_metal(t) == "gold" else "999 Digital Silver"),
+                                    "charges": charges, "note": t.note or "",
+                                    "payable": r2((t.total or 0) + (charges if t.type == "redemption" else 0))},
+    }
+
+
+@api.get("/jeweller/v3/holdings")
+async def jp_holdings(search: str = "", jeweller: Jeweller = Depends(get_current_jeweller), db: AsyncSession = Depends(get_db)):
+    q = select(Customer).where(Customer.jeweller_id == jeweller.id)
+    if search:
+        q = q.where(or_(Customer.phone.contains(search), Customer.first_name.ilike(f"%{search}%"),
+                        Customer.last_name.ilike(f"%{search}%"), Customer.wallet_id.ilike(f"%{search}%")))
+    customers = (await db.execute(q.order_by(desc(Customer.gold_grams)))).scalars().all()
+    agg = {r[0]: r for r in (await db.execute(select(
+        Transaction.customer_id,
+        func.sum(case((Transaction.type.in_(BUY_TYPES), Transaction.total), else_=0)),
+        func.sum(case((Transaction.type == "redemption", Transaction.grams), else_=0)),
+        func.max(Transaction.created_at), func.count(),
+        func.sum(case((and_(Transaction.type.in_(BUY_TYPES), or_(Transaction.metal == "silver", Transaction.type == "buy_silver")), Transaction.total), else_=0)),
+        func.sum(case((and_(Transaction.type.in_(BUY_TYPES), or_(Transaction.metal == "silver", Transaction.type == "buy_silver")), Transaction.grams), else_=0))).where(
+        Transaction.jeweller_id == jeweller.id, Transaction.status != "failed").group_by(Transaction.customer_id))).all()}
+    gb, sb = gold_rate(jeweller.id)[0], silver_rate(jeweller.id)[0]
+    out = []
+    for c in customers:
+        a = agg.get(c.id)
+        gv, sv = r2((c.gold_grams or 0) * gb), r2((c.silver_grams or 0) * sb)
+        out.append({"id": c.id, "name": _cname(c), "phone": c.phone, "wallet_id": c.wallet_id,
+                    "gold_g": r4(c.gold_grams or 0), "silver_g": r4(c.silver_grams or 0),
+                    "gold_value": gv, "silver_value": sv, "value": r2(gv + sv),
+                    "avg_gold": r2(c.invested / c.gold_grams) if (c.gold_grams or 0) > 0 else 0,
+                    "avg_silver": r2(a[5] / a[6]) if a and a[6] else 0,
+                    "invested": r2(a[1] or 0) if a else 0, "redeemed_g": r4(a[2] or 0) if a else 0,
+                    "last_activity": a[3].isoformat() if a and a[3] else None, "orders": a[4] if a else 0,
+                    "kyc_status": c.kyc_status, "status": c.status})
+    return {"totals": {"customers": len(out), "gold_g": r4(sum(x["gold_g"] for x in out)),
+                       "silver_g": r4(sum(x["silver_g"] for x in out)), "value": r2(sum(x["value"] for x in out)),
+                       "gold_value": r2(sum(x["gold_value"] for x in out)), "silver_value": r2(sum(x["silver_value"] for x in out)),
+                       "redeemed_g": r4(sum(x["redeemed_g"] for x in out))},
+            "customers": out}
+
+
+@api.get("/jeweller/v3/holdings/{customer_id}")
+async def jp_holding_detail(customer_id: str, jeweller: Jeweller = Depends(get_current_jeweller), db: AsyncSession = Depends(get_db)):
+    c = (await db.execute(select(Customer).where(Customer.id == customer_id, Customer.jeweller_id == jeweller.id))).scalar_one_or_none()
+    if not c:
+        raise HTTPException(404, "Customer not found")
+    txns = (await db.execute(select(Transaction).where(Transaction.customer_id == c.id).order_by(desc(Transaction.created_at)).limit(200))).scalars().all()
+    pickups = (await db.execute(select(Pickup).where(Pickup.customer_id == c.id).order_by(desc(Pickup.created_at)))).scalars().all()
+    buys = [t for t in txns if t.type in BUY_TYPES and t.status != "failed"]
+    gb, sb = gold_rate(jeweller.id)[0], silver_rate(jeweller.id)[0]
+    sbuys = [t for t in buys if _txn_metal(t) == "silver"]
+    sg = sum(t.grams or 0 for t in sbuys)
+    return {
+        "customer": customer_dict(c), "shop": jeweller.business_name,
+        "value": r2((c.gold_grams or 0) * gb + (c.silver_grams or 0) * sb),
+        "gold_value": r2((c.gold_grams or 0) * gb), "silver_value": r2((c.silver_grams or 0) * sb),
+        "avg_silver": r2(sum((t.total or t.amount or 0) for t in sbuys) / sg) if sg else 0,
+        "sips": [{"amount": r2(x.amount), "frequency": x.frequency, "metal": x.metal or "gold", "status": x.status, "installments": x.installments or 0}
+                 for x in (await db.execute(select(Sip).where(Sip.customer_id == c.id, Sip.status != "cancelled"))).scalars().all()],
+        "purchased": {"gold_g": r4(sum(t.grams for t in buys if _txn_metal(t) == "gold")),
+                      "silver_g": r4(sum(t.grams for t in buys if _txn_metal(t) == "silver")),
+                      "amount": r2(sum(t.total or 0 for t in buys)), "count": len(buys)},
+        "redeemed": {"gold_g": r4(sum(t.grams for t in txns if t.type == "redemption" and _txn_metal(t) == "gold")),
+                     "silver_g": r4(sum(t.grams for t in txns if t.type == "redemption" and _txn_metal(t) == "silver")),
+                     "count": sum(1 for t in txns if t.type == "redemption")},
+        "pickups": [{"id": p.id, "item": p.item, "grams": r4(p.grams), "status": p.status,
+                     "created_at": p.created_at.isoformat() if p.created_at else "",
+                     "collected_at": p.collected_at.isoformat() if p.collected_at else None} for p in pickups],
+        "timeline": [_order_row(t, c) for t in txns if t.type not in ("sell", "wallet_deposit", "wallet_withdraw")],
+    }
+
+
+class CommissionUpdate(BaseModel):
+    gold_per_g: float = Field(ge=-1000, le=1000)
+    silver_per_g: float = Field(ge=-100, le=100)
+    gold22_per_g: Optional[float] = Field(default=None, ge=-1000, le=1000)
+    gold18_per_g: Optional[float] = Field(default=None, ge=-1000, le=1000)
+
+
+def apply_commission(j, body: "CommissionUpdate"):
+    j.gold_commission_per_g = r2(body.gold_per_g)
+    j.silver_commission_per_g = r2(body.silver_per_g)
+    if body.gold22_per_g is not None:
+        j.gold22_commission_per_g = r2(body.gold22_per_g)
+    if body.gold18_per_g is not None:
+        j.gold18_commission_per_g = r2(body.gold18_per_g)
+
+
+@api.put("/jeweller/v3/commission")
+async def jp_commission(body: CommissionUpdate, jeweller: Jeweller = Depends(get_current_jeweller), db: AsyncSession = Depends(get_db)):
+    apply_commission(jeweller, body)
+    jeweller.gold_buy_markup_pct = 0.0
+    jeweller.silver_buy_markup_pct = 0.0
+    await audit(db, "jeweller", jeweller, "commission.update", jeweller.business_name, {"gold": body.gold_per_g, "silver": body.silver_per_g}, jeweller.id)
+    await db.commit()
+    cache_margins(jeweller)
+    return jeweller_dict(jeweller) | {"price": price_payload(jeweller.id)}
+
+
+@api.get("/jeweller/v3/gifts")
+async def jp_gifts(jeweller: Jeweller = Depends(get_current_jeweller), db: AsyncSession = Depends(get_db)):
+    gifts = (await db.execute(select(Gift).where(Gift.jeweller_id == jeweller.id).order_by(desc(Gift.created_at)).limit(300))).scalars().all()
+    ids = {g.sender_id for g in gifts} | {g.recipient_id for g in gifts}
+    people = {c.id: c for c in (await db.execute(select(Customer).where(Customer.id.in_(ids)))).scalars().all()} if ids else {}
+    return [{"id": g.id, "sender": _cname(people.get(g.sender_id)), "sender_phone": getattr(people.get(g.sender_id), "phone", ""),
+             "recipient": _cname(people.get(g.recipient_id)), "recipient_phone": getattr(people.get(g.recipient_id), "phone", ""),
+             "grams": r4(g.grams), "amount": r2(g.amount), "theme": g.theme, "message": g.message,
+             "seen": g.seen, "created_at": g.created_at.isoformat()} for g in gifts]
+
+
+@api.get("/jeweller/v3/referrals")
+async def jp_referrals(jeweller: Jeweller = Depends(get_current_jeweller), db: AsyncSession = Depends(get_db)):
+    customers = (await db.execute(select(Customer).where(Customer.jeweller_id == jeweller.id))).scalars().all()
+    by_id = {c.id: c for c in customers}
+    out = []
+    for c in customers:
+        if c.referred_by and c.referred_by in by_id:
+            r = by_id[c.referred_by]
+            out.append({"referrer": _cname(r), "referrer_phone": r.phone, "code": r.referral_code,
+                        "referred": _cname(c), "referred_phone": c.phone,
+                        "joined": c.created_at.isoformat() if c.created_at else "", "has_gold": (c.gold_grams or 0) > 0})
+    top = sorted(({"name": _cname(c), "phone": c.phone, "code": c.referral_code,
+                   "count": sum(1 for x in customers if x.referred_by == c.id),
+                   "earned": r2(c.referral_balance or 0)} for c in customers), key=lambda x: -x["count"])
+    return {"referrals": sorted(out, key=lambda x: x["joined"], reverse=True), "top": [t for t in top if t["count"]][:10]}
+
+
+@api.get("/jeweller/v3/settings")
+async def jp_settings(request: Request, jeweller: Jeweller = Depends(get_current_jeweller)):
+    host = request_host(request)
+    return jeweller_dict(jeweller) | {
+        "owner_name": jeweller.owner_name, "phone": jeweller.phone, "email": jeweller.email,
+        "address": jeweller.address, "city": jeweller.city, "state": jeweller.state, "pincode": jeweller.pincode,
+        "joined": jeweller.created_at.isoformat() if jeweller.created_at else "",
+        "app_key": jeweller.id,
+        "app_link": f"https://{jeweller.domain}" if jeweller.domain else f"https://{host}",
+        "admin_link": f"https://{jeweller.admin_domain}" if jeweller.admin_domain else f"https://{host}/api/admin/jeweller",
+    }
+
+
+@api.get("/master/v3/overview")
+async def mp_overview(range: str = "30d", start: str = "", end: str = "",
+                      admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
+    s_, e_ = _range_bounds(range, start, end)
+    jewellers = (await db.execute(select(Jeweller).order_by(Jeweller.created_at))).scalars().all()
+    rows = (await db.execute(select(Transaction).where(Transaction.created_at >= s_, Transaction.created_at < e_,
+                                                       Transaction.type.in_(ORDER_TYPES)))).scalars().all()
+    per = {j.id: {"id": j.id, "name": j.business_name, "city": j.city, "status": j.status,
+                  "gold_g": 0.0, "silver_g": 0.0, "amount": 0.0, "orders": 0, "redeemed_g": 0.0} for j in jewellers}
+    series: dict = {}
+    for t in rows:
+        p = per.get(t.jeweller_id)
+        if not p:
+            continue
+        if t.type in BUY_TYPES:
+            m = _txn_metal(t)
+            p[f"{m}_g"] += t.grams or 0
+            p["amount"] += t.total or 0
+            p["orders"] += 1
+            day = t.created_at.astimezone(timezone(timedelta(hours=5, minutes=30))).strftime("%Y-%m-%d")
+            d = series.setdefault(day, {"day": day, "amount": 0.0, "gold_g": 0.0})
+            d["amount"] += t.total or 0
+            d["gold_g"] += t.grams if m == "gold" else 0
+        else:
+            p["redeemed_g"] += t.grams or 0
+    hold = (await db.execute(select(Customer.jeweller_id, func.count(), func.sum(Customer.gold_grams), func.sum(Customer.silver_grams)).group_by(Customer.jeweller_id))).all()
+    for jid, n, g, sv in hold:
+        if jid in per:
+            per[jid].update(customers=n, hold_gold_g=r4(g or 0), hold_silver_g=r4(sv or 0))
+    lst = []
+    for p in per.values():
+        p.setdefault("customers", 0); p.setdefault("hold_gold_g", 0); p.setdefault("hold_silver_g", 0)
+        for k in ("gold_g", "silver_g", "redeemed_g"):
+            p[k] = r4(p[k])
+        p["amount"] = r2(p["amount"])
+        lst.append(p)
+    return {"range": {"from": s_.isoformat(), "to": e_.isoformat(), "key": range},
+            "totals": {"jewellers": len(jewellers), "active_jewellers": sum(1 for j in jewellers if j.status == "active"),
+                       "customers": sum(p["customers"] for p in lst), "gold_g": r4(sum(p["gold_g"] for p in lst)),
+                       "silver_g": r4(sum(p["silver_g"] for p in lst)), "amount": r2(sum(p["amount"] for p in lst)),
+                       "orders": sum(p["orders"] for p in lst), "hold_gold_g": r4(sum(p["hold_gold_g"] for p in lst))},
+            "jewellers": sorted(lst, key=lambda x: -x["amount"]),
+            "series": sorted(series.values(), key=lambda x: x["day"]),
+            "price": price_payload(), "feed": rate_feed_status()}
+
+
+# ═══════════════════ PANELS v4: content, SIPs, master ops ═════════════════════
+import requests as _requests
+from fastapi import UploadFile, File
+from starlette.concurrency import run_in_threadpool
+from fastapi import Response
+from models import Banner, Faq, Upload, AuditLog, Goal, SIP as Sip, Mt5Booking, ShopPayment
+
+STORAGE_APP = "vaultra-digigold"
+UPLOADS_DIR = ROOT_DIR / "uploads"
+UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _storage_put(path, data, ct):
+    s3_bucket = (os.environ.get("AWS_S3_BUCKET") or "").strip()
+    if s3_bucket:
+        import boto3
+        s3 = boto3.client("s3", region_name=os.environ.get("AWS_REGION", "ap-south-1"))
+        s3.put_object(Bucket=s3_bucket, Key=path, Body=data, ContentType=ct)
+        return {"path": path}
+    full_path = (UPLOADS_DIR / path).resolve()
+    if not str(full_path).startswith(str(UPLOADS_DIR.resolve())):
+        raise HTTPException(400, "Invalid storage path")
+    full_path.parent.mkdir(parents=True, exist_ok=True)
+    full_path.write_bytes(data)
+    return {"path": path}
+
+
+def _storage_get(path):
+    s3_bucket = (os.environ.get("AWS_S3_BUCKET") or "").strip()
+    if s3_bucket:
+        import boto3
+        s3 = boto3.client("s3", region_name=os.environ.get("AWS_REGION", "ap-south-1"))
+        obj = s3.get_object(Bucket=s3_bucket, Key=path)
+        return obj["Body"].read(), obj.get("ContentType", "image/jpeg")
+    full_path = (UPLOADS_DIR / path).resolve()
+    if not str(full_path).startswith(str(UPLOADS_DIR.resolve())) or not full_path.exists():
+        raise HTTPException(404, "File not found")
+    ext = full_path.suffix.lower().lstrip(".")
+    ct = {"png": "image/png", "webp": "image/webp"}.get(ext, "image/jpeg")
+    return full_path.read_bytes(), ct
+
+
+async def audit(db, actor_type, actor, action, target="", detail=None, jeweller_id=None):
+    name = getattr(actor, "business_name", None) or getattr(actor, "name", None) or getattr(actor, "username", "")
+    db.add(AuditLog(actor_type=actor_type, actor_id=getattr(actor, "id", ""), actor_name=name or "",
+                    jeweller_id=jeweller_id, action=action, target=str(target)[:200], detail=detail or {}))
+
+
+async def _image_upload(file: UploadFile, owner: str, db):
+    data = await file.read()
+    ct = file.content_type or ""
+    if ct not in ("image/jpeg", "image/png", "image/webp"):  # phones may omit the type: detect from bytes
+        ct = "image/png" if data[:8] == b"\x89PNG\r\n\x1a\n" else "image/jpeg" if data[:3] == b"\xff\xd8\xff" else \
+            "image/webp" if data[:4] == b"RIFF" and data[8:12] == b"WEBP" else ""
+    if not ct:
+        raise HTTPException(400, "Use a JPG, PNG or WEBP image")
+    if len(data) > 5 * 1024 * 1024:
+        raise HTTPException(400, "Image must be under 5 MB")
+    ext = {"image/png": "png", "image/webp": "webp"}.get(ct, "jpg")
+    path = f"{STORAGE_APP}/uploads/{owner}/{uuid.uuid4().hex}.{ext}"
+    res = await run_in_threadpool(_storage_put, path, data, ct)
+    u = Upload(owner=owner, path=res.get("path", path), content_type=ct, size=len(data))
+    db.add(u)
+    await db.commit()
+    return {"id": u.id, "url": f"/api/files/{u.id}"}
+
+
+@api.get("/files/{file_id}")
+async def get_file(file_id: str, db: AsyncSession = Depends(get_db)):
+    u = (await db.execute(select(Upload).where(Upload.id == file_id))).scalar_one_or_none()
+    if not u or (u.owner or "").startswith("kyc:"):  # KYC photos only via the shop/Master KYC routes
+        raise HTTPException(404, "Not found")
+    data, ct = await run_in_threadpool(_storage_get, u.path)
+    return Response(content=data, media_type=u.content_type or ct, headers={"Cache-Control": "public, max-age=86400"})
+
+
+@api.post("/jeweller/v3/upload")
+async def jp_upload(file: UploadFile = File(...), jeweller: Jeweller = Depends(get_current_jeweller), db: AsyncSession = Depends(get_db)):
+    return await _image_upload(file, jeweller.id, db)
+
+
+@api.post("/master/v3/upload")
+async def mp_upload(file: UploadFile = File(...), admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
+    return await _image_upload(file, "platform", db)
+
+
+# ── App content (banners + FAQ) ───────────────────────────────────────────────
+def banner_dict(b):
+    return {"id": b.id, "jeweller_id": b.jeweller_id, "title": b.title, "subtitle": b.subtitle, "eyebrow": b.eyebrow,
+            "image_url": b.image_url, "link": b.link, "sort": b.sort, "is_active": b.is_active,
+            "created_at": b.created_at.isoformat() if b.created_at else ""}
+
+
+def faq_dict(f):
+    return {"id": f.id, "jeweller_id": f.jeweller_id, "question": f.question, "answer": f.answer, "sort": f.sort}
+
+
+@api.get("/content")
+async def app_content(jeweller_id: str = "", tenant: str = "", db: AsyncSession = Depends(get_db)):
+    jid = jeweller_id or tenant
+    async def pick(model, extra=()):
+        own = (await db.execute(select(model).where(model.jeweller_id == jid, *extra).order_by(model.sort, model.created_at))).scalars().all() if jid else []
+        if own:
+            return own
+        return (await db.execute(select(model).where(model.jeweller_id.is_(None), *extra).order_by(model.sort, model.created_at))).scalars().all()
+    return {"banners": [banner_dict(b) for b in await pick(Banner, (Banner.is_active == True,))],
+            "faqs": [faq_dict(f) for f in await pick(Faq)]}
+
+
+class BannerIn(BaseModel):
+    title: str = Field("", max_length=120)
+    subtitle: str = Field("", max_length=200)
+    eyebrow: str = Field("", max_length=60)
+    image_url: str = Field(min_length=1)
+    link: str = ""
+    jeweller_id: Optional[str] = None
+
+
+class FaqIn(BaseModel):
+    question: str = Field(min_length=3, max_length=300)
+    answer: str = Field(min_length=3, max_length=2000)
+    jeweller_id: Optional[str] = None
+
+
+async def _content_list(db, jid):
+    cond_b = Banner.jeweller_id == jid if jid else Banner.jeweller_id.is_(None)
+    cond_f = Faq.jeweller_id == jid if jid else Faq.jeweller_id.is_(None)
+    b = (await db.execute(select(Banner).where(cond_b).order_by(Banner.sort, Banner.created_at))).scalars().all()
+    f = (await db.execute(select(Faq).where(cond_f).order_by(Faq.sort, Faq.created_at))).scalars().all()
+    return {"banners": [banner_dict(x) for x in b], "faqs": [faq_dict(x) for x in f]}
+
+
+async def _banner_add(db, jid, body, actor_type, actor):
+    n = (await db.execute(select(func.count()).select_from(Banner).where(Banner.jeweller_id == jid if jid else Banner.jeweller_id.is_(None)))).scalar() or 0
+    if n >= 8:
+        raise HTTPException(400, "You can have up to 8 banners")
+    b = Banner(jeweller_id=jid, title=body.title.strip(), subtitle=body.subtitle.strip(), eyebrow=body.eyebrow.strip(),
+               image_url=body.image_url, link=body.link, sort=n)
+    db.add(b)
+    await audit(db, actor_type, actor, "banner.add", body.title or "banner", jeweller_id=jid)
+    await db.commit()
+    return banner_dict(b)
+
+
+@api.get("/jeweller/v3/content")
+async def jp_content(jeweller: Jeweller = Depends(get_current_jeweller), db: AsyncSession = Depends(get_db)):
+    own = await _content_list(db, jeweller.id)
+    platform = await _content_list(db, None)
+    return own | {"platform_banners": [b for b in platform["banners"] if b["is_active"]], "platform_faqs": platform["faqs"]}
+
+
+@api.post("/jeweller/v3/banners")
+async def jp_banner_add(body: BannerIn, jeweller: Jeweller = Depends(get_current_jeweller), db: AsyncSession = Depends(get_db)):
+    return await _banner_add(db, jeweller.id, body, "jeweller", jeweller)
+
+
+@api.post("/jeweller/v3/faqs")
+async def jp_faq_add(body: FaqIn, jeweller: Jeweller = Depends(get_current_jeweller), db: AsyncSession = Depends(get_db)):
+    f = Faq(jeweller_id=jeweller.id, question=body.question.strip(), answer=body.answer.strip())
+    db.add(f)
+    await audit(db, "jeweller", jeweller, "faq.add", body.question[:80], jeweller_id=jeweller.id)
+    await db.commit()
+    return faq_dict(f)
+
+
+@api.delete("/jeweller/v3/{kind}/{item_id}")
+async def jp_content_del(kind: str, item_id: str, jeweller: Jeweller = Depends(get_current_jeweller), db: AsyncSession = Depends(get_db)):
+    model = {"banners": Banner, "faqs": Faq}.get(kind)
+    if not model:
+        raise HTTPException(404, "Not found")
+    x = (await db.execute(select(model).where(model.id == item_id, model.jeweller_id == jeweller.id))).scalar_one_or_none()
+    if not x:
+        raise HTTPException(404, "Not found")
+    await db.delete(x)
+    await audit(db, "jeweller", jeweller, f"{kind[:-1]}.delete", (getattr(x, "title", None) or getattr(x, "question", None) or getattr(x, "name", None) or item_id)[:120], jeweller_id=jeweller.id)
+    await db.commit()
+    return {"ok": True}
+
+
+@api.get("/master/v3/content")
+async def mp_content(jeweller_id: str = "", admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
+    return await _content_list(db, jeweller_id or None)
+
+
+@api.post("/master/v3/banners")
+async def mp_banner_add(body: BannerIn, admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
+    return await _banner_add(db, body.jeweller_id or None, body, "master", admin)
+
+
+@api.post("/master/v3/faqs")
+async def mp_faq_add(body: FaqIn, admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
+    f = Faq(jeweller_id=body.jeweller_id or None, question=body.question.strip(), answer=body.answer.strip())
+    db.add(f)
+    await audit(db, "master", admin, "faq.add", body.question[:80], jeweller_id=body.jeweller_id)
+    await db.commit()
+    return faq_dict(f)
+
+
+@api.delete("/master/v3/{kind}/{item_id}")
+async def mp_content_del(kind: str, item_id: str, admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
+    model = {"banners": Banner, "faqs": Faq, "products": Product}.get(kind)
+    if not model:
+        raise HTTPException(404, "Not found")
+    x = (await db.execute(select(model).where(model.id == item_id))).scalar_one_or_none()
+    if not x:
+        raise HTTPException(404, "Not found")
+    if model is Product:
+        x.is_active = False
+    else:
+        await db.delete(x)
+    await audit(db, "master", admin, f"{kind[:-1]}.delete", (getattr(x, "title", None) or getattr(x, "question", None) or getattr(x, "name", None) or item_id)[:120])
+    await db.commit()
+    return {"ok": True}
+
+
+# ── Catalogue (making %) ──────────────────────────────────────────────────────
+async def _catalogue(db, jid=None):
+    q = select(Product, Jeweller.business_name).join(Jeweller, Jeweller.id == Product.jeweller_id).where(Product.is_active == True)
+    if jid:
+        q = q.where(Product.jeweller_id == jid)
+    out = []
+    for p, shop in (await db.execute(q.order_by(Product.category, Product.created_at))).all():
+        live = PRICE["base"]
+        purity = p.purity if p.purity in PURITIES else "22K"
+        rate = gold_rate(p.jeweller_id)[0] if purity == "24K" else karat_rates(p.jeweller_id)[purity]
+        metal, making, pct = product_making(p, gold_rate(p.jeweller_id)[0])
+        out.append({"id": p.id, "name": p.name, "category": p.category, "grams": r4(p.grams), "tag": p.tag,
+                    "sku": "VLT-" + p.category[:3].upper() + "-" + p.id[:4].upper(), "shop": shop, "jeweller_id": p.jeweller_id,
+                    "image_url": p.image_url or f"/api/admin/assets/img-{product_image_key(p)}.jpg",
+                    "purity": purity, "purity_pct": round(PURITY_PCT[purity], 2), "description": p.description or "",
+                    "live_rate": r2(live), "commission_per_g": r2(rate - live * PURITY_PCT[purity] / 100) + 0.0, "buy_rate": rate,
+                    "metal_value": metal, "making_pct": pct, "making_amount": making, "total_price": r2(metal + making)})
+    return out
+
+
+class MakingIn(BaseModel):
+    making_pct: float = Field(ge=0, le=40)
+    purity: Optional[str] = Field(default=None, pattern="^(24K|22K|18K)$")
+
+
+@api.get("/jeweller/v3/catalogue")
+async def jp_catalogue(jeweller: Jeweller = Depends(get_current_jeweller), db: AsyncSession = Depends(get_db)):
+    return {"options": MAKING_OPTIONS, "products": await _catalogue(db, jeweller.id)}
+
+
+@api.put("/jeweller/v3/products/{pid}/making")
+async def jp_making(pid: str, body: MakingIn, jeweller: Jeweller = Depends(get_current_jeweller), db: AsyncSession = Depends(get_db)):
+    p = (await db.execute(select(Product).where(Product.id == pid, Product.jeweller_id == jeweller.id))).scalar_one_or_none()
+    if not p:
+        raise HTTPException(404, "Product not found")
+    p.making_pct = r2(body.making_pct)
+    if body.purity:
+        p.purity = body.purity
+    await audit(db, "jeweller", jeweller, "product.making", p.name, {"making_pct": body.making_pct, "purity": p.purity}, jeweller.id)
+    await db.commit()
+    return {"ok": True}
+
+
+@api.get("/master/v3/catalogue")
+async def mp_catalogue(jeweller_id: str = "", admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
+    return {"options": MAKING_OPTIONS, "products": await _catalogue(db, jeweller_id or None)}
+
+
+# ── SIPs & Goals (shared by both panels) ─────────────────────────────────────
+async def _sips(db, jid=None, status="all", search=""):
+    q = select(Sip, Customer).join(Customer, Customer.id == Sip.customer_id)
+    if jid:
+        q = q.where(Sip.jeweller_id == jid)
+    if status != "all":
+        q = q.where(Sip.status == status)
+    if search:
+        q = q.where(or_(Customer.phone.contains(search), Customer.first_name.ilike(f"%{search}%"), Customer.last_name.ilike(f"%{search}%")))
+    rows = (await db.execute(q.order_by(desc(Sip.created_at)))).all()
+    sip_col = text("(transactions.extra ->> 'sip_id')")
+    paid = {r[0]: r[1:] for r in (await db.execute(select(
+        sip_col, func.sum(Transaction.total), func.max(Transaction.created_at)).where(
+        Transaction.type == "sip", Transaction.status != "failed").group_by(sip_col))).all()}
+    shops = {j.id: j.business_name for j in (await db.execute(select(Jeweller))).scalars().all()}
+    out = []
+    for sp, c in rows:
+        tot, last = paid.get(sp.id, (0, None))
+        monthly = sp.amount * {"daily": 30, "weekly": 4.33, "monthly": 1}.get(sp.frequency, 1)
+        out.append({"id": sp.id, "customer_id": c.id, "customer": _cname(c), "phone": c.phone, "wallet_id": c.wallet_id,
+                    "shop": shops.get(sp.jeweller_id, ""), "amount": r2(sp.amount), "frequency": sp.frequency, "status": sp.status, "metal": sp.metal or "gold",
+                    "installments": sp.installments or 0, "grams": r4(sp.grams_accumulated or 0), "invested": r2(tot or 0),
+                    "monthly_value": r2(monthly), "last_paid": last.isoformat() if last else None,
+                    "next_run": sp.next_run.isoformat() if sp.next_run else None,
+                    "created_at": sp.created_at.isoformat() if sp.created_at else ""})
+    act = [x for x in out if x["status"] == "active"]
+    return {"summary": {"total": sum(1 for x in out if x["status"] != "cancelled"), "active": len(act), "paused": sum(1 for x in out if x["status"] == "paused"),
+                        "cancelled": sum(1 for x in out if x["status"] == "cancelled"),
+                        "monthly_value": r2(sum(x["monthly_value"] for x in act)), "grams": r4(sum(x["grams"] for x in out)),
+                        "invested": r2(sum(x["invested"] for x in out)), "installments": sum(x["installments"] for x in out),
+                        "gold_grams": r4(sum(x["grams"] for x in out if x["metal"] == "gold")), "silver_grams": r4(sum(x["grams"] for x in out if x["metal"] == "silver")),
+                        "gold_active": sum(1 for x in act if x["metal"] == "gold"), "silver_active": sum(1 for x in act if x["metal"] == "silver"),
+                        "by_frequency": {f: sum(1 for x in act if x["frequency"] == f) for f in ("daily", "weekly", "monthly")}},
+            "sips": out}
+
+
+@api.get("/jeweller/v3/sips")
+async def jp_sips(status: str = "all", search: str = "", jeweller: Jeweller = Depends(get_current_jeweller), db: AsyncSession = Depends(get_db)):
+    return await _sips(db, jeweller.id, status, search)
+
+
+@api.get("/master/v3/sips")
+async def mp_sips(jeweller_id: str = "", status: str = "all", search: str = "", admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
+    return await _sips(db, jeweller_id or None, status, search)
+
+
+async def _goals(db, jid=None):
+    q = select(Goal, Customer).join(Customer, Customer.id == Goal.customer_id)
+    shop_names = {j.id: j.business_name for j in (await db.execute(select(Jeweller))).scalars().all()}
+    if jid:
+        q = q.where(Customer.jeweller_id == jid)
+    out = []
+    for g, c in (await db.execute(q.order_by(desc(Goal.created_at)))).all():
+        metal = g.metal or "gold"
+        have = max(0.0, ((c.silver_grams if metal == "silver" else c.gold_grams) or 0) - (g.start_grams or 0))
+        pct = min(100.0, have / g.target_grams * 100) if g.target_grams else 0
+        out.append({"id": g.id, "customer": _cname(c), "phone": c.phone, "shop": shop_names.get(c.jeweller_id, ""), "name": g.name, "occasion": g.occasion, "metal": metal,
+                    "target_grams": r4(g.target_grams), "saved_grams": r4(have), "progress": round(pct, 1),
+                    "deadline": g.deadline.isoformat() if g.deadline else None, "created_at": g.created_at.isoformat() if g.created_at else ""})
+    return out
+
+
+@api.get("/jeweller/v3/goals")
+async def jp_goals(jeweller: Jeweller = Depends(get_current_jeweller), db: AsyncSession = Depends(get_db)):
+    return await _goals(db, jeweller.id)
+
+
+@api.get("/master/v3/goals")
+async def mp_goals(jeweller_id: str = "", admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
+    return await _goals(db, jeweller_id or None)
+
+
+# ── Master: platform-wide lists ──────────────────────────────────────────────
+@api.get("/master/v3/orders")
+async def mp_orders(jeweller_id: str = "", side: str = "all", search: str = "", admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
+    types = BUY_TYPES if side == "buy" else (["redemption"] if side == "redeem" else ORDER_TYPES)
+    q = select(Transaction, Customer, Jeweller.business_name).join(Customer, Customer.id == Transaction.customer_id).join(
+        Jeweller, Jeweller.id == Transaction.jeweller_id).where(Transaction.type.in_(types))
+    if jeweller_id:
+        q = q.where(Transaction.jeweller_id == jeweller_id)
+    if search:
+        q = q.where(or_(Customer.phone.contains(search), Customer.first_name.ilike(f"%{search}%"), Transaction.invoice_no.ilike(f"%{search}%")))
+    return [_order_row(t, c) | {"shop": shop, "jeweller_id": t.jeweller_id} for t, c, shop in (await db.execute(q.order_by(desc(Transaction.created_at)).limit(500))).all()]
+
+
+@api.get("/master/v3/orders/{txn_id}/bill")
+async def mp_bill(txn_id: str, admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
+    t = (await db.execute(select(Transaction).where(Transaction.id == txn_id))).scalar_one_or_none()
+    if not t:
+        raise HTTPException(404, "Order not found")
+    j = (await db.execute(select(Jeweller).where(Jeweller.id == t.jeweller_id))).scalar_one()
+    return await jp_bill(txn_id, j, db)
+
+
+@api.get("/master/v3/kyc")
+async def mp_kyc(status: str = "pending", admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
+    q = select(Customer, Jeweller.business_name).join(Jeweller, Jeweller.id == Customer.jeweller_id)
+    if status != "all":
+        q = q.where(Customer.kyc_status == status)
+    return [customer_dict(c) | {"shop": shop} for c, shop in (await db.execute(q.order_by(desc(Customer.created_at)).limit(300))).all()]
+
+
+@api.post("/master/v3/kyc/{cid}/decide")
+async def mp_kyc_decide(cid: str, approve: bool, admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
+    c = (await db.execute(select(Customer).where(Customer.id == cid))).scalar_one_or_none()
+    if not c:
+        raise HTTPException(404, "Customer not found")
+    if c.kyc_status != "pending":
+        raise HTTPException(400, "KYC has not been submitted or is already decided")
+    c.kyc_status = "approved" if approve else "rejected"
+    await audit(db, "master", admin, "kyc." + c.kyc_status, _cname(c), jeweller_id=c.jeweller_id)
+    await db.commit()
+    return customer_dict(c)
+
+
+@api.get("/master/v3/gifts")
+async def mp_gifts(admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
+    out = []
+    for j in (await db.execute(select(Jeweller))).scalars().all():
+        out += [g | {"shop": j.business_name} for g in await jp_gifts(j, db)]
+    return sorted(out, key=lambda g: g["created_at"], reverse=True)
+
+
+@api.get("/master/v3/referrals")
+async def mp_refs(admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
+    out = []
+    for j in (await db.execute(select(Jeweller))).scalars().all():
+        out += [r | {"shop": j.business_name} for r in (await jp_referrals(j, db))["referrals"]]
+    return sorted(out, key=lambda r: r["joined"], reverse=True)
+
+
+@api.get("/master/v3/redemptions")
+async def mp_redemptions(status: str = "all", admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
+    q = select(Pickup, Customer, Jeweller.business_name).join(Customer, Customer.id == Pickup.customer_id).join(Jeweller, Jeweller.id == Pickup.jeweller_id)
+    if status != "all":
+        q = q.where(Pickup.status == status)
+    return [{"id": p.id, "shop": shop, "customer": _cname(c), "phone": c.phone, "item": p.item, "grams": r4(p.grams),
+             "making_charges": r2(p.making_charges or 0), "status": p.status, "created_at": p.created_at.isoformat() if p.created_at else "",
+             "collected_at": p.collected_at.isoformat() if p.collected_at else None}
+            for p, c, shop in (await db.execute(q.order_by(desc(Pickup.created_at)).limit(300))).all()]
+
+
+@api.get("/master/v3/settlement")
+async def mp_settlement(range: str = "30d", start: str = "", end: str = "", admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
+    s_, e_ = _range_bounds(range, start, end)
+    rows = (await db.execute(select(Transaction).where(Transaction.type.in_(BUY_TYPES), Transaction.status == "completed",
+                                                       Transaction.created_at >= s_, Transaction.created_at < e_))).scalars().all()
+    shops = {j.id: {"id": j.id, "shop": j.business_name, "orders": 0, "collected": 0.0, "gst": 0.0, "metal_cost": 0.0,
+                    "commission": 0.0, "gold_g": 0.0, "silver_g": 0.0} for j in (await db.execute(select(Jeweller))).scalars().all()}
+    for t in rows:
+        x = shops.get(t.jeweller_id)
+        if not x:
+            continue
+        comm = (t.extra or {}).get("commission") or 0
+        x["orders"] += 1
+        x["collected"] += t.total or 0
+        x["gst"] += t.gst or 0
+        x["commission"] += comm
+        x["metal_cost"] += (t.amount or 0) - comm
+        x[f"{_txn_metal(t)}_g"] += t.grams or 0
+    out = []
+    for x in shops.values():
+        for k in ("collected", "gst", "metal_cost", "commission"):
+            x[k] = r2(x[k])
+        x["gold_g"], x["silver_g"] = r4(x["gold_g"]), r4(x["silver_g"])
+        x["payable"] = x["commission"]
+        out.append(x)
+    return {"range": {"from": s_.isoformat(), "to": e_.isoformat()}, "shops": sorted(out, key=lambda r: -r["collected"]),
+            "totals": {k: r2(sum(x[k] for x in out)) for k in ("collected", "gst", "metal_cost", "commission")}}
+
+
+@api.get("/master/v3/pricing")
+async def mp_pricing(admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
+    out = []
+    for j in (await db.execute(select(Jeweller).order_by(Jeweller.created_at))).scalars().all():
+        out.append({"id": j.id, "shop": j.business_name, "status": j.status, "gold_commission_per_g": j.gold_commission_per_g or 0,
+                    "silver_commission_per_g": j.silver_commission_per_g or 0, "gold_buy": gold_rate(j.id)[0], "silver_buy": silver_rate(j.id)[0],
+                    "gold22_commission_per_g": j.gold22_commission_per_g or 0, "gold18_commission_per_g": j.gold18_commission_per_g or 0,
+                    "karats": karat_rates(j.id)})
+    return {"price": price_payload(), "shops": out}
+
+
+@api.put("/master/v3/pricing/{jid}")
+async def mp_pricing_set(jid: str, body: CommissionUpdate, admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
+    j = (await db.execute(select(Jeweller).where(Jeweller.id == jid))).scalar_one_or_none()
+    if not j:
+        raise HTTPException(404, "Shop not found")
+    apply_commission(j, body)
+    j.gold_buy_markup_pct = j.silver_buy_markup_pct = 0.0
+    await audit(db, "master", admin, "pricing.update", j.business_name, body.model_dump(), j.id)
+    await db.commit()
+    cache_margins(j)
+    return {"ok": True}
+
+
+# ═══════════════════ APP STUDIO (white-label apps) ══════════════════════════════
+# ─── Security & controls (Master) ──────────────────────────────────────────────
+class ControlsUpdate(BaseModel):
+    rates: bool = True
+    booking: bool = True
+    min_investment: float = Field(default=500, ge=10, le=100000)
+    shops: dict = {}
+
+
+@api.get("/master/v3/controls")
+async def mc_get(admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
+    js = (await db.execute(select(Jeweller).order_by(Jeweller.created_at))).scalars().all()
+    return {"global": CONTROLS["global"], "shops": [{"id": j.id, "name": j.business_name, "status": j.status,
+            "rates": CONTROLS["shops"].get(j.id, {}).get("rates", True), "booking": CONTROLS["shops"].get(j.id, {}).get("booking", True),
+            "effective": controls_for(j.id)} for j in js]}
+
+
+@api.put("/master/v3/controls")
+async def mc_put(body: ControlsUpdate, admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
+    CONTROLS["global"] = {"rates": body.rates, "booking": body.booking, "min_investment": r2(body.min_investment)}
+    CONTROLS["shops"] = {k: {"rates": bool(v.get("rates", True)), "booking": bool(v.get("booking", True))} for k, v in body.shops.items()}
+    await _setting("platform_controls", json.dumps(CONTROLS))
+    await audit(db, "master", admin, "controls.update", "platform", CONTROLS, None)
+    await db.commit()
+    return {"ok": True, "global": CONTROLS["global"]}
+
+
+# ─── Referral reward (per shop) ────────────────────────────────────────────────
+async def referral_reward(jid):
+    v = await _setting(f"referral_reward:{jid}")
+    return float(v) if v else 50.0
+
+
+class RewardUpdate(BaseModel):
+    amount: float = Field(ge=0, le=10000)
+
+
+@api.get("/jeweller/v3/referral-reward")
+async def jr_get(jeweller: Jeweller = Depends(get_current_jeweller)):
+    return {"amount": await referral_reward(jeweller.id)}
+
+
+@api.put("/jeweller/v3/referral-reward")
+async def jr_put(body: RewardUpdate, jeweller: Jeweller = Depends(get_current_jeweller)):
+    await _setting(f"referral_reward:{jeweller.id}", str(r2(body.amount)))
+    return {"amount": r2(body.amount)}
+
+
+@api.get("/referral-reward")
+async def jr_public(request: Request, tenant: str = ""):
+    return {"amount": await referral_reward(tenant or request.headers.get("x-tenant-id", ""))}
+
+
+# ─── Redeem grams: customer requests, shop accepts ─────────────────────────────
+class RedeemGrams(BaseModel):
+    grams: float = Field(ge=1)
+    form: str = Field("coin", pattern="^(coin|bar)$")
+
+
+@api.post("/redeem-requests")
+async def rr_create(body: RedeemGrams, customer: Customer = Depends(get_current_customer), db: AsyncSession = Depends(get_db)):
+    grams = r4(body.grams)
+    j = (await db.execute(select(Jeweller).where(Jeweller.id == customer.jeweller_id))).scalar_one_or_none()
+    min_g = max(1.0, (j.min_redemption_grams if j else 1.0) or 1.0)
+    if grams < min_g:
+        raise HTTPException(400, f"Minimum redemption is {min_g:g}g")
+    if customer.kyc_status != "approved":
+        raise HTTPException(403, "Complete KYC to redeem gold")
+    if grams > (customer.gold_grams or 0):
+        raise HTTPException(400, f"You have only {r4(customer.gold_grams or 0)}g in your vault")
+    open_req = (await db.execute(select(Pickup.id).where(Pickup.customer_id == customer.id, Pickup.status == "requested"))).first()
+    if open_req:
+        raise HTTPException(409, "You already have a redemption request waiting for the store")
+    p = Pickup(id=str(uuid.uuid4()), customer_id=customer.id, jeweller_id=customer.jeweller_id, transaction_id=None,
+               item=f"{grams:g}g 24K Gold {'Bar' if body.form == 'bar' else 'Coin'}", grams=grams, otp=f"{secrets.randbelow(1_000_000):06d}", status="requested")
+    db.add(p)
+    await db.commit()
+    return {"id": p.id, "grams": grams, "status": "requested", "item": p.item}
+
+
+@api.get("/jeweller/v3/redeem-requests")
+async def rr_list(jeweller: Jeweller = Depends(get_current_jeweller), db: AsyncSession = Depends(get_db)):
+    rows = (await db.execute(select(Pickup, Customer).join(Customer, Customer.id == Pickup.customer_id)
+            .where(Pickup.jeweller_id == jeweller.id, Pickup.status == "requested").order_by(Pickup.created_at))).all()
+    return [{"id": p.id, "grams": p.grams, "item": p.item, "created_at": p.created_at.isoformat() if p.created_at else None,
+             "wallet_id": c.wallet_id, "name": f"{c.first_name or ''} {c.last_name or ''}".strip(), "phone": c.phone, "balance": r4(c.gold_grams or 0)} for p, c in rows]
+
+
+@api.post("/jeweller/v3/redeem-requests/{rid}/{action}")
+async def rr_act(rid: str, action: str, jeweller: Jeweller = Depends(get_current_jeweller), db: AsyncSession = Depends(get_db)):
+    p = (await db.execute(select(Pickup).where(Pickup.id == rid, Pickup.jeweller_id == jeweller.id, Pickup.status == "requested"))).scalar_one_or_none()
+    if not p:
+        raise HTTPException(404, "Request not found or already handled")
+    if action == "reject":
+        p.status = "cancelled"
+        await db.commit()
+        return {"ok": True, "status": "cancelled"}
+    if action != "accept":
+        raise HTTPException(400, "Unknown action")
+    c = (await db.execute(select(Customer).where(Customer.id == p.customer_id))).scalar_one()
+    if p.grams > (c.gold_grams or 0):
+        raise HTTPException(400, f"Customer now has only {r4(c.gold_grams or 0)}g")
+    avg = (c.invested / c.gold_grams) if c.gold_grams else 0
+    c.gold_grams = r4(c.gold_grams - p.grams)
+    c.invested = r2((c.invested or 0) - avg * p.grams)
+    rate = gold_rate(jeweller.id)[0]
+    txn = Transaction(id=str(uuid.uuid4()), invoice_no=invoice_no(), customer_id=c.id, jeweller_id=jeweller.id, type="redemption",
+                      grams=p.grams, rate=rate, amount=r2(p.grams * rate), gst=0, total=0, method="vault_gold", status="processing",
+                      note=f"{p.item} · Accepted by store", extra={"item": p.item})
+    db.add(txn)
+    await db.flush()
+    p.transaction_id, p.status = txn.id, "pending"
+    await db.commit()
+    return {"ok": True, "status": "pending"}
+
+
+
+# ─── MT5 cover: customer buys are booked as BUY orders on the MT5 account ─────
+import httpx
+MT5_LOCK = asyncio.Lock()
+MT5_DEFAULT_CFG = {"enabled": True, "gold_lot_g": 100.0, "silver_lot_g": 100.0, "min_volume": 0.1, "step": 0.1, "max_volume": 10.0}
+MT5_RETRY_AFTER = 300  # after a failed order, wait 5 min before auto-trying again (manual retry is immediate)
+MT5_LAST_FAIL = {"gold": 0.0, "silver": 0.0}
+MT5_TASKS = set()  # keep references so booking tasks are not garbage-collected
+
+
+def _mt5_base():
+    u = MT5_RATES_URL.rstrip("/")
+    return u[:-len("/rates")] if u.endswith("/rates") else u
+
+
+async def mt5_cfg():
+    v = await _setting("mt5_booking_cfg")
+    return MT5_DEFAULT_CFG | (json.loads(v) if v else {})
+
+
+async def mt5_pending():
+    v = await _setting("mt5_pending")
+    return {"gold": 0.0, "silver": 0.0} | (json.loads(v) if v else {})
+
+
+def _mt5_auth():
+    return ({"X-API-Key": MT5_API_KEY}, {"key": MT5_API_KEY}) if MT5_API_KEY else ({}, {})
+
+
+async def _mt5_place(metal, volume):
+    headers, params = _mt5_auth()
+    symbol = MT5_SILVER_SYMBOL if metal == "silver" else MT5_GOLD_SYMBOL
+    async with httpx.AsyncClient(timeout=15) as client:
+        r = await client.post(_mt5_base() + "/order", params=params, headers=headers,
+                              json={"symbol": symbol, "type": "BUY", "volume": volume})
+    try:
+        d = r.json()
+    except ValueError:
+        d = {"error": f"MT5 server answered {r.status_code}"}
+    return symbol, d
+
+
+async def mt5_book(metal, add_grams=0.0, trigger="auto"):
+    """Add bought grams to the running total and place a BUY once it reaches the minimum lot."""
+    async with MT5_LOCK:
+        pend = await mt5_pending()
+        pend[metal] = r4(pend.get(metal, 0) + add_grams)
+        await _setting("mt5_pending", json.dumps(pend))
+        cfg = await mt5_cfg()
+        if not cfg["enabled"] or not MT5_RATES_URL:
+            return None
+        lot_g = cfg["silver_lot_g" if metal == "silver" else "gold_lot_g"]
+        step = cfg["step"] or 1.0
+        volume = round(math.floor(pend[metal] / lot_g / step + 1e-9) * step, 4)
+        if volume <= 0 or volume < cfg["min_volume"]:
+            return None
+        if trigger == "auto" and time.time() - MT5_LAST_FAIL[metal] < MT5_RETRY_AFTER:
+            return None
+        volume = min(volume, round(math.floor(cfg["max_volume"] / step + 1e-9) * step, 4) or cfg["max_volume"])
+        grams = r4(volume * lot_g)
+        try:
+            symbol, d = await _mt5_place(metal, volume)
+        except Exception as e:
+            symbol, d = "", {"error": f"MT5 server not reachable ({type(e).__name__})"}
+        ok = bool(d.get("success"))
+        async with AsyncSessionLocal() as db:
+            db.add(Mt5Booking(metal=metal, symbol=symbol, volume=volume, grams=grams, trigger=trigger,
+                              status="booked" if ok else "failed", ticket=str(d.get("ticket") or ""),
+                              price=float(d.get("price") or d.get("price_open") or 0),
+                              error="" if ok else str(d.get("error") or d.get("comment") or "Order rejected")[:500]))
+            await db.commit()
+        if ok:
+            MT5_LAST_FAIL[metal] = 0.0
+            pend[metal] = r4(max(0.0, pend[metal] - grams))
+            await _setting("mt5_pending", json.dumps(pend))
+        else:
+            MT5_LAST_FAIL[metal] = time.time()
+        return ok
+
+
+def mt5_cover(metal, grams):
+    t = asyncio.create_task(_mt5_cover_safe(metal, grams))
+    MT5_TASKS.add(t)
+    t.add_done_callback(MT5_TASKS.discard)
+
+
+async def _mt5_cover_safe(metal, grams):
+    try:
+        await mt5_book(metal, grams)
+    except Exception as e:  # a booking problem must never affect the customer's purchase
+        logger.warning(f"MT5 booking error: {type(e).__name__}")
+
+
+class Mt5Cfg(BaseModel):
+    enabled: bool = True
+    gold_lot_g: float = Field(gt=0, le=100000)
+    silver_lot_g: float = Field(gt=0, le=1000000)
+    min_volume: float = Field(gt=0, le=1000)
+    step: float = Field(gt=0, le=1000)
+    max_volume: float = Field(10, gt=0, le=1000)
+
+
+@api.get("/master/v3/mt5-bookings")
+async def mt5_list(admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
+    rows = (await db.execute(select(Mt5Booking).order_by(desc(Mt5Booking.created_at)).limit(200))).scalars().all()
+    return {"config": await mt5_cfg(), "pending": await mt5_pending(), "configured": bool(MT5_RATES_URL),
+            "symbols": {"gold": MT5_GOLD_SYMBOL, "silver": MT5_SILVER_SYMBOL},
+            "bookings": [{"id": b.id, "metal": b.metal, "symbol": b.symbol, "volume": b.volume, "grams": r4(b.grams), "status": b.status,
+                          "ticket": b.ticket, "price": b.price, "error": b.error, "trigger": b.trigger,
+                          "created_at": b.created_at.isoformat() if b.created_at else ""} for b in rows]}
+
+
+@api.put("/master/v3/mt5-bookings/config")
+async def mt5_set_cfg(body: Mt5Cfg, admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
+    if body.max_volume < body.min_volume:
+        raise HTTPException(400, "Largest volume cannot be smaller than the smallest volume")
+    await _setting("mt5_booking_cfg", json.dumps(body.model_dump()))
+    await audit(db, "master", admin, "mt5.config", "MT5 booking", body.model_dump())
+    await db.commit()
+    return {"ok": True}
+
+
+@api.post("/master/v3/mt5-bookings/retry")
+async def mt5_retry(admin: MasterAdmin = Depends(get_master_admin)):
+    res = {m: await mt5_book(m, 0.0, "retry") for m in ("gold", "silver")}
+    return {"result": res, "pending": await mt5_pending()}
+
+
+@api.get("/master/v3/mt5-positions")
+async def mt5_positions(admin: MasterAdmin = Depends(get_master_admin)):
+    if not MT5_RATES_URL:
+        raise HTTPException(400, "MT5 server is not configured")
+    headers, params = _mt5_auth()
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(_mt5_base() + "/positions", params=params, headers=headers)
+        return r.json()
+    except Exception as e:
+        raise HTTPException(502, f"MT5 server not reachable ({type(e).__name__})")
+
+
+# ─── KYC photo (private: only the customer's shop and Master can view) ────────
+@api.post("/kyc/photo")
+async def kyc_photo_upload(file: UploadFile = File(...), customer: Customer = Depends(get_current_customer), db: AsyncSession = Depends(get_db)):
+    return {"id": (await _image_upload(file, f"kyc:{customer.id}", db))["id"]}
+
+
+async def _kyc_photo(c, db):
+    pid = (c.kyc_data or {}).get("photo_id") if c else None
+    u = (await db.execute(select(Upload).where(Upload.id == pid, Upload.owner == f"kyc:{c.id}"))).scalar_one_or_none() if pid else None
+    if not u:
+        raise HTTPException(404, "No photo")
+    data, ct = await run_in_threadpool(_storage_get, u.path)
+    return Response(content=data, media_type=u.content_type or ct, headers={"Cache-Control": "private, no-store"})
+
+
+@api.get("/jeweller/v3/kyc/{cid}/photo")
+async def jp_kyc_photo(cid: str, jeweller: Jeweller = Depends(get_current_jeweller), db: AsyncSession = Depends(get_db)):
+    c = (await db.execute(select(Customer).where(Customer.id == cid, Customer.jeweller_id == jeweller.id))).scalar_one_or_none()
+    if not c:
+        raise HTTPException(404, "Customer not found")
+    return await _kyc_photo(c, db)
+
+
+@api.get("/master/v3/kyc/{cid}/photo")
+async def mp_kyc_photo(cid: str, admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
+    return await _kyc_photo((await db.execute(select(Customer).where(Customer.id == cid))).scalar_one_or_none(), db)
+
+
+@api.get("/master/v3/customers/{cid}")
+async def mp_customer(cid: str, admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
+    c = (await db.execute(select(Customer).where(Customer.id == cid))).scalar_one_or_none()
+    if not c:
+        raise HTTPException(404, "Customer not found")
+    j = (await db.execute(select(Jeweller).where(Jeweller.id == c.jeweller_id))).scalar_one()
+    return await jp_holding_detail(cid, j, db)
+
+
+
+# ─── Shop dues to Master (metal value + GST; the shop keeps its commission) ───
+async def _dues(db, jid=None):
+    q = select(Transaction.jeweller_id, func.count(), func.coalesce(func.sum(Transaction.total), 0),
+               func.coalesce(func.sum(Transaction.gst), 0)).where(Transaction.type.in_(BUY_TYPES), Transaction.status == "completed")
+    if jid:
+        q = q.where(Transaction.jeweller_id == jid)
+    agg = {r[0]: r for r in (await db.execute(q.group_by(Transaction.jeweller_id))).all()}
+    comm_rows = (await db.execute(select(Transaction.jeweller_id, Transaction.extra).where(
+        Transaction.type.in_(BUY_TYPES), Transaction.status == "completed", *( [Transaction.jeweller_id == jid] if jid else [])))).all()
+    comm = {}
+    for j_, ex in comm_rows:
+        comm[j_] = comm.get(j_, 0) + ((ex or {}).get("commission") or 0)
+    pq = select(ShopPayment.jeweller_id, func.coalesce(func.sum(ShopPayment.amount), 0), func.max(ShopPayment.paid_on))
+    if jid:
+        pq = pq.where(ShopPayment.jeweller_id == jid)
+    paid = {r[0]: r for r in (await db.execute(pq.group_by(ShopPayment.jeweller_id))).all()}
+    jq = select(Jeweller) if not jid else select(Jeweller).where(Jeweller.id == jid)
+    out = []
+    for j in (await db.execute(jq.order_by(Jeweller.business_name))).scalars().all():
+        a = agg.get(j.id)
+        collected, gst = (a[2], a[3]) if a else (0, 0)
+        c = comm.get(j.id, 0)
+        due = r2(collected - c)
+        p = paid.get(j.id)
+        pd = r2(p[1]) if p else 0.0
+        out.append({"id": j.id, "shop": j.business_name, "orders": a[1] if a else 0, "collected": r2(collected), "gst": r2(gst),
+                    "commission": r2(c), "metal_value": r2(collected - gst - c), "payable": due, "paid": pd,
+                    "remaining": r2(due - pd), "last_paid_on": p[2] if p else ""})
+    return out
+
+
+async def _dues_detail(db, jid):
+    rows = (await db.execute(select(Transaction, Customer).join(Customer, Customer.id == Transaction.customer_id).where(
+        Transaction.jeweller_id == jid, Transaction.type.in_(BUY_TYPES), Transaction.status == "completed")
+        .order_by(desc(Transaction.created_at)).limit(500))).all()
+    pays = (await db.execute(select(ShopPayment).where(ShopPayment.jeweller_id == jid).order_by(desc(ShopPayment.created_at)))).scalars().all()
+    summary = (await _dues(db, jid))[0]
+    return {"summary": summary,
+            "transactions": [{"id": t.id, "invoice_no": t.invoice_no, "customer": _cname(c), "phone": c.phone, "wallet_id": c.wallet_id,
+                              "type": t.type, "metal": _txn_metal(t), "grams": r4(t.grams or 0), "total": r2(t.total or 0), "gst": r2(t.gst or 0),
+                              "commission": r2((t.extra or {}).get("commission") or 0),
+                              "payable": r2((t.total or 0) - ((t.extra or {}).get("commission") or 0)),
+                              "created_at": t.created_at.isoformat() if t.created_at else ""} for t, c in rows],
+            "payments": [{"id": p.id, "amount": r2(p.amount), "paid_on": p.paid_on, "reference": p.reference, "note": p.note,
+                          "created_by": p.created_by, "created_at": p.created_at.isoformat() if p.created_at else ""} for p in pays]}
+
+
+class ShopPaymentIn(BaseModel):
+    amount: float = Field(gt=0, le=1e9)
+    paid_on: str = Field(default="", max_length=20)
+    reference: str = Field(default="", max_length=120)
+    note: str = Field(default="", max_length=500)
+
+
+@api.get("/master/v3/dues")
+async def mp_dues(admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
+    out = await _dues(db)
+    return {"shops": out, "totals": {k: r2(sum(x[k] for x in out)) for k in ("collected", "gst", "commission", "payable", "paid", "remaining")}}
+
+
+@api.get("/master/v3/dues/{jid}")
+async def mp_dues_shop(jid: str, admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
+    if not (await db.execute(select(Jeweller.id).where(Jeweller.id == jid))).scalar_one_or_none():
+        raise HTTPException(404, "Shop not found")
+    return await _dues_detail(db, jid)
+
+
+@api.post("/master/v3/dues/{jid}/payments")
+async def mp_dues_pay(jid: str, body: ShopPaymentIn, admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
+    j = (await db.execute(select(Jeweller).where(Jeweller.id == jid))).scalar_one_or_none()
+    if not j:
+        raise HTTPException(404, "Shop not found")
+    p = ShopPayment(jeweller_id=jid, amount=r2(body.amount), paid_on=body.paid_on or now_utc().date().isoformat(),
+                    reference=body.reference.strip(), note=body.note.strip(), created_by=admin.username)
+    db.add(p)
+    await audit(db, "master", admin, "dues.payment", j.business_name, body.model_dump(), jid)
+    await db.commit()
+    return (await _dues(db, jid))[0]
+
+
+@api.delete("/master/v3/dues/payments/{pid}")
+async def mp_dues_pay_delete(pid: str, admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
+    p = (await db.execute(select(ShopPayment).where(ShopPayment.id == pid))).scalar_one_or_none()
+    if not p:
+        raise HTTPException(404, "Payment not found")
+    await audit(db, "master", admin, "dues.payment_removed", p.jeweller_id, {"amount": p.amount, "reference": p.reference}, p.jeweller_id)
+    await db.delete(p)
+    await db.commit()
+    return {"ok": True}
+
+
+@api.get("/jeweller/v3/dues")
+async def jp_dues(jeweller: Jeweller = Depends(get_current_jeweller), db: AsyncSession = Depends(get_db)):
+    return await _dues_detail(db, jeweller.id)
+
+
+# ═══════════════════ APP STUDIO (white-label apps) ══════════════════════════════
+def _public_base(request: Request):
+    proto = request.headers.get("x-forwarded-proto", request.url.scheme)
+    host = request.headers.get("x-forwarded-host") or request.headers.get("host") or request.url.netloc
+    return f"{proto}://{host}"
+
+
+def app_studio_row(j, base):
+    cfg = wl.tenant_config(j, base)
+    return {"id": j.id, "business_name": j.business_name, "city": j.city, "status": j.status, "phone": j.phone, "email": j.email,
+            "app_name": j.app_name or "", "bundle_id": j.bundle_id or "", "theme_preset": j.theme_preset or "",
+            "logo_url": j.logo_url or "", "splash_url": j.splash_url or "", "app_version": j.app_version or "1.0.0",
+            "app_status": j.app_status or "details_pending", "support_email": j.support_email or "",
+            "store_short": j.store_short or "", "store_long": j.store_long or "", "store_keywords": j.store_keywords or "",
+            "suggested_bundle_id": wl.default_bundle_id(j.business_name), "config": cfg,
+            "karats": karat_rates(j.id), "silver_buy": silver_rate(j.id)[0]}
+
+
+def _auto_status(j):
+    """Move forward through the first steps automatically; built/submitted/live are set by the admin."""
+    cur = j.app_status or "details_pending"
+    if wl.APP_STATUSES.index(cur) >= wl.APP_STATUSES.index("config_ready"):
+        return cur
+    if j.app_name and j.bundle_id and j.theme_preset:
+        return "config_ready" if j.logo_url else "theme_selected"
+    return "details_pending"
+
+
+def _status_after_edit(j):
+    """Like _auto_status, but steps back to an earlier stage if required details were removed."""
+    ready = "config_ready" if (j.app_name and j.bundle_id and j.theme_preset and j.logo_url) else \
+        "theme_selected" if (j.app_name and j.bundle_id and j.theme_preset) else "details_pending"
+    cur = j.app_status or "details_pending"
+    return cur if ready == "config_ready" and wl.APP_STATUSES.index(cur) >= wl.APP_STATUSES.index("config_ready") else ready
+
+
+@api.get("/master/app-studio")
+async def ms_list(request: Request, admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
+    base = _public_base(request)
+    js = (await db.execute(select(Jeweller).order_by(Jeweller.created_at))).scalars().all()
+    presets = {k: {kk: vv for kk, vv in v.items()} for k, v in wl.THEME_PRESETS.items()}
+    return {"presets": presets, "statuses": [{"key": s, "label": wl.APP_STATUS_LABEL[s]} for s in wl.APP_STATUSES],
+            "karats": karat_rates(), "price": price_payload(), "apps": [app_studio_row(j, base) for j in js]}
+
+
+class AppStudioUpdate(BaseModel):
+    app_name: str = Field(min_length=2, max_length=30)
+    bundle_id: str = ""
+    theme_preset: str
+    logo_url: str = ""
+    splash_url: str = ""
+    app_version: str = Field(default="1.0.0", pattern=r"^\d+\.\d+\.\d+$")
+    support_email: str = ""
+    store_short: str = Field(default="", max_length=80)
+    store_long: str = Field(default="", max_length=4000)
+    store_keywords: str = Field(default="", max_length=100)
+
+
+@api.put("/master/app-studio/{jid}")
+async def ms_update(jid: str, body: AppStudioUpdate, request: Request, admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
+    j = (await db.execute(select(Jeweller).where(Jeweller.id == jid))).scalar_one_or_none()
+    if not j:
+        raise HTTPException(404, "Shop not found")
+    if body.theme_preset not in wl.THEME_PRESETS:
+        raise HTTPException(400, "Unknown theme")
+    bundle = (body.bundle_id or wl.default_bundle_id(j.business_name)).strip().lower()
+    if not wl.valid_bundle_id(bundle):
+        raise HTTPException(400, "App ID must look like in.shopname.gold (lowercase letters/digits, at least 3 parts)")
+    clash = (await db.execute(select(Jeweller.id).where(Jeweller.bundle_id == bundle, Jeweller.id != jid))).first()
+    if clash:
+        raise HTTPException(409, "This App ID is already used by another shop")
+    j.app_name, j.bundle_id, j.theme_preset = body.app_name.strip(), bundle, body.theme_preset
+    j.logo_url, j.splash_url, j.app_version = body.logo_url, body.splash_url, body.app_version
+    j.support_email, j.store_short, j.store_long, j.store_keywords = body.support_email.strip(), body.store_short.strip(), body.store_long.strip(), body.store_keywords.strip()
+    j.app_status = _status_after_edit(j)
+    await audit(db, "master", admin, "app.update", j.business_name, {"app_name": j.app_name, "bundle_id": bundle, "theme": j.theme_preset}, j.id)
+    await db.commit()
+    return app_studio_row(j, _public_base(request))
+
+
+class AppStatusUpdate(BaseModel):
+    status: str
+
+
+@api.put("/master/app-studio/{jid}/status")
+async def ms_status(jid: str, body: AppStatusUpdate, request: Request, admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
+    j = (await db.execute(select(Jeweller).where(Jeweller.id == jid))).scalar_one_or_none()
+    if not j:
+        raise HTTPException(404, "Shop not found")
+    if body.status not in wl.APP_STATUSES:
+        raise HTTPException(400, "Unknown status")
+    if wl.APP_STATUSES.index(body.status) >= wl.APP_STATUSES.index("built") and _auto_status(j) != "config_ready" and (j.app_status or "") not in ("config_ready", "built", "submitted", "live"):
+        raise HTTPException(400, "Complete app name, App ID, theme and logo first")
+    j.app_status = body.status
+    await audit(db, "master", admin, "app.status", j.business_name, {"status": body.status}, j.id)
+    await db.commit()
+    return app_studio_row(j, _public_base(request))
+
+
+async def _file_bytes(url, db):
+    m = re.match(r"^/api/files/([\w-]+)$", url or "")
+    if not m:
+        return None
+    u = (await db.execute(select(Upload).where(Upload.id == m.group(1)))).scalar_one_or_none()
+    if not u:
+        return None
+    data, _ = await run_in_threadpool(_storage_get, u.path)
+    return data
+
+
+class AppBuildTrigger(BaseModel):
+    platform: str = "all"  # android, ios, all
+
+
+@api.post("/master/app-studio/{jid}/build")
+async def ms_trigger_build(jid: str, body: AppBuildTrigger, request: Request, admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
+    j = (await db.execute(select(Jeweller).where(Jeweller.id == jid))).scalar_one_or_none()
+    if not j:
+        raise HTTPException(404, "Shop not found")
+    if not (j.app_name and j.bundle_id and j.theme_preset):
+        raise HTTPException(400, "Save app name, App ID and theme first before building")
+    gh_token = (os.environ.get("GITHUB_TOKEN") or "").strip()
+    gh_repo = (os.environ.get("GITHUB_REPO") or "vaultragold-dev/Vaultra-Gold").strip()
+    gh_ref = (os.environ.get("GITHUB_REF") or "main").strip()
+    public_url = _public_base(request)
+    if not gh_token:
+        raise HTTPException(400, "Set GITHUB_TOKEN in backend/.env to trigger 1-click cloud builds via GitHub Actions")
+    inputs = {
+        "tenant_id": str(j.id),
+        "app_name": str(j.app_name),
+        "bundle_id": str(j.bundle_id),
+        "theme_preset": str(j.theme_preset or "royal_gold"),
+        "app_version": str(j.app_version or "1.0.0"),
+        "api_base_url": str(public_url),
+        "platform": body.platform if body.platform in ("android", "ios", "all") else "all",
+    }
+    def _dispatch():
+        url = f"https://api.github.com/repos/{gh_repo}/actions/workflows/build-branded-app.yml/dispatches"
+        headers = {
+            "Authorization": f"Bearer {gh_token}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
+        return _requests.post(url, headers=headers, json={"ref": gh_ref, "inputs": inputs}, timeout=20)
+    resp = await run_in_threadpool(_dispatch)
+    if resp.status_code not in (200, 201, 204):
+        raise HTTPException(502, f"GitHub Actions dispatch failed ({resp.status_code}): {resp.text[:200]}")
+    j.app_status = "built"
+    await audit(db, "master", admin, "app.build_trigger", j.business_name, inputs, j.id)
+    await db.commit()
+    return {
+        "ok": True,
+        "message": f"Cloud build started for {j.app_name} ({body.platform})",
+        "actions_url": f"https://github.com/{gh_repo}/actions/workflows/build-branded-app.yml",
+        "row": app_studio_row(j, public_url),
+    }
+
+
+@api.get("/master/app-studio/{jid}/kit")
+async def ms_kit(jid: str, request: Request, admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
+    j = (await db.execute(select(Jeweller).where(Jeweller.id == jid))).scalar_one_or_none()
+    if not j:
+        raise HTTPException(404, "Shop not found")
+    if not (j.app_name and j.bundle_id and j.theme_preset):
+        raise HTTPException(400, "Set app name, App ID and theme before exporting")
+    logo, splash = await _file_bytes(j.logo_url, db), await _file_bytes(j.splash_url, db)
+    rates = karat_rates(j.id) | {"silver": silver_rate(j.id)[0]}
+    if RATE_FEED["source"] == "offline" and not PRICE.get("real"):
+        rates = {}
+    data, _ = await run_in_threadpool(wl.build_app_kit, j, _public_base(request), rates, logo, splash)
+    await audit(db, "master", admin, "app.kit_export", j.business_name, {"bundle_id": j.bundle_id}, j.id)
+    await db.commit()
+    fname = f"{wl.slugify(j.app_name, '-')}-app-kit.zip"
+    return Response(content=data, media_type="application/zip", headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+
+@api.get("/tenant/{jid}/config")
+async def tenant_public_config(jid: str, request: Request, db: AsyncSession = Depends(get_db)):
+    """Runtime branding for a tenant-locked app (no secrets)."""
+    j = (await db.execute(select(Jeweller).where(Jeweller.id == jid, Jeweller.status == "active"))).scalar_one_or_none()
+    if not j:
+        raise HTTPException(404, "Store not found")
+    cfg = wl.tenant_config(j, _public_base(request))
+    return {k: cfg[k] for k in ("tenantId", "appName", "theme", "homeLayout", "assets", "support")} | {"business_name": j.business_name}
+
+
+@api.get("/tenant/{jid}/privacy", response_class=HTMLResponse)
+async def tenant_privacy(jid: str, db: AsyncSession = Depends(get_db)):
+    j = (await db.execute(select(Jeweller).where(Jeweller.id == jid))).scalar_one_or_none()
+    if not j:
+        raise HTTPException(404, "Store not found")
+    return HTMLResponse(wl.privacy_html(j))
+
+
+@api.get("/tenant/{jid}/terms", response_class=HTMLResponse)
+async def tenant_terms(jid: str, db: AsyncSession = Depends(get_db)):
+    j = (await db.execute(select(Jeweller).where(Jeweller.id == jid))).scalar_one_or_none()
+    if not j:
+        raise HTTPException(404, "Store not found")
+    return HTMLResponse(wl.privacy_html(j, terms=True))
+
+
+@api.get("/master/v3/audit")
+async def mp_audit(admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
+    rows = (await db.execute(select(AuditLog).order_by(desc(AuditLog.created_at)).limit(300))).scalars().all()
+    return [{"id": a.id, "actor_type": a.actor_type, "actor": a.actor_name, "action": a.action, "target": a.target,
+             "detail": a.detail or {}, "created_at": a.created_at.isoformat() if a.created_at else ""} for a in rows]
+
+
+@app.get("/api/admin/master")
+async def master_panel():
+    return FileResponse(TEMPLATES / "master_admin.html", media_type="text/html")
+
+
+@app.get("/api/admin/jeweller")
+async def jeweller_panel():
+    return FileResponse(TEMPLATES / "jeweller_admin.html", media_type="text/html")
+
+
+PANEL_ASSETS = {
+    "panel.css": (TEMPLATES / "panel.css", "text/css"),
+    "panel.js": (TEMPLATES / "panel.js", "application/javascript"),
+    "panel_ext.js": (TEMPLATES / "panel_ext.js", "application/javascript"),
+    "master_ext.js": (TEMPLATES / "master_ext.js", "application/javascript"),
+    "app_studio.js": (TEMPLATES / "app_studio.js", "application/javascript"),
+    **{f"Inter-{w}.ttf": (ROOT_DIR.parent / "frontend" / "assets" / "fonts" / f"Inter-{w}.ttf", "font/ttf") for w in (400, 500, 600, 700)},
+    **{f"img-{k}.jpg": (ROOT_DIR.parent / "frontend" / "assets" / "dg" / v, "image/jpeg") for k, v in {
+        "banner-1": "banner-12.jpg", "banner-2": "banner-11.jpg", "heritage-necklace": "heritage-necklace-24k.jpg",
+        "minimalist-bangle": "minimalist-bangle.jpg", "rings": "categories/rings.jpg", "bangles": "categories/bangles.jpg",
+        "necklace": "categories/necklace.jpg", "chain": "categories/chain.jpg", "kada": "categories/kada.jpg",
+        "pendant-set": "categories/pendant-set.jpg", "watch": "categories/watch.jpg", "tanmaniya": "categories/tanmaniya.jpg"}.items()},
+}
+
+
+@app.get("/api/admin/assets/{name}")
+async def panel_asset(name: str):
+    if name not in PANEL_ASSETS or not PANEL_ASSETS[name][0].exists():
+        raise HTTPException(404, "Not found")
+    path, mt = PANEL_ASSETS[name]
+    return FileResponse(path, media_type=mt, headers={"Cache-Control": "no-cache"})
+
+
+# ═══════════════════ STARTUP ══════════════════════════════════════════════════
+@app.on_event("startup")
+async def startup():
+    for attempt in range(30):  # PostgreSQL may still be booting after a pod restart
+        try:
+            await init_db()
+            break
+        except Exception as e:
+            logger.warning(f"Waiting for PostgreSQL ({attempt + 1}/30): {e}")
+            await asyncio.sleep(2)
+    else:
+        await init_db()
+    await seed_data()
+    async with AsyncSessionLocal() as db:
+        for j in (await db.execute(select(Jeweller))).scalars().all():
+            cache_margins(j)
+    saved_ctl = await _setting("platform_controls")
+    if saved_ctl:
+        CONTROLS.update(json.loads(saved_ctl))
+    saved = await _setting("last_live_rates")
+    if saved:  # start from the last real MT5 price, not the demo default
+        d = json.loads(saved)
+        _set_live(PRICE, d["g"], d["gp"])
+        _set_live(SILVER_PRICE, d["s"], d["sp"])
+        PRICE["updated_at"] = SILVER_PRICE["updated_at"] = d.get("at")
+    if MT5_RATES_URL or METAAPI_TOKEN:
+        RATE_FEED["source"] = "offline"  # never quote demo prices before the live feed answers
+    asyncio.create_task(price_loop())
+    asyncio.create_task(sip_scheduler())
+    logger.info("Vaultra DigiGold v2.0 started with PostgreSQL")
+
+
+app.include_router(api)
+app.add_middleware(CORSMiddleware, allow_credentials=True, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])

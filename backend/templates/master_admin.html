@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Vaultra · Master Console</title>
+<link rel="stylesheet" href="/api/admin/assets/panel.css">
+<script src="/api/admin/assets/panel.js"></script>
+<script src="/api/admin/assets/panel_ext.js"></script>
+</head>
+<body class="lux">
+<div id="root"></div>
+<script>
+const api = makeApi('master_token');
+const S = { tab: localStorage.getItem('mp_tab') || 'overview', me: JSON.parse(localStorage.getItem('master_me') || 'null'), price: null,
+  ov: null, r: { range: '30d' }, jewellers: null, rate: null, pools: null, invoices: null, txns: null, tf: { jeweller: '', type: 'all' }, customers: null, cs: '', cj: '' };
+</script>
+<script src="/api/admin/assets/master_ext.js"></script>
+<script src="/api/admin/assets/app_studio.js"></script>
+<script>
+const NAV = [
+  ['Platform', [['overview', 'Overview', 'dashboard'], ['jewellers', 'Shops', 'store'], ['studio', 'App Studio', 'image'], ['pricing', 'Pricing', 'commission'], ['rates', 'Market & Feed', 'rate'], ['catalogue', 'Catalogue', 'catalogue'], ['content', 'App Content', 'image']]],
+  ['Business', [['orders', 'Orders', 'orders'], ['customers', 'Customers', 'customers'], ['kyc', 'KYC', 'kyc'], ['transactions', 'Transactions', 'invoice'], ['settlement', 'Settlement', 'wallet'], ['dues', 'Shop Dues', 'invoice']]],
+  ['Engagement', [['sips', 'SIP', 'refresh'], ['referrals', 'Referrals', 'referral'], ['redemptions', 'Redemptions', 'redeem'], ['goals', 'Goals', 'target']]],
+  ['Treasury', [['mt5', 'MT5 Bookings', 'rate'], ['pool', 'Gold Pool', 'pool'], ['invoices', 'Invoices', 'invoice'], ['security', 'Security & Controls', 'shield'], ['audit', 'Audit Log', 'log']]],
+];
+const TITLES = Object.fromEntries(NAV.flatMap(([, i]) => i.map(([k, l]) => [k, l])));
+const loading = '<div class="grid g4"><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div></div>';
+const kpi = (label, value, foot, ic, tone = '') => `<div class="card kpi"><div class="icon ${tone}">${icon(ic)}</div><div class="label">${label}</div><div class="value num">${value}</div>${foot ? `<div class="foot">${foot}</div>` : ''}</div>`;
+const emptyRow = (n, t) => `<tr><td colspan="${n}"><div class="empty"><b>${t}</b></div></td></tr>`;
+const jname = (id) => (S.jewellers || []).find((j) => j.id === id)?.business_name || '—';
+
+function loginView() {
+  return `<div class="auth"><div class="auth-art">
+      <div class="brand" style="padding:0;border:0"><div class="logo"><div class="mark">V</div><div><div class="name" style="color:#fff">Vaultra</div><div class="sub" style="color:#B9AF95">Master Console</div></div></div></div>
+      <div><h1>Every jeweller. Every gram. <em>One console.</em></h1><p>Onboard partner stores, watch the live market feed and track pooled procurement across the platform.</p></div>
+      <div class="stats"><div><b>Multi-store</b><span>white-label apps</span></div><div><b>10g</b><span>pool procurement</span></div></div></div>
+    <div class="auth-form"><form class="auth-box" onsubmit="doLogin(event)"><h2>Master sign in</h2><p>Platform administrators only</p>
+      <div class="field"><label>Username</label><input class="input" id="lu" required autocomplete="username" placeholder="Username"></div>
+      <div class="field"><label>Password</label><input class="input" id="lp" type="password" required autocomplete="current-password" placeholder="••••••••"></div>
+      <button class="btn primary" id="login-btn">Sign in</button><div class="err" id="lerr"></div></form></div></div>`;
+}
+async function doLogin(e) {
+  e.preventDefault(); const b = $('#login-btn'); b.disabled = true;
+  try { const r = await api('/master/login', { method: 'POST', body: { username: $('#lu').value.trim(), password: $('#lp').value } });
+    localStorage.setItem('master_token', r.access_token); localStorage.setItem('master_me', JSON.stringify(r.admin)); S.me = r.admin; boot();
+  } catch (err) { $('#lerr').textContent = err.message; b.disabled = false; }
+}
+function logout() { localStorage.removeItem('master_token'); localStorage.removeItem('master_me'); S.me = null; render(); }
+function shell(c) {
+  return `<div class="app"><aside class="side" id="side">
+    <div class="brand"><div class="logo"><div class="mark">V</div><div><div class="name">Vaultra</div><div class="sub">Master Console</div></div></div></div>
+    <nav class="nav">${NAV.map(([g, items]) => `<div class="group">${g}</div>${items.map(([k, l, ic]) => `<button class="${S.tab === k ? 'on' : ''}" onclick="go('${k}')" data-tab="${k}">${icon(ic)}<span>${l}</span></button>`).join('')}`).join('')}</nav>
+    <div class="side-foot"><div class="avatar">${esc(initials(S.me?.name || 'Admin'))}</div><div class="who"><b>${esc(S.me?.name || 'Admin')}</b><span>Platform admin</span></div><button class="btn ghost sm" onclick="logout()" id="logout-btn">${icon('logout')}</button></div></aside>
+    <main class="main"><div class="top"><button class="btn ghost sm menu-btn" onclick="$('#side').classList.toggle('open')">${icon('menu')}</button><h1>${TITLES[S.tab]}</h1><div class="spacer"></div>${rateChip(S.price)}</div>
+    <div id="feedalert">${feedAlert(S.price)}</div>
+    <div class="content">${c}</div></main></div>`;
+}
+function render() { if (!localStorage.getItem('master_token')) { $('#root').innerHTML = loginView(); return; } $('#root').innerHTML = shell(VIEWS[S.tab]()); }
+function go(t) { S.tab = t; localStorage.setItem('mp_tab', t); $('#side')?.classList.remove('open'); render(); LOAD[t]?.(); }
+async function safe(fn, tab) { try { await fn(); } catch (e) { if (e.status === 401) return logout(); toast(e.message, true); } if (!tab || S.tab === tab) render(); }
+
+/* overview */
+const rq = (r) => r.range === 'custom' ? `range=custom&start=${r.from || ''}&end=${r.to || ''}` : `range=${r.range}`;
+const loadOv = () => safe(async () => { const [ov, du] = await Promise.all([api('/master/v3/overview?' + rq(S.r)), api('/master/v3/dues').catch(() => null)]); S.ov = ov; if (du) S.dues = du; S.price = {...S.ov.price, feed: S.ov.feed}; S.feed = S.ov.feed; }, 'overview');
+function onRange(k, apply) { if (k === 'custom' && apply) { S.r.from = $('#r_from').value; S.r.to = $('#r_to').value; if (!S.r.from) return toast('Choose a start date', true); }
+  S.r.range = k; if (k !== 'custom' || apply) { S.ov = null; render(); loadOv(); } else render(); }
+function vOverview() {
+  const head = `<div class="page-head"><div><h2>Platform overview</h2><p>Sales and holdings across every partner store.</p></div>${rangeBar(S.r, onRange)}</div>`;
+  const o = S.ov; if (!o) return head + loading; const t = o.totals;
+  return `<div class="hero"><div><h2>Good ${new Date().getHours() < 12 ? 'morning' : new Date().getHours() < 17 ? 'afternoon' : 'evening'}, ${esc((S.me?.name || 'Admin').split(' ')[0])}</h2><p>Platform performance across ${t.jewellers} shops.</p></div>
+    <div style="display:flex;gap:36px;flex-wrap:wrap"><div><div class="hv num">${inr0(t.amount)}</div><div class="hl">Gross sales</div></div><div><div class="hv num">${g4(t.hold_gold_g)}</div><div class="hl">Gold in vaults</div></div><div><div class="hv num">${t.customers}</div><div class="hl">Customers</div></div></div></div>` + head + `<div class="grid g4">
+    ${kpi('Gross sales', inr0(t.amount), `${t.orders} orders`, 'trend', 'green')}${kpi('Gold booked', g4(t.gold_g), 'in this period', 'coin')}
+    ${kpi('Silver booked', g4(t.silver_g), 'in this period', 'coin', 'gray')}${kpi('Partner stores', `${t.active_jewellers}<small>/${t.jewellers}</small>`, `${t.customers} customers`, 'store', 'blue')}</div>
+    ${S.dues ? `<div class="card pad section" onclick="go('dues')" data-testid="master-dues-banner" style="cursor:pointer;display:flex;gap:20px;align-items:center;flex-wrap:wrap"><div style="flex:1;min-width:200px"><div style="font-size:12px;color:var(--mute)">Remaining to receive from shops</div><div class="num" style="font-size:26px;font-weight:700;color:${S.dues.totals.remaining > 0 ? '#B42318' : 'inherit'}">${inr0(S.dues.totals.remaining)}</div></div><div class="kv" style="min-width:170px"><span>Total payable</span><b>${inr0(S.dues.totals.payable)}</b></div><div class="kv" style="min-width:150px"><span>Received</span><b>${inr0(S.dues.totals.paid)}</b></div><span class="btn sm">Shop dues →</span></div>` : ''}
+    <div class="grid section" style="grid-template-columns:minmax(0,2fr) minmax(0,1fr)">
+      <div class="card"><div class="card-h"><div><h3>Daily sales</h3><p>All stores combined</p></div></div>${barChart(o.series, 'amount', inr0)}<div style="height:16px"></div></div>
+      <div class="card"><div class="card-h"><h3>Market feed</h3>${o.feed.source === 'mt5' ? '<span class="badge green">Live</span>' : o.feed.source === 'offline' ? '<span class="badge red">Feed down</span>' : '<span class="badge amber">Indicative</span>'}</div><div style="padding:8px 20px 16px">
+        <div class="kv"><span>Gold (${esc(o.feed.gold_symbol)})</span><b class="num">${o.price.has_live === false ? '—' : inr(o.price.base_rate) + '/g'}</b></div><div class="kv"><span>Silver (${esc(o.feed.silver_symbol)})</span><b class="num">${o.price.has_live === false ? '—' : inr(o.price.silver.base_rate) + '/g'}</b></div>
+        <div class="kv"><span>Gold held by customers</span><b class="num">${g4(t.hold_gold_g)}</b></div><div class="kv"><span>Provider</span><b>${o.feed.provider === 'metaapi' ? 'MetaApi · MT5' : o.feed.provider === 'mt5_script' ? 'MT5 bridge' : 'Not connected'}</b></div></div></div></div>
+    <div class="card section"><div class="card-h"><h3>Store performance</h3><button class="btn sm" onclick="go('jewellers')">Manage stores</button></div><div class="table-wrap"><table>
+      <thead><tr><th>Store</th><th>Status</th><th class="r">Customers</th><th class="r">Sales</th><th class="r">Gold booked</th><th class="r">Silver booked</th><th class="r">Redeemed</th><th class="r">Gold held</th></tr></thead><tbody>
+      ${o.jewellers.length ? o.jewellers.map((j) => `<tr><td><b>${esc(j.name)}</b><div class="sub">${esc(j.city || '')}</div></td><td>${statusBadge(j.status)}</td><td class="r num">${j.customers}</td><td class="r num"><b>${inr0(j.amount)}</b></td><td class="r num">${g4(j.gold_g)}</td><td class="r num">${g4(j.silver_g)}</td><td class="r num">${g4(j.redeemed_g)}</td><td class="r num">${g4(j.hold_gold_g)}</td></tr>`).join('') : emptyRow(8, 'No stores yet')}
+      </tbody></table></div></div>`;
+}
+
+/* jewellers */
+const loadJ = () => safe(async () => { S.jewellers = await api('/master/jewellers'); }, 'jewellers');
+function vJewellers() {
+  const head = `<div class="page-head"><div><h2>Shops</h2><p>Partner jewellers running their own branded app.</p></div><button class="btn primary" onclick="onboard()" id="onboard-btn">${icon('plus')} Onboard shop</button></div>`;
+  if (!S.jewellers) return head + loading;
+  return head + `<div class="card"><div class="table-wrap"><table><thead><tr><th>Store</th><th>Owner</th><th class="r">Customers</th><th class="r">Gold held</th><th>Commission</th><th>Domains</th><th>Status</th><th></th></tr></thead><tbody>
+    ${S.jewellers.map((j) => `<tr><td><div style="display:flex;gap:10px;align-items:center"><div class="avatar" style="background:${esc(j.primary_color || '#FBF6EA')}22">${esc(initials(j.business_name))}</div><div><b class="link" style="cursor:pointer;text-decoration:underline dotted" onclick="shopCatalogue('${j.id}')" data-shop-cat="${j.id}">${esc(j.business_name)}</b><div class="sub">${esc(j.city || '')} · click name for catalogue</div></div></div></td>
+      <td>${esc(j.owner_name)}<div class="sub">${esc(j.email)}</div></td><td class="r num">${j.customer_count}</td><td class="r num">${g4(j.total_grams)}</td>
+      <td class="num">${inr(j.gold_commission_per_g)}/g gold<div class="sub">${inr(j.silver_commission_per_g)}/g silver</div></td>
+      <td style="font-size:13px">${esc(j.domain || '—')}<div class="sub">${esc(j.admin_domain || '')}</div></td><td>${statusBadge(j.status)}</td>
+      <td class="r" style="white-space:nowrap"><button class="btn sm" onclick="domains('${j.id}')" data-domains="${j.id}">${icon('globe')} Domains</button> <button class="btn sm ${j.status === 'active' ? 'danger' : ''}" onclick="toggleJ('${j.id}')">${j.status === 'active' ? 'Suspend' : 'Activate'}</button></td></tr>`).join('')}
+    </tbody></table></div></div>`;
+}
+async function toggleJ(id) { const j = S.jewellers.find((x) => x.id === id); if (j.status === 'active' && !confirm(`Suspend ${j.business_name}? Their app and panel stop working.`)) return; await safe(async () => { await api(`/master/jewellers/${id}/toggle`, { method: 'POST' }); S.jewellers = await api('/master/jewellers'); toast('Updated'); }, 'jewellers'); }
+function onboard() {
+  const f = (id, l, ph = '', t = 'text', full) => `<div class="field" ${full ? 'style="grid-column:1/-1"' : ''}><label>${l}</label><input class="input" id="${id}" type="${t}" placeholder="${ph}"></div>`;
+  openModal(`<div class="modal-h"><div><h3>Onboard jeweller</h3><p>Creates their store, panel login and a starter catalogue</p></div><button class="x" onclick="closeModal()">×</button></div>
+    <div class="modal-b grid g2">${f('ob_b', 'Business name', 'Sharma Jewellers', 'text', 1)}${f('ob_o', 'Owner name')}${f('ob_p', 'Phone', '10 digits', 'tel')}${f('ob_e', 'Email', 'owner@store.com', 'email')}${f('ob_pw', 'Panel password', 'min 4 characters', 'password')}
+      ${f('ob_c', 'City')}${f('ob_s', 'State')}${f('ob_d', 'App domain (optional)', 'gold.store.in', 'text', 1)}
+      <div class="field"><label>Brand colour</label><input class="input" id="ob_col" type="color" value="#B8892B" style="padding:4px"></div>${f('ob_m', 'Min. redemption (g)', '1', 'number')}</div>
+    <div class="modal-f"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" onclick="saveOnboard()" id="ob-save">Create store</button></div>`, true);
+}
+async function saveOnboard() {
+  const v = (id) => $('#' + id).value.trim();
+  try { await api('/master/jewellers', { method: 'POST', body: { business_name: v('ob_b'), owner_name: v('ob_o'), phone: v('ob_p'), email: v('ob_e'), password: $('#ob_pw').value, city: v('ob_c'), state: v('ob_s'), domain: v('ob_d'), primary_color: v('ob_col'), min_redemption_grams: Number(v('ob_m') || 1) } });
+    closeModal(); toast('Store created'); loadJ(); } catch (e) { toast(e.message, true); }
+}
+function domains(id) {
+  const j = S.jewellers.find((x) => x.id === id);
+  openModal(`<div class="modal-h"><div><h3>Custom domains</h3><p>${esc(j.business_name)}</p></div><button class="x" onclick="closeModal()">×</button></div>
+    <div class="modal-b" style="display:flex;flex-direction:column;gap:14px">
+      <div class="field"><label>Customer app domain</label><input class="input" id="d_app" placeholder="gold.store.in" value="${esc(j.domain || '')}"></div>
+      <div class="field"><label>Shop panel domain</label><input class="input" id="d_admin" placeholder="admin.store.in" value="${esc(j.admin_domain || '')}"></div>
+      <div class="note">${icon('globe')}<span>Ask the jeweller to add a <b>CNAME</b> record for each domain pointing to <code>${esc(location.hostname)}</code>, then link the same domains in your hosting settings for HTTPS.</span></div>
+      <div id="dns"></div></div>
+    <div class="modal-f"><button class="btn" onclick="checkDns('${id}')">Check DNS</button><button class="btn primary" onclick="saveDomains('${id}')" id="save-domains">Save</button></div>`);
+}
+async function saveDomains(id) { try { await api(`/master/jewellers/${id}/domains`, { method: 'PUT', body: { domain: $('#d_app').value, admin_domain: $('#d_admin').value } }); toast('Domains saved'); S.jewellers = await api('/master/jewellers'); render(); checkDns(id); } catch (e) { toast(e.message, true); } }
+async function checkDns(id) { try { const c = await api(`/master/jewellers/${id}/domain-check`); const el = $('#dns'); if (!el) return;
+  el.innerHTML = c.domains.length ? `<div class="card">${c.domains.map((d) => `<div class="kv" style="padding:10px 14px"><span>${esc(d.domain)} · ${d.kind}</span><b>${d.points_here ? '<span class="badge green">Connected</span>' : '<span class="badge amber">DNS pending</span>'}</b></div>`).join('')}</div>` : '<div class="note gray">No domains saved yet.</div>';
+} catch (e) { toast(e.message, true); } }
+
+/* rates */
+const loadRate = () => safe(async () => { S.rate = await api('/master/rate'); S.price = S.rate; S.feed = S.rate.feed; }, 'rates');
+function vRates() {
+  const head = `<div class="page-head"><div><h2>Live rates</h2><p>Base market rate before each store's commission.</p></div><button class="btn" onclick="loadRate()">Refresh</button></div>`;
+  const r = S.rate; if (!r) return head + loading; const f = r.feed;
+  return head + `<div class="grid g2">
+    <div class="card rate-card"><div class="coin"></div><div style="flex:1"><div class="label"><span class="dot ${r.live ? 'live' : ''}"></span> Gold · ${esc(f.gold_symbol)}</div><div class="value num">${r.has_live === false ? '—' : inr(r.base_rate)} <small>/g</small></div></div><div class="chg ${r.change_pct >= 0 ? 'up' : 'down'}">${r.change_pct >= 0 ? '▲' : '▼'} ${Math.abs(r.change_pct)}%</div></div>
+    <div class="card rate-card"><div class="coin silver"></div><div style="flex:1"><div class="label"><span class="dot ${r.live ? 'live' : ''}"></span> Silver · ${esc(f.silver_symbol)}</div><div class="value num">${r.has_live === false ? '—' : inr(r.silver.base_rate)} <small>/g</small></div></div><div class="chg ${r.silver.change_pct >= 0 ? 'up' : 'down'}">${r.silver.change_pct >= 0 ? '▲' : '▼'} ${Math.abs(r.silver.change_pct)}%</div></div></div>
+    <div class="card section"><div class="card-h"><h3>Feed status</h3>${r.live ? '<span class="badge green">Live</span>' : r.offline ? '<span class="badge red">Feed down</span>' : '<span class="badge amber">Indicative</span>'}</div><div style="padding:8px 20px 16px">
+      <div class="kv"><span>Provider</span><b>${f.provider === 'metaapi' ? 'MetaApi · MT5 account' : f.provider === 'mt5_script' ? 'MT5 bridge script' : 'Not connected'}</b></div>
+      <div class="kv"><span>Last live tick</span><b>${f.last_live_at ? dt(f.last_live_at) : '—'}</b></div>
+      <div class="kv"><span>Quote units</span><b>Gold per ${f.gold_unit_grams}g · Silver per ${f.silver_unit_grams}g</b></div>
+      ${f.error ? `<div class="kv"><span>Last message</span><b style="color:var(--red)">${esc(feedReason(f.error))}</b></div>` : ''}</div></div>`;
+}
+
+/* pool & invoices */
+const loadPool = () => safe(async () => { const [d, p] = await Promise.all([api('/master/dashboard'), api('/master/pool')]); S.dash = d; S.pools = p; }, 'pool');
+function vPool() {
+  const head = `<div class="page-head"><div><h2>Gold pool</h2><p>Customer purchases are pooled and procured in bulk once the threshold is reached.</p></div></div>`;
+  if (!S.pools || !S.dash) return head + loading; const p = S.dash.pool;
+  return head + `<div class="card pad"><div style="display:flex;justify-content:space-between;align-items:flex-end;gap:16px;flex-wrap:wrap"><div><div style="font-size:12px;color:var(--mute)">Current pool</div><div style="font-size:30px;font-weight:700" class="num">${g4(p.current_grams)} <span style="font-size:15px;color:var(--mute)">of ${p.threshold}g</span></div></div>
+    <div style="display:flex;gap:8px;align-items:flex-end"><div class="field"><label>Threshold (g)</label><input class="input" id="thr" type="number" step="1" value="${p.threshold}" style="width:120px"></div><button class="btn primary" onclick="saveThr()">Update</button></div></div>
+    <div style="height:10px;background:var(--line2);border-radius:99px;margin-top:18px;overflow:hidden"><div style="height:100%;width:${Math.min(100, p.progress_pct)}%;background:linear-gradient(90deg,var(--gold2),var(--gold))"></div></div><div style="font-size:12px;color:var(--mute);margin-top:6px">${p.progress_pct}% filled</div></div>
+    <div class="card section"><div class="card-h"><h3>Pool history</h3></div><div class="table-wrap"><table><thead><tr><th>Started</th><th class="r">Grams</th><th class="r">Threshold</th><th>Status</th><th>Procured</th></tr></thead><tbody>
+    ${S.pools.length ? S.pools.map((x) => `<tr><td>${dt(x.created_at)}</td><td class="r num">${g4(x.total_grams)}</td><td class="r num">${x.threshold}g</td><td>${statusBadge(x.status === 'accumulating' ? 'pending' : 'completed')}</td><td>${x.triggered_at ? dt(x.triggered_at) : '—'}</td></tr>`).join('') : emptyRow(5, 'No pools yet')}
+    </tbody></table></div></div>`;
+}
+async function saveThr() { try { await api('/master/pool/threshold', { method: 'PUT', body: { threshold: Number($('#thr').value) } }); toast('Threshold updated'); loadPool(); } catch (e) { toast(e.message, true); } }
+const loadInv = () => safe(async () => { S.invoices = await api('/master/bifurcation-invoices'); if (!S.jewellers) S.jewellers = await api('/master/jewellers'); }, 'invoices');
+function vInvoices() {
+  const head = `<div class="page-head"><div><h2>Bifurcation invoices</h2><p>How each procured pool splits across stores and customers.</p></div></div>`;
+  if (!S.invoices) return head + loading;
+  return head + (S.invoices.length ? S.invoices.map((i) => { const det = Array.isArray(i.details) ? i.details : (i.details?.contributions || []);
+    return `<div class="card" style="margin-bottom:16px"><div class="card-h"><div><h3>${g4(i.total_grams)} procured</h3><p>${dt(i.created_at)} · Pool ${esc(String(i.pool_id).slice(0, 8))}</p></div>${statusBadge(i.status === 'generated' ? 'completed' : i.status)}</div>
+    <div class="table-wrap"><table><thead><tr><th>Store</th><th>Customer</th><th class="r">Grams</th><th class="r">Amount</th></tr></thead><tbody>
+    ${det.length ? det.map((d) => `<tr><td>${esc(d.jeweller_name || jname(d.jeweller_id))}</td><td>${esc(d.customer_name || d.customer_id || '')}</td><td class="r num">${g4(d.grams)}</td><td class="r num">${inr(d.amount)}</td></tr>`).join('') : emptyRow(4, 'No line items')}</tbody></table></div></div>`; }).join('')
+    : '<div class="card"><div class="empty"><b>No invoices yet</b>An invoice is generated each time a pool reaches its threshold.</div></div>');
+}
+
+/* transactions & customers */
+const loadTx = () => safe(async () => { if (!S.jewellers) S.jewellers = await api('/master/jewellers'); S.txns = await api(`/master/transactions?jeweller_id=${S.tf.jeweller}&type=${S.tf.type}`); }, 'transactions');
+const jSelect = (val, on) => `<select class="select" onchange="${on}"><option value="">All stores</option>${(S.jewellers || []).map((j) => `<option value="${j.id}" ${val === j.id ? 'selected' : ''}>${esc(j.business_name)}</option>`).join('')}</select>`;
+const TL = { buy: 'Gold buy', buy_silver: 'Silver buy', sip: 'SIP', redemption: 'Redemption', gift_sent: 'Gift sent', gift_received: 'Gift received', sell: 'Sell (legacy)', referral_bonus: 'Referral bonus' };
+function vTransactions() {
+  const head = `<div class="page-head"><div><h2>Transactions</h2><p>Latest 200 entries across the platform.</p></div><div class="toolbar">${jSelect(S.tf.jeweller, "S.tf.jeweller=this.value;loadTx()")}
+    <select class="select" onchange="S.tf.type=this.value;loadTx()"><option value="all">All types</option>${['buy', 'buy_silver', 'sip', 'redemption', 'gift_sent'].map((t) => `<option value="${t}" ${S.tf.type === t ? 'selected' : ''}>${TL[t]}</option>`).join('')}</select></div></div>`;
+  if (!S.txns) return head + loading;
+  return head + `<div class="card"><div class="table-wrap"><table><thead><tr><th>When</th><th>Invoice</th><th>Store</th><th>Type</th><th>Metal</th><th class="r">Grams</th><th class="r">Total</th><th>Status</th></tr></thead><tbody>
+    ${S.txns.length ? S.txns.map((t) => `<tr><td>${dt(t.created_at)}</td><td><code>${esc(t.invoice_no)}</code></td><td>${esc(jname(t.jeweller_id))}</td><td>${esc(TL[t.type] || t.type)}</td><td>${metalTag(t.metal === 'silver' || t.type === 'buy_silver' ? 'silver' : 'gold')}</td><td class="r num">${g4(t.grams)}</td><td class="r num"><b>${inr(t.total)}</b></td><td>${statusBadge(t.status)}</td></tr>`).join('') : emptyRow(8, 'No transactions')}
+    </tbody></table></div></div>`;
+}
+let cT;
+const loadC = () => safe(async () => { if (!S.jewellers) S.jewellers = await api('/master/jewellers'); S.customers = await api(`/master/customers?jeweller_id=${S.cj}&search=${encodeURIComponent(S.cs)}`); }, 'customers');
+function vCustomers() {
+  const head = `<div class="page-head"><div><h2>Customers</h2><p>All app users across stores.</p></div><div class="toolbar">${jSelect(S.cj, "S.cj=this.value;loadC()")}<input class="input search" placeholder="Name or phone" value="${esc(S.cs)}" oninput="S.cs=this.value;clearTimeout(cT);cT=setTimeout(loadC,300)"></div></div>`;
+  if (!S.customers) return head + loading;
+  return head + `<div class="card"><div class="table-wrap"><table><thead><tr><th>Customer</th><th>Store</th><th>Wallet ID</th><th class="r">Gold</th><th class="r">Silver</th><th>KYC</th><th>Joined</th><th></th></tr></thead><tbody>
+    ${S.customers.length ? S.customers.map((c) => `<tr><td><b>${esc(c.name)}</b><div class="sub">${phoneFmt(c.phone)}</div></td><td>${esc(jname(c.jeweller_id))}</td><td><code>${esc(c.wallet_id)}</code></td><td class="r num">${g4(c.gold_grams)}</td><td class="r num">${g4(c.silver_grams)}</td><td>${statusBadge(c.kyc_status)}</td><td>${dOnly(c.created_at)}</td><td class="r"><button class="btn sm" onclick="mCustomer('${c.id}')" data-mcust="${c.id}">${icon('eye')} Full details</button></td></tr>`).join('') : emptyRow(8, 'No customers')}
+    </tbody></table></div></div>`;
+}
+
+const VIEWS = { dues: vDues, overview: vOverview, jewellers: vJewellers, studio: vStudio, security: vSecurity, rates: vRates, pool: vPool, invoices: vInvoices, transactions: vTransactions, customers: vCustomers, pricing: vPricing, catalogue: vMCatalogue, content: vMContent, orders: vMOrders, kyc: vMKyc, settlement: vSettlement, sips: vMSips, referrals: vMRefs, gifts: vMGifts, redemptions: vMRed, goals: vMGoals, audit: vAudit, mt5: vMt5 };
+const LOAD = { dues: loadDues, overview: loadOv, jewellers: loadJ, studio: loadStudio, security: loadCtl, rates: loadRate, pool: loadPool, invoices: loadInv, transactions: loadTx, customers: loadC, pricing: loadPricing, catalogue: loadMCat, content: loadMContent, orders: loadMOrders, kyc: loadMKyc, settlement: loadSettle, sips: loadMSips, referrals: loadMRefs, gifts: loadMGifts, redemptions: loadMRed, goals: loadMGoals, audit: loadAudit, mt5: loadMt5 };
+function boot() { if (!VIEWS[S.tab]) S.tab = 'overview'; render(); LOAD[S.tab](); if (S.tab !== 'jewellers') api('/master/jewellers').then((j) => { S.jewellers = j; }).catch(() => {}); }
+function feedAlert(p) {
+  const f = p?.feed || S.feed;
+  if (!f || !f.configured || f.source === 'mt5') return '';
+  const last = f.last_live_at;
+  const err = feedReason(f.error);
+  return `<div class="feed-alert" id="feed-down-alert" role="alert"><span class="fa-dot"></span><div><b>MT5 live rate feed is down</b><p>${esc(err || 'No response from the rate feed')}${last ? ` · Last live rate at ${esc(new Date(last).toLocaleString('en-IN'))}` : ''}. Customers cannot buy, gift or run SIPs until the feed is back.</p></div><button class="btn sm" onclick="go('rates')">Check feed</button></div>`;
+}
+function feedReason(raw) {
+  raw = raw || '';
+  return /Name or service not known|getaddrinfo/.test(raw) ? 'Feed link not found (DNS). The tunnel link has changed or is stopped; update MT5_RATES_URL with the new link'
+    : /530/.test(raw) ? 'Feed link not found (Cloudflare 530). The tunnel link has changed or is stopped; update MT5_RATES_URL with the new link'
+    : /502|503|504/.test(raw) ? 'Feed server is not responding (' + (raw.match(/50\d/) || [''])[0] + '). Check the MT5 script and tunnel on your PC'
+    : /401|403|key/i.test(raw) ? 'Feed rejected the API key'
+    : raw.replace(/ for url .*/s, '').slice(0, 140);
+}
+async function pollRate() {
+  if (!localStorage.getItem('master_token')) return;
+  try {
+    S.price = await api('/master/rate'); S.feed = S.price.feed;
+    const c = $('#ratechip'); if (c) c.outerHTML = rateChip(S.price);
+    const a = $('#feedalert'); if (a) a.innerHTML = feedAlert(S.price);
+  } catch {
+    const a = $('#feedalert'); if (a) a.innerHTML = '<div class="feed-alert" id="feed-down-alert" role="alert"><span class="fa-dot"></span><div><b>Server not reachable</b><p>The platform backend is not responding. Rates and orders are unavailable.</p></div></div>';
+  }
+}
+pollRate(); setInterval(pollRate, 1500);
+if (localStorage.getItem('master_token')) boot(); else render();
+</script>
+</body>
+</html>
