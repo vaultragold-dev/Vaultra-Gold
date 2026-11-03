@@ -1,9 +1,10 @@
 /* Master console: App Studio — white-label app per jeweller */
-S.studio = null; S.studioSel = ''; S.draft = null;
+S.studio = null; S.studioSel = ''; S.draft = null; S.buildState = {}; S.buildTimer = null;
 const loadStudio = () => safe(async () => {
   S.studio = await api('/master/app-studio');
   if (!S.studio.apps.some((a) => a.id === S.studioSel)) S.studioSel = S.studio.apps[0]?.id || '';
   pickDraft();
+  if (S.studioSel) checkBuildStatus(S.studioSel);
 }, 'studio');
 function pickDraft() {
   const a = (S.studio?.apps || []).find((x) => x.id === S.studioSel);
@@ -11,8 +12,67 @@ function pickDraft() {
     logo_url: a.logo_url, splash_url: a.splash_url, app_version: a.app_version, support_email: a.support_email || a.email,
     store_short: a.store_short || a.config.store.shortDescription, store_long: a.store_long || a.config.store.longDescription, store_keywords: a.store_keywords || a.config.store.keywords } : null;
 }
-function studioSelect(id) { S.studioSel = id; pickDraft(); render(); }
+function studioSelect(id) { S.studioSel = id; pickDraft(); render(); checkBuildStatus(id); }
 function dset(k, v, rerender) { S.draft[k] = v; if (rerender) render(); else { const pv = $('#studio-preview'); if (pv) pv.innerHTML = phone(); } }
+
+async function checkBuildStatus(id) {
+  if (!id) return;
+  try {
+    const st = await api(`/master/app-studio/${id}/build-status`);
+    S.buildState[id] = st;
+    const box = $('#studio-build-box');
+    if (box && S.studioSel === id) box.innerHTML = renderBuildCenter(id);
+    if (S.buildTimer) { clearTimeout(S.buildTimer); S.buildTimer = null; }
+    if (st && (st.status === 'queued' || st.status === 'in_progress')) {
+      S.buildTimer = setTimeout(() => checkBuildStatus(id), 5000);
+    }
+  } catch (_) {}
+}
+
+function renderBuildCenter(id) {
+  const st = S.buildState[id] || { status: 'idle', jobs: [], downloads: {} };
+  const dl = st.downloads || {};
+  const isRunning = st.status === 'queued' || st.status === 'in_progress';
+  const statusBadgeHtml = isRunning
+    ? `<span class="badge gold">⏳ Building in Cloud (${st.status.replace('_', ' ')})… Auto-refreshing every 5s</span>`
+    : st.conclusion === 'success' || dl.apk || dl.ipa
+    ? `<span class="badge green">✓ Build Ready for Direct Download</span>`
+    : st.conclusion === 'failure'
+    ? `<span class="badge red">⚠ Last build stopped — click Build to retry</span>`
+    : `<span class="badge">Ready to Build</span>`;
+
+  const jobsHtml = (st.jobs && st.jobs.length)
+    ? `<div style="display:flex;gap:8px;flex-wrap:wrap;margin:10px 0">${st.jobs.map((j) => {
+        const icon = j.conclusion === 'success' ? '✅' : j.conclusion === 'failure' ? '❌' : j.status === 'in_progress' ? '⏳' : '🕒';
+        return `<div style="flex:1;min-width:180px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:8px 10px;font-size:12px"><b>${icon} ${esc(j.name)}</b><div class="sub">${esc(j.conclusion || j.status || 'queued')}</div></div>`;
+      }).join('')}</div>`
+    : '';
+
+  return `<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px">
+      <div><b style="font-size:14px">📲 Multi-Tenant App Builder & Direct Downloads (Android & iOS)</b>
+        <div class="sub">Generates branded icons, splash screen & locked tenant config, then compiles real Android (.APK / .AAB) and iOS (.IPA) apps</div></div>
+      ${statusBadgeHtml}
+    </div>
+    ${jobsHtml}
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+      <button class="btn gold" onclick="studioBuild('${id}','all')" id="studio-build" ${isRunning ? 'disabled' : ''}>
+        ${isRunning ? '⏳ Compiling Android & iOS Apps…' : '🚀 1-Click Build Android (.APK/.AAB) & iOS (.IPA)'}
+      </button>
+      <button class="btn ${dl.apk ? 'primary' : ''}" onclick="studioDownload('${id}','apk')" ${dl.apk ? '' : 'disabled title="Click 1-Click Build first and wait for Android build to finish"'}>
+        📲 Download Android .APK ${dl.apk ? '✓' : '(Build first)'}
+      </button>
+      <button class="btn ${dl.aab ? 'primary' : ''}" onclick="studioDownload('${id}','aab')" ${dl.aab ? '' : 'disabled title="Click 1-Click Build first and wait for Android build to finish"'}>
+        📦 Download Play Store .AAB ${dl.aab ? '✓' : '(Build first)'}
+      </button>
+      <button class="btn ${dl.ipa ? 'primary' : ''}" onclick="studioDownload('${id}','ipa')" ${dl.ipa ? '' : 'disabled title="Click 1-Click Build first and wait for iOS build to finish"'}>
+        🍎 Download iOS .IPA ${dl.ipa ? '✓' : '(Build first)'}
+      </button>
+      <button class="btn" onclick="studioDownload('${id}','kit')">
+        🖼 Download Store Graphics (.ZIP)
+      </button>
+      <button class="btn" onclick="checkBuildStatus('${id}')" title="Refresh build status">↻ Refresh Status</button>
+    </div>`;
+}
 
 const SECTION_LABEL = { prices: 'Live prices', karats: '24K · 22K · 18K', sip: 'Auto SIP', banners: 'Offers', buy: 'Buy gold', categories: 'Categories', trending: 'Trending', promos: 'Gift & refer' };
 function phone(small) {
@@ -43,7 +103,7 @@ function stepper(a) {
   return `<div class="stepper">${st.map((s, i) => `<div class="step ${i < cur ? 'done' : i === cur ? 'on' : ''}"><span>${i < cur ? '✓' : i + 1}</span><b>${s.label}</b></div>`).join('')}</div>`;
 }
 function vStudio() {
-  const head = ph('App Studio', 'Brand each shop\'s Android & iOS app from the base app, then build or export the App Kit.');
+  const head = ph('App Studio', 'Brand each shop\'s Android & iOS app, compile real .APK / .AAB / .IPA binaries in 1 click, and download them directly.');
   const s = S.studio; if (!s) return head + loading;
   if (!s.apps.length) return head + '<div class="card"><div class="empty"><b>No shops yet</b></div></div>';
   const a = s.apps.find((x) => x.id === S.studioSel); const d = S.draft;
@@ -59,12 +119,14 @@ function vStudio() {
     <div class="studio-main">
       <div class="card pad">${stepper(a)}
         <div class="studio-actions">
-          <button class="btn primary" onclick="studioSave()" id="studio-save">Save app details</button>
-          <button class="btn gold" onclick="studioBuild('${a.id}','all')" id="studio-build">🚀 1-Click Build Android & iOS</button>
-          <button class="btn" onclick="studioKit('${a.id}')" id="studio-export" ${a.app_name && a.bundle_id && a.theme_preset ? '' : 'disabled title="Save app name, App ID and theme first"'}>⬇ Export App Kit</button>
+          <button class="btn primary" onclick="studioSave()" id="studio-save">💾 Save Branding Details</button>
           ${nextStatus ? `<button class="btn" onclick="studioStatus('${a.id}','${nextStatus}')" id="studio-next">Mark as ${label[nextStatus]}</button>` : ''}
           ${a.app_status !== 'details_pending' ? `<select class="select" style="width:auto" onchange="studioStatus('${a.id}',this.value)">${s.statuses.map((x) => `<option value="${x.key}" ${x.key === a.app_status ? 'selected' : ''}>${x.label}</option>`).join('')}</select>` : ''}
-        </div></div>
+        </div>
+        <div id="studio-build-box" style="margin-top:14px;padding-top:14px;border-top:1px solid #e5e7eb">
+          ${renderBuildCenter(a.id)}
+        </div>
+      </div>
       <div class="studio-grid">
         <div>
           <div class="card pad"><h3 class="card-t">App identity</h3>
@@ -108,25 +170,26 @@ async function studioBuild(id, platform) {
     S.studio.apps = S.studio.apps.map((x) => x.id === saved.id ? saved : x);
     const res = await api(`/master/app-studio/${id}/build`, { method: 'POST', body: { platform: platform || 'all' } });
     if (res.row) S.studio.apps = S.studio.apps.map((x) => x.id === res.row.id ? res.row : x);
-    toast(res.message || 'Cloud build started!');
-    if (res.actions_url) window.open(res.actions_url, '_blank');
+    toast(res.message || 'Cloud build started! Progress will update automatically.');
+    await checkBuildStatus(id);
     render();
   } catch (e) { toast(e.message, true); }
   if (b) b.disabled = false;
 }
-async function studioKit(id) {
-  const b = $('#studio-export'); b.disabled = true;
+async function studioDownload(id, kind) {
   try {
-    // Export always reflects what is on screen: save unsaved edits first
-    const saved = await api('/master/app-studio/' + id, { method: 'PUT', body: S.draft });
-    S.studio.apps = S.studio.apps.map((x) => x.id === saved.id ? saved : x);
-    const r = await fetch(API + `/master/app-studio/${id}/kit`, { headers: { Authorization: 'Bearer ' + localStorage.getItem('master_token') } });
-    if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.detail || 'Export failed'); }
-    const blob = await r.blob(); const cd = r.headers.get('Content-Disposition') || ''; const fn = (cd.match(/filename="([^"]+)"/) || [])[1] || 'app-kit.zip';
+    if (kind === 'kit') {
+      const saved = await api('/master/app-studio/' + id, { method: 'PUT', body: S.draft });
+      S.studio.apps = S.studio.apps.map((x) => x.id === saved.id ? saved : x);
+    }
+    toast(`Preparing ${kind.toUpperCase()} download…`);
+    const tok = localStorage.getItem('master_token') || '';
+    const r = await fetch(API + `/master/app-studio/${id}/download/${kind}`, { headers: { Authorization: 'Bearer ' + tok } });
+    if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.detail || 'Download failed'); }
+    const blob = await r.blob(); const cd = r.headers.get('Content-Disposition') || ''; const fn = (cd.match(/filename="([^"]+)"/) || [])[1] || `app.${kind}`;
     const u = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = u; a.download = fn; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(u);
-    toast('App Kit downloaded'); render();
+    toast(`Downloaded ${fn}`);
   } catch (e) { toast(e.message, true); }
-  b.disabled = false;
 }
 
 /* Master console: Security & Controls — live-rate visibility, booking switch, minimum investment */

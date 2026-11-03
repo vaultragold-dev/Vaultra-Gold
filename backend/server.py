@@ -45,7 +45,7 @@ POOL_THRESHOLD = 10.0  # grams
 
 # ─── Price Engine (MT5 live feed, simulated fallback) ────────────────────────
 MT5_RATES_URL = os.environ.get('MT5_RATES_URL', '').strip()
-MT5_API_KEY = os.environ.get('MT5_API_KEY', '').strip()
+MT5_API_KEY = (os.environ.get('MT5_API_KEY') or os.environ.get('MT5_RATES_KEY') or '').strip()
 MT5_GOLD_SYMBOL = os.environ.get('MT5_GOLD_SYMBOL', 'GOLDDEC').strip()
 MT5_SILVER_SYMBOL = os.environ.get('MT5_SILVER_SYMBOL', 'SILVERDEC').strip()
 MT5_GOLD_UNIT_GRAMS = float(os.environ.get('MT5_GOLD_UNIT_GRAMS') or 10)      # MCX gold quoted per 10g
@@ -2200,15 +2200,27 @@ async def seed_data():
         # Check if already seeded
         existing = await db.execute(select(MasterAdmin).where(MasterAdmin.username == "admin"))
         if existing.scalar_one_or_none():
+            existing_master = await db.execute(select(MasterAdmin).where(MasterAdmin.username == "master"))
+            if not existing_master.scalar_one_or_none():
+                db.add(MasterAdmin(
+                    id=str(uuid.uuid4()), username="master", name="Vaultra Master Admin",
+                    password_hash=bcrypt.hashpw("Vaultra@2026".encode(), bcrypt.gensalt()).decode()
+                ))
+                await db.commit()
             logger.info("Database already seeded")
             return
 
-        # Master admin
+        # Master admins (both 'admin'/'admin123' and 'master'/'Vaultra@2026')
         admin = MasterAdmin(
             id=str(uuid.uuid4()), username="admin", name="Vaultra Super Admin",
             password_hash=bcrypt.hashpw("admin123".encode(), bcrypt.gensalt()).decode()
         )
+        admin2 = MasterAdmin(
+            id=str(uuid.uuid4()), username="master", name="Vaultra Master Admin",
+            password_hash=bcrypt.hashpw("Vaultra@2026".encode(), bcrypt.gensalt()).decode()
+        )
         db.add(admin)
+        db.add(admin2)
 
         # Demo jeweller
         jeweller = Jeweller(
@@ -3632,6 +3644,21 @@ class AppBuildTrigger(BaseModel):
     platform: str = "all"  # android, ios, all
 
 
+def _gh_headers():
+    gh_token = (os.environ.get("GITHUB_TOKEN") or "").strip()
+    if not gh_token:
+        raise HTTPException(400, "GITHUB_TOKEN is not configured in backend/.env")
+    return {
+        "Authorization": f"Bearer {gh_token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+
+
+def _gh_repo():
+    return (os.environ.get("GITHUB_REPO") or "vaultragold-dev/Vaultra-Gold").strip()
+
+
 @api.post("/master/app-studio/{jid}/build")
 async def ms_trigger_build(jid: str, body: AppBuildTrigger, request: Request, admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
     j = (await db.execute(select(Jeweller).where(Jeweller.id == jid))).scalar_one_or_none()
@@ -3639,12 +3666,10 @@ async def ms_trigger_build(jid: str, body: AppBuildTrigger, request: Request, ad
         raise HTTPException(404, "Shop not found")
     if not (j.app_name and j.bundle_id and j.theme_preset):
         raise HTTPException(400, "Save app name, App ID and theme first before building")
-    gh_token = (os.environ.get("GITHUB_TOKEN") or "").strip()
-    gh_repo = (os.environ.get("GITHUB_REPO") or "vaultragold-dev/Vaultra-Gold").strip()
+    headers = _gh_headers()
+    gh_repo = _gh_repo()
     gh_ref = (os.environ.get("GITHUB_REF") or "main").strip()
     public_url = _public_base(request)
-    if not gh_token:
-        raise HTTPException(400, "Set GITHUB_TOKEN in backend/.env to trigger 1-click cloud builds via GitHub Actions")
     inputs = {
         "tenant_id": str(j.id),
         "app_name": str(j.app_name),
@@ -3654,26 +3679,180 @@ async def ms_trigger_build(jid: str, body: AppBuildTrigger, request: Request, ad
         "api_base_url": str(public_url),
         "platform": body.platform if body.platform in ("android", "ios", "all") else "all",
     }
-    def _dispatch():
+    def _dispatch_and_find():
         url = f"https://api.github.com/repos/{gh_repo}/actions/workflows/build-branded-app.yml/dispatches"
-        headers = {
-            "Authorization": f"Bearer {gh_token}",
-            "Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28",
-        }
-        return _requests.post(url, headers=headers, json={"ref": gh_ref, "inputs": inputs}, timeout=20)
-    resp = await run_in_threadpool(_dispatch)
-    if resp.status_code not in (200, 201, 204):
-        raise HTTPException(502, f"GitHub Actions dispatch failed ({resp.status_code}): {resp.text[:200]}")
-    j.app_status = "built"
-    await audit(db, "master", admin, "app.build_trigger", j.business_name, inputs, j.id)
+        r = _requests.post(url, headers=headers, json={"ref": gh_ref, "inputs": inputs}, timeout=20)
+        if r.status_code not in (200, 201, 204):
+            return r.status_code, r.text, None
+        time.sleep(2.5)
+        runs_r = _requests.get(f"https://api.github.com/repos/{gh_repo}/actions/workflows/build-branded-app.yml/runs?per_page=5", headers=headers, timeout=15)
+        run_id = None
+        if runs_r.status_code == 200:
+            runs = runs_r.json().get("workflow_runs") or []
+            if runs:
+                run_id = runs[0].get("id")
+        return r.status_code, "", run_id
+
+    code, err_txt, run_id = await run_in_threadpool(_dispatch_and_find)
+    if code not in (200, 201, 204):
+        raise HTTPException(502, f"Cloud build trigger failed ({code}): {err_txt[:200]}")
+    meta = {
+        "run_id": run_id,
+        "tenant_id": j.id,
+        "app_name": j.app_name,
+        "bundle_id": j.bundle_id,
+        "app_version": j.app_version or "1.0.0",
+        "platform": inputs["platform"],
+        "started_at": now_iso(),
+    }
+    await _setting(f"app_build:{j.id}", json.dumps(meta))
+    await audit(db, "master", admin, "app.build_trigger", j.business_name, meta, j.id)
     await db.commit()
     return {
         "ok": True,
-        "message": f"Cloud build started for {j.app_name} ({body.platform})",
-        "actions_url": f"https://github.com/{gh_repo}/actions/workflows/build-branded-app.yml",
+        "run_id": run_id,
+        "message": f"Building Android (.APK & .AAB) and iOS (.IPA) for {j.app_name}...",
         "row": app_studio_row(j, public_url),
     }
+
+
+@api.get("/master/app-studio/{jid}/build-status")
+async def ms_build_status(jid: str, admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
+    j = (await db.execute(select(Jeweller).where(Jeweller.id == jid))).scalar_one_or_none()
+    if not j:
+        raise HTTPException(404, "Shop not found")
+    raw = await _setting(f"app_build:{jid}")
+    meta = json.loads(raw) if raw else {}
+    run_id = meta.get("run_id")
+    headers = _gh_headers()
+    gh_repo = _gh_repo()
+
+    def _fetch_status():
+        nonlocal run_id
+        if not run_id:
+            runs_r = _requests.get(f"https://api.github.com/repos/{gh_repo}/actions/workflows/build-branded-app.yml/runs?per_page=10", headers=headers, timeout=15)
+            if runs_r.status_code == 200:
+                runs = runs_r.json().get("workflow_runs") or []
+                if runs:
+                    run_id = runs[0].get("id")
+        if not run_id:
+            return {"status": "idle", "conclusion": None, "jobs": [], "artifacts": {}}
+        run_r = _requests.get(f"https://api.github.com/repos/{gh_repo}/actions/runs/{run_id}", headers=headers, timeout=15)
+        if run_r.status_code != 200:
+            return {"status": "idle", "conclusion": None, "jobs": [], "artifacts": {}}
+        run_data = run_r.json()
+        jobs_r = _requests.get(f"https://api.github.com/repos/{gh_repo}/actions/runs/{run_id}/jobs", headers=headers, timeout=15)
+        jobs = []
+        if jobs_r.status_code == 200:
+            for jb in jobs_r.json().get("jobs", []):
+                jobs.append({
+                    "name": jb.get("name"),
+                    "status": jb.get("status"),
+                    "conclusion": jb.get("conclusion"),
+                })
+        arts_r = _requests.get(f"https://api.github.com/repos/{gh_repo}/actions/runs/{run_id}/artifacts", headers=headers, timeout=15)
+        arts = {}
+        if arts_r.status_code == 200:
+            for a in arts_r.json().get("artifacts", []):
+                if not a.get("expired"):
+                    arts[a.get("name")] = {"id": a.get("id"), "size": a.get("size_in_bytes", 0)}
+        return {
+            "run_id": run_id,
+            "status": run_data.get("status"),
+            "conclusion": run_data.get("conclusion"),
+            "updated_at": run_data.get("updated_at"),
+            "jobs": jobs,
+            "artifacts": arts,
+        }
+
+    st = await run_in_threadpool(_fetch_status)
+    bundle = j.bundle_id or wl.default_bundle_id(j.business_name)
+    arts = st.get("artifacts") or {}
+    has_android = any(k.endswith("-android-builds") for k in arts)
+    has_ios = any(k.endswith("-ios-build") for k in arts)
+    has_kit = any(k.endswith("-store-kit") for k in arts)
+    if (has_android or has_ios) and j.app_status in ("details_pending", "config_ready"):
+        j.app_status = "built"
+        await db.commit()
+    st["downloads"] = {
+        "apk": has_android,
+        "aab": has_android,
+        "ipa": has_ios,
+        "kit": True,
+    }
+    st["bundle_id"] = bundle
+    return st
+
+
+@api.get("/master/app-studio/{jid}/download/{kind}")
+async def ms_download_build(jid: str, kind: str, request: Request, token: str = "", creds: Optional[HTTPAuthorizationCredentials] = Depends(bearer), db: AsyncSession = Depends(get_db)):
+    # Allow either Bearer header or ?token= query param for direct browser download
+    if token and not creds:
+        creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
+    admin = await get_master_admin(creds, db)
+    j = (await db.execute(select(Jeweller).where(Jeweller.id == jid))).scalar_one_or_none()
+    if not j:
+        raise HTTPException(404, "Shop not found")
+    slug = wl.slugify(j.app_name or j.business_name, "-")
+    ver = j.app_version or "1.0.0"
+    if kind == "kit":
+        logo, splash = await _file_bytes(j.logo_url, db), await _file_bytes(j.splash_url, db)
+        rates = karat_rates(j.id) | {"silver": silver_rate(j.id)[0]}
+        data, _ = await run_in_threadpool(wl.build_app_kit, j, _public_base(request), rates, logo, splash)
+        return Response(content=data, media_type="application/zip", headers={"Content-Disposition": f'attachment; filename="{slug}-store-kit.zip"'})
+
+    if kind not in ("apk", "aab", "ipa"):
+        raise HTTPException(400, "Unknown download kind")
+
+    raw = await _setting(f"app_build:{jid}")
+    meta = json.loads(raw) if raw else {}
+    run_id = meta.get("run_id")
+    headers = _gh_headers()
+    gh_repo = _gh_repo()
+
+    def _download_artifact_file():
+        nonlocal run_id
+        import zipfile, io
+        if not run_id:
+            runs_r = _requests.get(f"https://api.github.com/repos/{gh_repo}/actions/workflows/build-branded-app.yml/runs?per_page=10", headers=headers, timeout=15)
+            if runs_r.status_code == 200:
+                runs = runs_r.json().get("workflow_runs") or []
+                for r_item in runs:
+                    if r_item.get("status") == "completed":
+                        run_id = r_item.get("id")
+                        break
+                if not run_id and runs:
+                    run_id = runs[0].get("id")
+        if not run_id:
+            raise HTTPException(404, "No build found yet. Click 'Build Android & iOS Apps' first.")
+        arts_r = _requests.get(f"https://api.github.com/repos/{gh_repo}/actions/runs/{run_id}/artifacts", headers=headers, timeout=15)
+        if arts_r.status_code != 200:
+            raise HTTPException(502, "Could not fetch build artifacts")
+        target_suffix = "-android-builds" if kind in ("apk", "aab") else "-ios-build"
+        art_id = None
+        for a in arts_r.json().get("artifacts", []):
+            if not a.get("expired") and (a.get("name") or "").endswith(target_suffix):
+                art_id = a.get("id")
+                break
+        if not art_id:
+            raise HTTPException(404, f"{kind.upper()} build is still compiling or not ready yet. Please wait for the build to finish.")
+        dl_r = _requests.get(f"https://api.github.com/repos/{gh_repo}/actions/artifacts/{art_id}/zip", headers=headers, timeout=180)
+        if dl_r.status_code != 200:
+            raise HTTPException(502, f"Failed to download {kind.upper()} artifact ({dl_r.status_code})")
+        with zipfile.ZipFile(io.BytesIO(dl_r.content)) as zf:
+            for name in zf.namelist():
+                if name.lower().endswith(f".{kind}"):
+                    return zf.read(name)
+        raise HTTPException(404, f"No .{kind} file found inside artifact archive")
+
+    file_bytes = await run_in_threadpool(_download_artifact_file)
+    mime = {
+        "apk": "application/vnd.android.package-archive",
+        "aab": "application/octet-stream",
+        "ipa": "application/octet-stream",
+    }[kind]
+    fname = f"{slug}-v{ver}.{kind}"
+    return Response(content=file_bytes, media_type=mime, headers={"Content-Disposition": f'attachment; filename="{fname}"'})
 
 
 @api.get("/master/app-studio/{jid}/kit")
