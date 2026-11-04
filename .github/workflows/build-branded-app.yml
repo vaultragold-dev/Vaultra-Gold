@@ -199,13 +199,13 @@ jobs:
           chmod +x gradlew
           if [ "$TARGET_PLATFORM" = "android_apk" ]; then
             echo "Building Release APK only (Fast Mode)..."
-            ./gradlew assembleRelease --no-daemon -Dorg.gradle.parallel=true -Dorg.gradle.jvmargs="-Xmx3072m -XX:MaxMetaspaceSize=512m"
+            ./gradlew assembleRelease --no-daemon --build-cache -PreactNativeArchitectures=arm64-v8a,armeabi-v7a -Dorg.gradle.parallel=true -Dorg.gradle.jvmargs="-Xmx3072m -XX:MaxMetaspaceSize=512m"
           elif [ "$TARGET_PLATFORM" = "android_bundle" ]; then
             echo "Building Play Store AAB Bundle only..."
-            ./gradlew bundleRelease --no-daemon -Dorg.gradle.parallel=true -Dorg.gradle.jvmargs="-Xmx3072m -XX:MaxMetaspaceSize=512m"
+            ./gradlew bundleRelease --no-daemon --build-cache -PreactNativeArchitectures=arm64-v8a,armeabi-v7a -Dorg.gradle.parallel=true -Dorg.gradle.jvmargs="-Xmx3072m -XX:MaxMetaspaceSize=512m"
           else
             echo "Building both Release APK and Play Store AAB..."
-            ./gradlew assembleRelease bundleRelease --no-daemon -Dorg.gradle.parallel=true -Dorg.gradle.jvmargs="-Xmx3072m -XX:MaxMetaspaceSize=512m"
+            ./gradlew assembleRelease bundleRelease --no-daemon --build-cache -PreactNativeArchitectures=arm64-v8a,armeabi-v7a -Dorg.gradle.parallel=true -Dorg.gradle.jvmargs="-Xmx3072m -XX:MaxMetaspaceSize=512m"
           fi
 
       - name: Upload Ready-to-Install Android APK & Play Store AAB
