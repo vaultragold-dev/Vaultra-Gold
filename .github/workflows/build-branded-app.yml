@@ -39,10 +39,12 @@ on:
         required: true
         type: choice
         options:
-          - all
+          - android_apk
+          - android_bundle
           - android
           - ios
-        default: "all"
+          - all
+        default: "android_apk"
 
 jobs:
   prepare-branding:
@@ -146,7 +148,7 @@ jobs:
   build-android:
     name: "2. Build Android (.apk & .aab)"
     needs: prepare-branding
-    if: ${{ inputs.platform == 'android' || inputs.platform == 'all' }}
+    if: ${{ inputs.platform == 'android_apk' || inputs.platform == 'android_bundle' || inputs.platform == 'android' || inputs.platform == 'all' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -170,8 +172,12 @@ jobs:
           java-version: "17"
 
       - name: Accept Android SDK Licenses
-        run: |
-          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
+        run: yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: false
 
       - name: Install Frontend Dependencies
         working-directory: frontend
@@ -185,11 +191,22 @@ jobs:
           EXPO_PUBLIC_BACKEND_URL: ${{ inputs.api_base_url }}
         run: npx --yes expo prebuild --platform android --clean --no-install
 
-      - name: Build Android APK & Play Store AAB
+      - name: Build Android APK / AAB
         working-directory: frontend/android
+        env:
+          TARGET_PLATFORM: ${{ inputs.platform }}
         run: |
           chmod +x gradlew
-          ./gradlew assembleRelease assembleDebug bundleRelease --no-daemon -Dorg.gradle.jvmargs="-Xmx4096m -XX:MaxMetaspaceSize=1024m"
+          if [ "$TARGET_PLATFORM" = "android_apk" ]; then
+            echo "Building Release APK only (Fast Mode)..."
+            ./gradlew assembleRelease --no-daemon -Dorg.gradle.parallel=true -Dorg.gradle.jvmargs="-Xmx3072m -XX:MaxMetaspaceSize=512m"
+          elif [ "$TARGET_PLATFORM" = "android_bundle" ]; then
+            echo "Building Play Store AAB Bundle only..."
+            ./gradlew bundleRelease --no-daemon -Dorg.gradle.parallel=true -Dorg.gradle.jvmargs="-Xmx3072m -XX:MaxMetaspaceSize=512m"
+          else
+            echo "Building both Release APK and Play Store AAB..."
+            ./gradlew assembleRelease bundleRelease --no-daemon -Dorg.gradle.parallel=true -Dorg.gradle.jvmargs="-Xmx3072m -XX:MaxMetaspaceSize=512m"
+          fi
 
       - name: Upload Ready-to-Install Android APK & Play Store AAB
         uses: actions/upload-artifact@v4
@@ -198,6 +215,7 @@ jobs:
           path: |
             frontend/android/app/build/outputs/apk/**/*.apk
             frontend/android/app/build/outputs/bundle/**/*.aab
+          if-no-files-found: warn
 
   build-ios:
     name: "3. Build iOS (.ipa / Xcode Archive)"
@@ -213,6 +231,11 @@ jobs:
         with:
           name: ${{ inputs.bundle_id }}-store-kit
           path: .
+
+      - name: Select Xcode 16.1+
+        run: |
+          sudo xcode-select -s /Applications/Xcode_16.1.app || sudo xcode-select -s /Applications/Xcode_16.2.app || sudo xcode-select -s /Applications/Xcode_16.app || true
+          xcodebuild -version
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -253,8 +276,8 @@ jobs:
 
       - name: Upload iOS Build Artifact
         uses: actions/upload-artifact@v4
-        if: always()
         with:
           name: ${{ inputs.bundle_id }}-ios-build
           path: |
             frontend/*.ipa
+          if-no-files-found: warn

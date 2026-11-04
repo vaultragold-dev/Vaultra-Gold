@@ -6,12 +6,25 @@ const loadStudio = () => safe(async () => {
   pickDraft();
   if (S.studioSel) checkBuildStatus(S.studioSel);
 }, 'studio');
+
 function pickDraft() {
   const a = (S.studio?.apps || []).find((x) => x.id === S.studioSel);
-  S.draft = a ? { app_name: a.app_name || `${a.business_name.split(' ')[0]} Gold`, bundle_id: a.bundle_id || a.suggested_bundle_id, theme_preset: a.theme_preset || 'royal_gold',
-    logo_url: a.logo_url, splash_url: a.splash_url, app_version: a.app_version, support_email: a.support_email || a.email,
-    store_short: a.store_short || a.config.store.shortDescription, store_long: a.store_long || a.config.store.longDescription, store_keywords: a.store_keywords || a.config.store.keywords } : null;
+  S.draft = a ? {
+    app_name: a.app_name || `${a.business_name.split(' ')[0]} Gold`,
+    bundle_id: a.bundle_id || a.suggested_bundle_id,
+    theme_preset: a.theme_preset || 'royal_gold',
+    logo_url: a.logo_url,
+    splash_url: a.splash_url,
+    app_version: a.app_version,
+    support_email: a.support_email || a.email,
+    domain: a.domain || '',
+    admin_domain: a.admin_domain || '',
+    store_short: a.store_short || a.config.store.shortDescription,
+    store_long: a.store_long || a.config.store.longDescription,
+    store_keywords: a.store_keywords || a.config.store.keywords
+  } : null;
 }
+
 function studioSelect(id) { S.studioSel = id; pickDraft(); render(); checkBuildStatus(id); }
 function dset(k, v, rerender) { S.draft[k] = v; if (rerender) render(); else { const pv = $('#studio-preview'); if (pv) pv.innerHTML = phone(); } }
 
@@ -38,7 +51,9 @@ function renderBuildCenter(id) {
     : st.conclusion === 'success' || dl.apk || dl.ipa
     ? `<span class="badge green">✓ Build Ready for Direct Download</span>`
     : st.conclusion === 'failure'
-    ? `<span class="badge red">⚠ Last build stopped — click Build to retry</span>`
+    ? `<span class="badge red">⚠ Last build stopped — select an option below to rebuild</span>`
+    : st.conclusion === 'cancelled'
+    ? `<span class="badge amber">⏹ Build was cancelled</span>`
     : `<span class="badge">Ready to Build</span>`;
 
   const jobsHtml = (st.jobs && st.jobs.length)
@@ -50,21 +65,33 @@ function renderBuildCenter(id) {
 
   return `<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px">
       <div><b style="font-size:14px">📲 Multi-Tenant App Builder & Direct Downloads (Android & iOS)</b>
-        <div class="sub">Generates branded icons, splash screen & locked tenant config, then compiles real Android (.APK / .AAB) and iOS (.IPA) apps</div></div>
+        <div class="sub">Compiles real Android (.APK / .AAB) and iOS (.IPA) binaries in GitHub Actions cloud runners</div></div>
       ${statusBadgeHtml}
     </div>
     ${jobsHtml}
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
-      <button class="btn gold" onclick="studioBuild('${id}','all')" id="studio-build" ${isRunning ? 'disabled' : ''}>
-        ${isRunning ? '⏳ Compiling Android & iOS Apps…' : '🚀 1-Click Build Android (.APK/.AAB) & iOS (.IPA)'}
+      <button class="btn gold" onclick="studioBuild('${id}','android_apk')" id="studio-build-apk" ${isRunning ? 'disabled' : ''}>
+        ⚡ Fast Build Android .APK (~4 min)
       </button>
-      <button class="btn ${dl.apk ? 'primary' : ''}" onclick="studioDownload('${id}','apk')" ${dl.apk ? '' : 'disabled title="Click 1-Click Build first and wait for Android build to finish"'}>
+      <button class="btn" onclick="studioBuild('${id}','android_bundle')" id="studio-build-aab" ${isRunning ? 'disabled' : ''}>
+        📦 Build Play Store .AAB
+      </button>
+      <button class="btn" onclick="studioBuild('${id}','ios')" id="studio-build-ios" ${isRunning ? 'disabled' : ''}>
+        🍎 Build iOS .IPA
+      </button>
+      <button class="btn" onclick="studioBuild('${id}','all')" id="studio-build-all" ${isRunning ? 'disabled' : ''}>
+        🚀 Build All (APK + AAB + iOS)
+      </button>
+      ${isRunning ? `<button class="btn red" onclick="studioCancelBuild('${id}')" id="studio-cancel">⏹ Cancel Stuck Build</button>` : ''}
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+      <button class="btn ${dl.apk ? 'primary' : ''}" onclick="studioDownload('${id}','apk')" ${dl.apk ? '' : 'disabled title="Run Fast Build Android .APK first"'}>
         📲 Download Android .APK ${dl.apk ? '✓' : '(Build first)'}
       </button>
-      <button class="btn ${dl.aab ? 'primary' : ''}" onclick="studioDownload('${id}','aab')" ${dl.aab ? '' : 'disabled title="Click 1-Click Build first and wait for Android build to finish"'}>
+      <button class="btn ${dl.aab ? 'primary' : ''}" onclick="studioDownload('${id}','aab')" ${dl.aab ? '' : 'disabled title="Run Build Play Store .AAB first"'}>
         📦 Download Play Store .AAB ${dl.aab ? '✓' : '(Build first)'}
       </button>
-      <button class="btn ${dl.ipa ? 'primary' : ''}" onclick="studioDownload('${id}','ipa')" ${dl.ipa ? '' : 'disabled title="Click 1-Click Build first and wait for iOS build to finish"'}>
+      <button class="btn ${dl.ipa ? 'primary' : ''}" onclick="studioDownload('${id}','ipa')" ${dl.ipa ? '' : 'disabled title="Run Build iOS .IPA first"'}>
         🍎 Download iOS .IPA ${dl.ipa ? '✓' : '(Build first)'}
       </button>
       <button class="btn" onclick="studioDownload('${id}','kit')">
@@ -102,6 +129,7 @@ function stepper(a) {
   const st = S.studio.statuses; const cur = st.findIndex((s) => s.key === a.app_status);
   return `<div class="stepper">${st.map((s, i) => `<div class="step ${i < cur ? 'done' : i === cur ? 'on' : ''}"><span>${i < cur ? '✓' : i + 1}</span><b>${s.label}</b></div>`).join('')}</div>`;
 }
+
 function vStudio() {
   const head = ph('App Studio', 'Brand each shop\'s Android & iOS app, compile real .APK / .AAB / .IPA binaries in 1 click, and download them directly.');
   const s = S.studio; if (!s) return head + loading;
@@ -114,6 +142,11 @@ function vStudio() {
   const nextStatus = { config_ready: 'built', built: 'submitted', submitted: 'live' }[a.app_status];
   const themes = Object.entries(s.presets).map(([key, P]) => `<button class="theme-opt ${d.theme_preset === key ? 'on' : ''}" onclick="dset('theme_preset','${key}',true)" data-testid="theme-${key}">
       <div class="sw">${[P.primaryColor, P.secondaryColor, P.accentColor, P.backgroundColor].map((c) => `<i style="background:${c}"></i>`).join('')}</div><b>${P.label}</b><span>Radius ${P.cardRadius} · ${P.homeLayout.slice(0, 3).map((x) => SECTION_LABEL[x]).join(' → ')}</span></button>`).join('');
+
+  const serverIp = '54.152.192.240';
+  const appHostPart = (d.domain || '').split('.')[0] || 'gold';
+  const adminHostPart = (d.admin_domain || '').split('.')[0] || 'admin';
+
   return head + `<div class="studio">
     ${list}
     <div class="studio-main">
@@ -137,6 +170,56 @@ function vStudio() {
             <div class="grid g2"><div class="field"><label>Version</label><input class="input" value="${esc(d.app_version)}" oninput="dset('app_version',this.value)"></div>
               <div class="field"><label>Support email</label><input class="input" value="${esc(d.support_email)}" oninput="dset('support_email',this.value)"></div></div>
           </div>
+
+          <div class="card pad section"><h3 class="card-t">🌐 Custom Domain & DNS Settings</h3>
+            <div class="sub" style="margin-bottom:12px">Connect the jeweller's custom domain for customer web access and jeweller admin portal.</div>
+            <div class="grid g2">
+              <div class="field">
+                <label>Customer App Domain (Web / PWA)</label>
+                <input class="input" id="st_domain" placeholder="e.g. gold.sharmajewellers.in" value="${esc(d.domain || '')}" oninput="dset('domain',this.value)">
+                <div class="hint">Live rates, digital gold buying, SIP & catalog portal</div>
+              </div>
+              <div class="field">
+                <label>Jeweller Admin Portal Domain</label>
+                <input class="input" id="st_admin_domain" placeholder="e.g. admin.sharmajewellers.in" value="${esc(d.admin_domain || '')}" oninput="dset('admin_domain',this.value)">
+                <div class="hint">Jeweller's private billing, customer KYC & rate margins portal</div>
+              </div>
+            </div>
+
+            <div style="background:#f8fafc;border:1px solid #cbd5e1;border-radius:8px;padding:12px;margin:12px 0;font-size:12px">
+              <div style="font-weight:700;color:#0f172a;margin-bottom:6px">📌 Required DNS Records at Domain Registrar (GoDaddy, Cloudflare, Namecheap):</div>
+              <table style="width:100%;font-size:12px;border-collapse:collapse">
+                <thead>
+                  <tr style="text-align:left;color:#64748b;border-bottom:1px solid #cbd5e1">
+                    <th style="padding:4px 6px">Type</th>
+                    <th style="padding:4px 6px">Host / Subdomain</th>
+                    <th style="padding:4px 6px">Points To (Target IP)</th>
+                    <th style="padding:4px 6px">TTL</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr style="border-bottom:1px solid #e2e8f0">
+                    <td style="padding:6px;font-weight:700">A</td>
+                    <td style="padding:6px"><code>${esc(appHostPart)}</code></td>
+                    <td style="padding:6px"><code>${serverIp}</code></td>
+                    <td style="padding:6px">Automatic / 3600</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:6px;font-weight:700">A</td>
+                    <td style="padding:6px"><code>${esc(adminHostPart)}</code></td>
+                    <td style="padding:6px"><code>${serverIp}</code></td>
+                    <td style="padding:6px">Automatic / 3600</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+              <button class="btn primary" onclick="checkDomainDNS('${a.id}')" id="btn-check-dns">🔍 Live Verify DNS Records</button>
+              <div id="dns-verify-result" style="font-size:12px"></div>
+            </div>
+          </div>
+
           <div class="card pad section"><h3 class="card-t">Theme</h3><div class="themes">${themes}</div></div>
           <div class="card pad section"><h3 class="card-t">Store listing <span class="sub">auto-written · edit if you like</span></h3>
             <div class="field"><label>Short description (80)</label><input class="input" maxlength="80" value="${esc(d.store_short)}" oninput="dset('store_short',this.value)"></div>
@@ -150,32 +233,76 @@ function vStudio() {
           <div class="sub" style="margin-top:10px">Tenant ID <code>${esc(a.id)}</code></div></div>
       </div></div></div>`;
 }
+
+async function checkDomainDNS(id) {
+  const resBox = $('#dns-verify-result');
+  if (resBox) resBox.innerHTML = '<span class="badge">Checking DNS propagation…</span>';
+  try {
+    const saved = await api('/master/app-studio/' + id, { method: 'PUT', body: S.draft });
+    S.studio.apps = S.studio.apps.map((x) => x.id === saved.id ? saved : x);
+    const r = await api(`/master/jewellers/${id}/domain-check`);
+    if (!resBox) return;
+    const doms = r.domains || [];
+    if (!doms.length) {
+      resBox.innerHTML = '<span class="badge amber">No custom domain entered yet. Add App Domain or Admin Domain above.</span>';
+      return;
+    }
+    const htmls = doms.map((d) => {
+      const label = d.kind === 'app' ? 'App Domain' : 'Admin Domain';
+      if (d.points_here) {
+        return `<span class="badge green">✓ ${label} (${esc(d.domain)}) points to server IP (${(d.resolves_to||[]).join(', ')})</span>`;
+      } else {
+        const ips = (d.resolves_to && d.resolves_to.length) ? d.resolves_to.join(', ') : 'No IP found';
+        return `<span class="badge red">✗ ${label} (${esc(d.domain)}) currently resolves to [${ips}], needs to point to ${esc((r.target_ips||['54.152.192.240']).join(', '))}</span>`;
+      }
+    });
+    resBox.innerHTML = htmls.join(' ');
+  } catch (e) {
+    if (resBox) resBox.innerHTML = `<span class="badge red">DNS verification error: ${esc(e.message)}</span>`;
+  }
+}
+
 async function studioUpload(inp, key) {
   const f = inp.files[0]; if (!f) return;
   try { const url = await uploadImage(f, 'master_token', '/master/v3/upload'); S.draft[key] = url; toast(key === 'logo_url' ? 'Logo uploaded · save to keep it' : 'Splash uploaded · save to keep it'); render(); } catch (e) { toast(e.message, true); }
 }
+
 async function studioSave() {
-  const b = $('#studio-save'); b.disabled = true;
-  try { const r = await api('/master/app-studio/' + S.studioSel, { method: 'PUT', body: S.draft });
-    S.studio.apps = S.studio.apps.map((x) => x.id === r.id ? r : x); pickDraft(); toast('App details saved'); render();
-  } catch (e) { toast(e.message, true); b.disabled = false; }
+  const b = $('#studio-save'); if (b) b.disabled = true;
+  try {
+    const r = await api('/master/app-studio/' + S.studioSel, { method: 'PUT', body: S.draft });
+    S.studio.apps = S.studio.apps.map((x) => x.id === r.id ? r : x);
+    pickDraft();
+    toast('App details & custom domains saved');
+    render();
+  } catch (e) { toast(e.message, true); if (b) b.disabled = false; }
 }
+
 async function studioStatus(id, status) {
   try { const r = await api(`/master/app-studio/${id}/status`, { method: 'PUT', body: { status } }); S.studio.apps = S.studio.apps.map((x) => x.id === r.id ? r : x); toast('Status updated'); render(); } catch (e) { toast(e.message, true); render(); }
 }
+
 async function studioBuild(id, platform) {
-  const b = $('#studio-build'); if (b) b.disabled = true;
   try {
     const saved = await api('/master/app-studio/' + id, { method: 'PUT', body: S.draft });
     S.studio.apps = S.studio.apps.map((x) => x.id === saved.id ? saved : x);
-    const res = await api(`/master/app-studio/${id}/build`, { method: 'POST', body: { platform: platform || 'all' } });
+    const res = await api(`/master/app-studio/${id}/build`, { method: 'POST', body: { platform: platform || 'android_apk' } });
     if (res.row) S.studio.apps = S.studio.apps.map((x) => x.id === res.row.id ? res.row : x);
     toast(res.message || 'Cloud build started! Progress will update automatically.');
     await checkBuildStatus(id);
     render();
   } catch (e) { toast(e.message, true); }
-  if (b) b.disabled = false;
 }
+
+async function studioCancelBuild(id) {
+  if (!confirm('Cancel the currently running cloud build?')) return;
+  try {
+    await api(`/master/app-studio/${id}/cancel`, { method: 'POST' });
+    toast('Build cancelled.');
+    await checkBuildStatus(id);
+  } catch (e) { toast(e.message, true); }
+}
+
 async function studioDownload(id, kind) {
   try {
     if (kind === 'kit') {

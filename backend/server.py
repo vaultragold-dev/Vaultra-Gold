@@ -3544,7 +3544,7 @@ def app_studio_row(j, base):
             "logo_url": j.logo_url or "", "splash_url": j.splash_url or "", "app_version": j.app_version or "1.0.0",
             "app_status": j.app_status or "details_pending", "support_email": j.support_email or "",
             "store_short": j.store_short or "", "store_long": j.store_long or "", "store_keywords": j.store_keywords or "",
-            "suggested_bundle_id": wl.default_bundle_id(j.business_name), "config": cfg,
+            "domain": j.domain or "", "admin_domain": j.admin_domain or "", "suggested_bundle_id": wl.default_bundle_id(j.business_name), "config": cfg,
             "karats": karat_rates(j.id), "silver_buy": silver_rate(j.id)[0]}
 
 
@@ -3586,6 +3586,8 @@ class AppStudioUpdate(BaseModel):
     store_short: str = Field(default="", max_length=80)
     store_long: str = Field(default="", max_length=4000)
     store_keywords: str = Field(default="", max_length=100)
+    domain: str = ""
+    admin_domain: str = ""
 
 
 @api.put("/master/app-studio/{jid}")
@@ -3604,6 +3606,16 @@ async def ms_update(jid: str, body: AppStudioUpdate, request: Request, admin: Ma
     j.app_name, j.bundle_id, j.theme_preset = body.app_name.strip(), bundle, body.theme_preset
     j.logo_url, j.splash_url, j.app_version = body.logo_url, body.splash_url, body.app_version
     j.support_email, j.store_short, j.store_long, j.store_keywords = body.support_email.strip(), body.store_short.strip(), body.store_long.strip(), body.store_keywords.strip()
+    if body.domain is not None:
+        try:
+            j.domain = normalize_domain(body.domain)
+        except Exception:
+            pass
+    if body.admin_domain is not None:
+        try:
+            j.admin_domain = normalize_domain(body.admin_domain)
+        except Exception:
+            pass
     j.app_status = _status_after_edit(j)
     await audit(db, "master", admin, "app.update", j.business_name, {"app_name": j.app_name, "bundle_id": bundle, "theme": j.theme_preset}, j.id)
     await db.commit()
@@ -3641,7 +3653,7 @@ async def _file_bytes(url, db):
 
 
 class AppBuildTrigger(BaseModel):
-    platform: str = "all"  # android, ios, all
+    platform: str = "android_apk"  # android_apk, android_bundle, android, ios, all
 
 
 def _gh_headers():
@@ -3677,7 +3689,7 @@ async def ms_trigger_build(jid: str, body: AppBuildTrigger, request: Request, ad
         "theme_preset": str(j.theme_preset or "royal_gold"),
         "app_version": str(j.app_version or "1.0.0"),
         "api_base_url": str(public_url),
-        "platform": body.platform if body.platform in ("android", "ios", "all") else "all",
+        "platform": body.platform if body.platform in ("android_apk", "android_bundle", "android", "ios", "all") else "android_apk",
     }
     def _dispatch_and_find():
         url = f"https://api.github.com/repos/{gh_repo}/actions/workflows/build-branded-app.yml/dispatches"
@@ -3711,9 +3723,27 @@ async def ms_trigger_build(jid: str, body: AppBuildTrigger, request: Request, ad
     return {
         "ok": True,
         "run_id": run_id,
-        "message": f"Building Android (.APK & .AAB) and iOS (.IPA) for {j.app_name}...",
+        "message": f"Cloud build ({inputs['platform']}) started for {j.app_name}...",
         "row": app_studio_row(j, public_url),
     }
+
+
+@api.post("/master/app-studio/{jid}/cancel")
+async def ms_cancel_build(jid: str, admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
+    raw = await _setting(f"app_build:{jid}")
+    meta = json.loads(raw) if raw else {}
+    run_id = meta.get("run_id")
+    headers = _gh_headers()
+    gh_repo = _gh_repo()
+    if run_id:
+        def _cancel():
+            url = f"https://api.github.com/repos/{gh_repo}/actions/runs/{run_id}/cancel"
+            return _requests.post(url, headers=headers, timeout=15)
+        await run_in_threadpool(_cancel)
+    meta["status"] = "cancelled"
+    meta["conclusion"] = "cancelled"
+    await _setting(f"app_build:{jid}", json.dumps(meta))
+    return {"ok": True, "message": "Build cancelled"}
 
 
 @api.get("/master/app-studio/{jid}/build-status")
