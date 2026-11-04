@@ -86,15 +86,28 @@ function vOverview() {
 
 /* jewellers */
 const loadJ = () => safe(async () => { S.jewellers = await api('/master/jewellers'); }, 'jewellers');
+async function openShopAdmin(jid) {
+  try {
+    const r = await api(`/master/jewellers/${jid}/impersonate-token`, { method: 'POST' });
+    window.open(r.admin_url, '_blank');
+    toast(`Opening ${r.business_name} Admin Panel...`);
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
 function vJewellers() {
-  const head = `<div class="page-head"><div><h2>Shops</h2><p>Partner jewellers running their own branded app.</p></div><button class="btn primary" onclick="onboard()" id="onboard-btn">${icon('plus')} Onboard shop</button></div>`;
+  const head = `<div class="page-head"><div><h2>Shops</h2><p>Partner jewellers running their own branded app.</p></div><button class="btn primary" onclick="onboard()" id="onboard-btn">${icon('plus')} Onboard shop</button></div>
+<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:12px;color:#166534">
+  <b>🏪 Shop Admin Portal:</b> Direct link: <a href="/api/admin/jeweller" target="_blank" style="font-weight:700;color:#15803d">/api/admin/jeweller</a> &bull; Default password for demo shops: <code>jeweller123</code> &bull; Or click <b>"🚀 Open Shop Admin"</b> below for 1-click login.
+</div>`;
   if (!S.jewellers) return head + loading;
   return head + `<div class="card"><div class="table-wrap"><table><thead><tr><th>Store</th><th>Owner</th><th class="r">Customers</th><th class="r">Gold held</th><th>Commission</th><th>Domains</th><th>Status</th><th></th></tr></thead><tbody>
     ${S.jewellers.map((j) => `<tr><td><div style="display:flex;gap:10px;align-items:center"><div class="avatar" style="background:${esc(j.primary_color || '#FBF6EA')}22">${esc(initials(j.business_name))}</div><div><b class="link" style="cursor:pointer;text-decoration:underline dotted" onclick="shopCatalogue('${j.id}')" data-shop-cat="${j.id}">${esc(j.business_name)}</b><div class="sub">${esc(j.city || '')} · click name for catalogue</div></div></div></td>
       <td>${esc(j.owner_name)}<div class="sub">${esc(j.email)}</div></td><td class="r num">${j.customer_count}</td><td class="r num">${g4(j.total_grams)}</td>
       <td class="num">${inr(j.gold_commission_per_g)}/g gold<div class="sub">${inr(j.silver_commission_per_g)}/g silver</div></td>
       <td style="font-size:13px">${esc(j.domain || '—')}<div class="sub">${esc(j.admin_domain || '')}</div></td><td>${statusBadge(j.status)}</td>
-      <td class="r" style="white-space:nowrap"><button class="btn sm" onclick="domains('${j.id}')" data-domains="${j.id}">${icon('globe')} Domains</button> <button class="btn sm ${j.status === 'active' ? 'danger' : ''}" onclick="toggleJ('${j.id}')">${j.status === 'active' ? 'Suspend' : 'Activate'}</button></td></tr>`).join('')}
+      <td class="r" style="white-space:nowrap"><button class="btn sm primary" onclick="openShopAdmin('${j.id}')" title="1-Click Login to Shop Admin">🚀 Open Shop Admin ↗</button> <button class="btn sm" onclick="domains('${j.id}')" data-domains="${j.id}">${icon('globe')} Domains</button> <button class="btn sm ${j.status === 'active' ? 'danger' : ''}" onclick="toggleJ('${j.id}')">${j.status === 'active' ? 'Suspend' : 'Activate'}</button></td></tr>`).join('')}
     </tbody></table></div></div>`;
 }
 async function toggleJ(id) { const j = S.jewellers.find((x) => x.id === id); if (j.status === 'active' && !confirm(`Suspend ${j.business_name}? Their app and panel stop working.`)) return; await safe(async () => { await api(`/master/jewellers/${id}/toggle`, { method: 'POST' }); S.jewellers = await api('/master/jewellers'); toast('Updated'); }, 'jewellers'); }

@@ -191,10 +191,17 @@ jobs:
           EXPO_PUBLIC_BACKEND_URL: ${{ inputs.api_base_url }}
         run: npx --yes expo prebuild --platform android --clean --no-install
 
+      - name: Ensure Android Uses Cleartext HTTP Traffic
+        working-directory: frontend/android/app/src/main
+        run: |
+          sed -i 's/<application /<application android:usesCleartextTraffic="true" /g' AndroidManifest.xml
+          grep -i "usesCleartextTraffic" AndroidManifest.xml || true
+
       - name: Build Android APK / AAB
         working-directory: frontend/android
         env:
           TARGET_PLATFORM: ${{ inputs.platform }}
+          EXPO_PUBLIC_BACKEND_URL: ${{ inputs.api_base_url }}
         run: |
           chmod +x gradlew
           if [ "$TARGET_PLATFORM" = "android_apk" ]; then

@@ -30,6 +30,7 @@ module.exports = ({ config }) => {
     ios: { ...config.ios, bundleIdentifier: t.bundleId || config.ios?.bundleIdentifier },
     android: {
       ...config.android,
+      usesCleartextTraffic: true,
       package: t.packageName || t.bundleId || config.android?.package,
       adaptiveIcon: { ...config.android?.adaptiveIcon, foregroundImage: asset("adaptive-icon.png", config.android?.adaptiveIcon?.foregroundImage), backgroundColor: (t.theme && t.theme.primaryColor) || bg },
     },

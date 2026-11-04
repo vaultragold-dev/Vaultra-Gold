@@ -467,6 +467,11 @@ async function pollRedeemRequests() {
 setInterval(pollRedeemRequests, 8000);
 (async () => {
   try { const r = await fetch(`${API}/tenant/resolve?host=${encodeURIComponent(location.hostname)}`); if (r.ok) { S.tenant = (await r.json()).jeweller; document.title = S.tenant.business_name + ' · Shop Panel'; } } catch {}
+  const urlTok = new URLSearchParams(window.location.search).get('token');
+  if (urlTok) {
+    localStorage.setItem('jeweller_token', urlTok);
+    history.replaceState(null, '', window.location.pathname);
+  }
   if (localStorage.getItem('jeweller_token')) boot(); else render();
 })();
 </script>

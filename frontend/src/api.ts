@@ -1,4 +1,12 @@
-const BASE = `${process.env.EXPO_PUBLIC_BACKEND_URL}/api`;
+import { tenantConfig } from "./tenantConfig";
+
+const rawBase = (
+  process.env.EXPO_PUBLIC_BACKEND_URL ||
+  tenantConfig?.apiBaseUrl ||
+  "http://54.152.192.240"
+).trim().replace(/\/+$/, "");
+
+const BASE = rawBase.endsWith("/api") ? rawBase : `${rawBase}/api`;
 
 const tokens: { user: string | null; staff: string | null } = { user: null, staff: null };
 let tenantHeader = "";

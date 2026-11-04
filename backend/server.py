@@ -2020,6 +2020,23 @@ async def master_toggle_jeweller(jeweller_id: str, admin: MasterAdmin = Depends(
     return {"id": j.id, "status": j.status}
 
 
+@api.post("/master/jewellers/{jeweller_id}/impersonate-token")
+async def master_jeweller_impersonate(jeweller_id: str, admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Jeweller).where(Jeweller.id == jeweller_id))
+    j = result.scalar_one_or_none()
+    if not j:
+        raise HTTPException(404, "Jeweller not found")
+    tok = make_token(j.id, "jeweller", days=1)
+    return {
+        "ok": True,
+        "token": tok,
+        "jeweller_id": j.id,
+        "business_name": j.business_name,
+        "email": j.email,
+        "admin_url": f"/api/admin/jeweller?token={tok}",
+    }
+
+
 @api.get("/master/pool")
 async def master_pool(admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
     pools = await db.execute(select(PoolAccumulator).order_by(desc(PoolAccumulator.created_at)).limit(10))

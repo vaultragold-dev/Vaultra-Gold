@@ -1,3 +1,13 @@
+async function openShopAdmin(jid) {
+  try {
+    const r = await api(`/master/jewellers/${jid}/impersonate-token`, { method: 'POST' });
+    window.open(r.admin_url, '_blank');
+    toast(`Opening ${r.business_name} Admin Panel...`);
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
 /* Master console: App Studio — white-label app per jeweller */
 S.studio = null; S.studioSel = ''; S.draft = null; S.buildState = {}; S.buildTimer = null;
 const loadStudio = () => safe(async () => {
@@ -158,6 +168,18 @@ function vStudio() {
         </div>
         <div id="studio-build-box" style="margin-top:14px;padding-top:14px;border-top:1px solid #e5e7eb">
           ${renderBuildCenter(a.id)}
+        </div>
+        <div style="background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:12px 14px;margin-top:14px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px">
+          <div>
+            <h4 style="margin:0 0 3px 0;color:#166534;font-size:13.5px">🏪 ${esc(a.business_name)} — Shop Admin Portal</h4>
+            <div style="font-size:12px;color:#15803d">
+              Login Email: <b>${esc(a.email)}</b> &bull; Default Password: <code>jeweller123</code><br>
+              Direct Link: <a href="/api/admin/jeweller" target="_blank" style="color:#15803d;font-weight:700">http://54.152.192.240/api/admin/jeweller</a>
+            </div>
+          </div>
+          <button class="btn primary" onclick="openShopAdmin('${a.id}')" style="background:#16a34a">
+            🚀 1-Click Login as Shop Admin ↗
+          </button>
         </div>
       </div>
       <div class="studio-grid">

@@ -16,7 +16,8 @@
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#000000"
       },
-      "package": "in.vaultra.digigold"
+      "package": "in.vaultra.digigold",
+      "usesCleartextTraffic": true
     },
     "web": {
       "bundler": "metro",
