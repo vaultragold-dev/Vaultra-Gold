@@ -723,7 +723,7 @@ async def root():
 
 
 @app.websocket("/ws/rates")
-@api.websocket("/ws/rates")
+@app.websocket("/api/ws/rates")
 async def websocket_rates(websocket: WebSocket):
     await websocket.accept()
     CONNECTED_WEBSOCKETS.add(websocket)
@@ -3918,4 +3918,4 @@ async def startup():
 
 
 app.include_router(api)
-app.add_middleware(CORSMiddleware, allow_credentials=True, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(CORSMiddleware, allow_credentials=True, allow_origins=["*"], allow_origin_regex=r".*", allow_methods=["*"], allow_headers=["*"])
