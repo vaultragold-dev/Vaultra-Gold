@@ -3603,7 +3603,7 @@ async def ms_trigger_build(jid: str, body: AppBuildTrigger, request: Request, ad
         "tenant_id": str(j.id),
         "app_name": str(j.app_name),
         "bundle_id": str(j.bundle_id),
-        "theme_preset": str(j.theme_preset or "royal_gold"),
+        "theme_preset": str(j.theme_preset if j.theme_preset in wl.THEME_PRESETS else "royal_gold"),
         "app_version": str(j.app_version or "1.0.0"),
         "api_base_url": str(public_url),
         "platform": body.platform if body.platform in ("android_apk", "android_bundle", "android", "ios", "all") else "android_apk",
@@ -3677,12 +3677,6 @@ async def ms_build_status(jid: str, admin: MasterAdmin = Depends(get_master_admi
     def _fetch_status():
         nonlocal run_id
         if not run_id:
-            runs_r = _requests.get(f"https://api.github.com/repos/{gh_repo}/actions/workflows/build-branded-app.yml/runs?per_page=10", headers=headers, timeout=15)
-            if runs_r.status_code == 200:
-                runs = runs_r.json().get("workflow_runs") or []
-                if runs:
-                    run_id = runs[0].get("id")
-        if not run_id:
             return {"status": "idle", "conclusion": None, "jobs": [], "artifacts": {}}
         run_r = _requests.get(f"https://api.github.com/repos/{gh_repo}/actions/runs/{run_id}", headers=headers, timeout=15)
         if run_r.status_code != 200:
@@ -3715,9 +3709,10 @@ async def ms_build_status(jid: str, admin: MasterAdmin = Depends(get_master_admi
     st = await run_in_threadpool(_fetch_status)
     bundle = j.bundle_id or wl.default_bundle_id(j.business_name)
     arts = st.get("artifacts") or {}
-    has_android = any(k.endswith("-android-builds") for k in arts)
-    has_ios = any(k.endswith("-ios-build") for k in arts)
-    has_kit = any(k.endswith("-store-kit") for k in arts)
+    is_this_store = (meta.get("tenant_id") == j.id) or any(k.startswith(bundle) for k in arts)
+    has_android = is_this_store and any(k.endswith("-android-builds") for k in arts)
+    has_ios = is_this_store and any(k.endswith("-ios-build") for k in arts)
+    has_kit = is_this_store and any(k.endswith("-store-kit") for k in arts)
     if (has_android or has_ios) and j.app_status in ("details_pending", "config_ready"):
         j.app_status = "built"
         await db.commit()
@@ -3761,24 +3756,17 @@ async def ms_download_build(jid: str, kind: str, request: Request, token: str = 
         nonlocal run_id
         import zipfile, io
         if not run_id:
-            runs_r = _requests.get(f"https://api.github.com/repos/{gh_repo}/actions/workflows/build-branded-app.yml/runs?per_page=10", headers=headers, timeout=15)
-            if runs_r.status_code == 200:
-                runs = runs_r.json().get("workflow_runs") or []
-                for r_item in runs:
-                    if r_item.get("status") == "completed":
-                        run_id = r_item.get("id")
-                        break
-                if not run_id and runs:
-                    run_id = runs[0].get("id")
-        if not run_id:
-            raise HTTPException(404, "No build found yet. Click 'Build Android & iOS Apps' first.")
+            raise HTTPException(404, f"No build has been run for {j.app_name} yet. Click 'Fast Build Android .APK' or 'Build iOS .IPA' to compile.")
         arts_r = _requests.get(f"https://api.github.com/repos/{gh_repo}/actions/runs/{run_id}/artifacts", headers=headers, timeout=15)
         if arts_r.status_code != 200:
             raise HTTPException(502, "Could not fetch build artifacts")
         target_suffix = "-android-builds" if kind in ("apk", "aab") else "-ios-build"
+        bundle = j.bundle_id or wl.default_bundle_id(j.business_name)
+        expected_name = f"{bundle}{target_suffix}"
         art_id = None
         for a in arts_r.json().get("artifacts", []):
-            if not a.get("expired") and (a.get("name") or "").endswith(target_suffix):
+            aname = a.get("name") or ""
+            if not a.get("expired") and (aname == expected_name or aname.endswith(target_suffix)):
                 art_id = a.get("id")
                 break
         if not art_id:

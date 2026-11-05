@@ -16,15 +16,9 @@ on:
         required: true
         default: "in.vaultra.sharmagold"
       theme_preset:
-        description: "Theme Preset"
+        description: "Theme Preset (e.g. royal_gold, rose_gold, midnight_luxe, ivory_classic, emerald_heritage)"
         required: true
-        type: choice
-        options:
-          - royal_gold
-          - emerald_vault
-          - ruby_heritage
-          - midnight_bullion
-          - ivory_minimal
+        type: string
         default: "royal_gold"
       app_version:
         description: "App Version"

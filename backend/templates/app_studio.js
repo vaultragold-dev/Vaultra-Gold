@@ -161,7 +161,7 @@ async function studioSaveAndNext(nextStep) {
 }
 
 function vStudio() {
-  const head = ph('App Studio ? Multi-Tenant App Builder', 'Guided 5-step wizard to brand, configure, domain-link and compile native Android (.APK / .AAB) and iOS apps per jeweller.');
+  const head = ph('App Studio — Multi-Tenant App Builder', 'Guided 5-step wizard to brand, configure, domain-link and compile native Android (.APK / .AAB) and iOS apps per jeweller.');
   const s = S.studio; if (!s) return head + loading;
   if (!s.apps.length) return head + '<div class="card"><div class="empty"><b>No shops yet. Go to Shops -> Onboard Shop to add your first jeweller.</b></div></div>';
   const a = s.apps.find((x) => x.id === S.studioSel); const d = S.draft;
@@ -169,7 +169,7 @@ function vStudio() {
 
   const label = Object.fromEntries(s.statuses.map((x) => [x.key, x.label]));
   const list = `<div class="card studio-list" style="margin-bottom:14px"><div style="padding:10px 14px;font-size:12px;font-weight:700;color:#64748b;border-bottom:1px solid #e2e8f0">SELECT JEWELLER STORE</div>${s.apps.map((x) => `<button class="studio-item ${x.id === S.studioSel ? 'on' : ''}" onclick="studioSelect('${x.id}')" data-testid="studio-shop-${x.id}">
-      <div><b>${esc(x.app_name || x.business_name)}</b><div class="sub">${esc(x.business_name)}${x.city ? ' ? ' + esc(x.city) : ''}</div></div>
+      <div><b>${esc(x.app_name || x.business_name)}</b><div class="sub">${esc(x.business_name)}${x.city ? ' · ' + esc(x.city) : ''}</div></div>
       <span class="badge ${x.app_status === 'live' ? 'green' : x.app_status === 'details_pending' ? 'amber' : 'gold'}">${label[x.app_status] || x.app_status}</span></button>`).join('')}</div>`;
 
   const serverIp = window.location.hostname || '13.233.54.98';
@@ -205,14 +205,14 @@ function vStudio() {
       <p class="sub" style="margin-top:0;margin-bottom:14px">Set the public app name, Play Store / App Store bundle ID, support contacts and store listing.</p>
       
       <div class="field"><label>App Name (shown under app icon on customer phone) *</label><input class="input" id="st_name" maxlength="30" value="${esc(d.app_name)}" oninput="dset('app_name',this.value)"></div>
-      <div class="field"><label>App ID / Package Name *</label><input class="input" id="st_bundle" value="${esc(d.bundle_id)}" oninput="dset('bundle_id',this.value.toLowerCase())"><div class="hint">e.g. in.vaultra.${esc(a.business_name.split(' ')[0].toLowerCase())} ? Used for Play Store and App Store publishing ? cannot change after publish</div></div>
+      <div class="field"><label>App ID / Package Name *</label><input class="input" id="st_bundle" value="${esc(d.bundle_id)}" oninput="dset('bundle_id',this.value.toLowerCase())"><div class="hint">e.g. in.vaultra.${esc(a.business_name.split(' ')[0].toLowerCase())} • Used for Play Store and App Store publishing • cannot change after publish</div></div>
       
       <div class="grid g2">
         <div class="field"><label>App Icon Logo (Square PNG, 1024x1024 best)</label><input type="file" accept="image/png,image/jpeg,image/webp" onchange="studioUpload(this,'logo_url')" id="st_logo">
-          ${d.logo_url ? `<div style="margin-top:6px;display:flex;align-items:center;gap:8px"><img src="${esc(d.logo_url)}" style="width:36px;height:36px;border-radius:6px;object-fit:contain;border:1px solid #cbd5e1"><span class="badge green">? Logo Uploaded</span></div>` : '<div class="hint">Fallback: Branded initial badge</div>'}
+          ${d.logo_url ? `<div style="margin-top:6px;display:flex;align-items:center;gap:8px"><img src="${esc(d.logo_url)}" style="width:36px;height:36px;border-radius:6px;object-fit:contain;border:1px solid #cbd5e1"><span class="badge green">✓ Logo Uploaded</span></div>` : '<div class="hint">Fallback: Branded initial badge</div>'}
         </div>
         <div class="field"><label>Splash Screen Image (Optional PNG, 1242x2688)</label><input type="file" accept="image/png,image/jpeg" onchange="studioUpload(this,'splash_url')" id="st_splash">
-          ${d.splash_url ? `<div style="margin-top:6px;display:flex;align-items:center;gap:8px"><img src="${esc(d.splash_url)}" style="width:24px;height:48px;border-radius:4px;object-fit:cover;border:1px solid #cbd5e1"><span class="badge green">? Splash Uploaded</span></div>` : '<div class="hint">Fallback: Gradient splash screen</div>'}
+          ${d.splash_url ? `<div style="margin-top:6px;display:flex;align-items:center;gap:8px"><img src="${esc(d.splash_url)}" style="width:24px;height:48px;border-radius:4px;object-fit:cover;border:1px solid #cbd5e1"><span class="badge green">✓ Splash Uploaded</span></div>` : '<div class="hint">Fallback: Gradient splash screen</div>'}
         </div>
       </div>
       
@@ -229,12 +229,12 @@ function vStudio() {
       </div>
 
       <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:18px;padding-top:14px;border-top:1px solid #e2e8f0">
-        <button class="btn primary" onclick="studioSaveAndNext(2)" id="studio-save">Save Details & Next: Theme & Visuals ?</button>
+        <button class="btn primary" onclick="studioSaveAndNext(2)" id="studio-save">Save Details & Next: Theme & Visuals →</button>
       </div>
     </div>`;
   } else if (S.studioStep === 2) {
     const themes = Object.entries(s.presets).map(([key, P]) => `<button class="theme-opt ${d.theme_preset === key ? 'on' : ''}" onclick="dset('theme_preset','${key}',true)" data-testid="theme-${key}">
-      <div class="sw">${[P.primaryColor, P.secondaryColor, P.accentColor, P.backgroundColor].map((c) => `<i style="background:${c}"></i>`).join('')}</div><b>${P.label}</b><span>Radius ${P.cardRadius} ? ${P.homeLayout.slice(0, 3).map((x) => SECTION_LABEL[x]).join(' ? ')}</span></button>`).join('');
+      <div class="sw">${[P.primaryColor, P.secondaryColor, P.accentColor, P.backgroundColor].map((c) => `<i style="background:${c}"></i>`).join('')}</div><b>${P.label}</b><span>Radius ${P.cardRadius} · ${P.homeLayout.slice(0, 3).map((x) => SECTION_LABEL[x]).join(' → ')}</span></button>`).join('');
 
     stepContent = `<div class="card pad">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
@@ -248,7 +248,7 @@ function vStudio() {
       </div>
 
       <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:14px;margin-top:14px">
-        <h4 style="margin:0 0 10px 0;font-size:13px;color:#0f172a">?? Professional Custom Color Override (Optional)</h4>
+        <h4 style="margin:0 0 10px 0;font-size:13px;color:#0f172a">🎨 Professional Custom Color Override (Optional)</h4>
         <div class="grid g2">
           <div class="field"><label>Primary Gold Brand Color</label>
             <div style="display:flex;gap:8px;align-items:center">
@@ -266,8 +266,8 @@ function vStudio() {
       </div>
 
       <div style="display:flex;justify-content:space-between;gap:10px;margin-top:18px;padding-top:14px;border-top:1px solid #e2e8f0">
-        <button class="btn" onclick="setStudioStep(1)">? Back to Identity</button>
-        <button class="btn primary" onclick="studioSaveAndNext(3)" id="studio-save">Save Theme & Next: Rates & Margins ?</button>
+        <button class="btn" onclick="setStudioStep(1)">← Back to Identity</button>
+        <button class="btn primary" onclick="studioSaveAndNext(3)" id="studio-save">Save Theme & Next: Rates & Margins →</button>
       </div>
     </div>`;
   } else if (S.studioStep === 3) {
@@ -280,7 +280,7 @@ function vStudio() {
       
       <div class="grid g2">
         <div class="field">
-          <label>24K Gold Buy Markup (+?/gram)</label>
+          <label>24K Gold Buy Markup (+₹/gram)</label>
           <input class="input num" type="number" step="1" value="${esc(a.gold_buy_markup_pct || 0)}" id="st_m_gold_markup" placeholder="0">
           <div class="hint">Added to live base gold rate when customer buys</div>
         </div>
@@ -293,12 +293,12 @@ function vStudio() {
 
       <div class="grid g2" style="margin-top:8px">
         <div class="field">
-          <label>22K Jewellery Rate Margin (+/- ?/gram)</label>
+          <label>22K Jewellery Rate Margin (+/- ₹/gram)</label>
           <input class="input num" type="number" step="1" value="${esc(a.gold22_commission_per_g || 0)}" id="st_m_gold22" placeholder="0">
           <div class="hint">Adjusts live 22K (916 Hallmarked) rate for showroom shopping</div>
         </div>
         <div class="field">
-          <label>18K Jewellery Rate Margin (+/- ?/gram)</label>
+          <label>18K Jewellery Rate Margin (+/- ₹/gram)</label>
           <input class="input num" type="number" step="1" value="${esc(a.gold18_commission_per_g || 0)}" id="st_m_gold18" placeholder="0">
           <div class="hint">Adjusts live 18K (750 Diamond Jewellery) rate for showroom shopping</div>
         </div>
@@ -306,7 +306,7 @@ function vStudio() {
 
       <div class="grid g2" style="margin-top:8px">
         <div class="field">
-          <label>999 Silver Buy Markup (+?/gram)</label>
+          <label>999 Silver Buy Markup (+₹/gram)</label>
           <input class="input num" type="number" step="0.5" value="${esc(a.silver_buy_markup_pct || 0)}" id="st_m_silver" placeholder="0">
           <div class="hint">Added to live silver base rate</div>
         </div>
@@ -318,18 +318,18 @@ function vStudio() {
       </div>
 
       <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px;margin-top:14px">
-        <div style="font-weight:700;font-size:12px;color:#0f172a;margin-bottom:6px">?? Live Preview of Customer App Rates (Calculated Right Now):</div>
+        <div style="font-weight:700;font-size:12px;color:#0f172a;margin-bottom:6px">📊 Live Preview of Customer App Rates (Calculated Right Now):</div>
         <div style="display:flex;gap:12px;flex-wrap:wrap;font-size:12px">
-          <div>24K Gold: <b>?${(a.karats?.['24K'] || S.studio?.karats?.['24K'] || 0).toLocaleString('en-IN')} /g</b></div>
-          <div>22K Gold: <b>?${(a.karats?.['22K'] || S.studio?.karats?.['22K'] || 0).toLocaleString('en-IN')} /g</b></div>
-          <div>18K Gold: <b>?${(a.karats?.['18K'] || S.studio?.karats?.['18K'] || 0).toLocaleString('en-IN')} /g</b></div>
-          <div>Silver: <b>?${(a.silver_buy || S.studio?.price?.silver?.buy || 0).toLocaleString('en-IN')} /g</b></div>
+          <div>24K Gold: <b>₹${(a.karats?.['24K'] || S.studio?.karats?.['24K'] || 0).toLocaleString('en-IN')} /g</b></div>
+          <div>22K Gold: <b>₹${(a.karats?.['22K'] || S.studio?.karats?.['22K'] || 0).toLocaleString('en-IN')} /g</b></div>
+          <div>18K Gold: <b>₹${(a.karats?.['18K'] || S.studio?.karats?.['18K'] || 0).toLocaleString('en-IN')} /g</b></div>
+          <div>Silver: <b>₹${(a.silver_buy || S.studio?.price?.silver?.buy || 0).toLocaleString('en-IN')} /g</b></div>
         </div>
       </div>
 
       <div style="display:flex;justify-content:space-between;gap:10px;margin-top:18px;padding-top:14px;border-top:1px solid #e2e8f0">
-        <button class="btn" onclick="setStudioStep(2)">? Back to Theme</button>
-        <button class="btn primary" onclick="saveMarginsAndNext(4)" id="studio-save">Save Margins & Next: Custom Domain ?</button>
+        <button class="btn" onclick="setStudioStep(2)">← Back to Theme</button>
+        <button class="btn primary" onclick="saveMarginsAndNext(4)" id="studio-save">Save Margins & Next: Custom Domain →</button>
       </div>
     </div>`;
   } else if (S.studioStep === 4) {
@@ -354,7 +354,7 @@ function vStudio() {
       </div>
 
       <div style="background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:14px;margin:16px 0">
-        <div style="font-weight:700;color:#166534;font-size:13px;margin-bottom:6px">?? Exact DNS Records to Give the Jeweller:</div>
+        <div style="font-weight:700;color:#166534;font-size:13px;margin-bottom:6px">📋 Exact DNS Records to Give the Jeweller:</div>
         <div style="font-size:12px;color:#15803d;margin-bottom:10px">The jeweller opens their domain registrar (GoDaddy, Hostinger, Cloudflare, BigRock) and adds these 2 records:</div>
         <table style="width:100%;font-size:12px;border-collapse:collapse;background:#fff;border-radius:6px;overflow:hidden;border:1px solid #86efac">
           <thead>
@@ -383,14 +383,14 @@ function vStudio() {
       </div>
 
       <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:14px 0">
-        <button class="btn primary" onclick="checkDomainDNS('${a.id}')" id="btn-check-dns">? Live Verify DNS Connection</button>
-        <button class="btn" onclick="openShopAdmin('${a.id}')" style="background:#16a34a;color:#fff">?? 1-Click Test Shop Admin ?</button>
+        <button class="btn primary" onclick="checkDomainDNS('${a.id}')" id="btn-check-dns">🔍 Live Verify DNS Connection</button>
+        <button class="btn" onclick="openShopAdmin('${a.id}')" style="background:#16a34a;color:#fff">⚡ 1-Click Test Shop Admin ↗</button>
         <div id="dns-verify-result" style="font-size:12px;width:100%"></div>
       </div>
 
       <div style="display:flex;justify-content:space-between;gap:10px;margin-top:18px;padding-top:14px;border-top:1px solid #e2e8f0">
-        <button class="btn" onclick="setStudioStep(3)">? Back to Rates</button>
-        <button class="btn primary" onclick="studioSaveAndNext(5)" id="studio-save">Save Domains & Next: Build Center ?</button>
+        <button class="btn" onclick="setStudioStep(3)">← Back to Rates</button>
+        <button class="btn primary" onclick="studioSaveAndNext(5)" id="studio-save">Save Domains & Next: Build Center →</button>
       </div>
     </div>`;
   } else if (S.studioStep === 5) {
@@ -406,17 +406,17 @@ function vStudio() {
       </div>
 
       <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:14px;margin-top:16px">
-        <h4 style="margin:0 0 8px 0;font-size:13.5px">?? Instant Mobile Web App Preview (Live Link):</h4>
+        <h4 style="margin:0 0 8px 0;font-size:13.5px">📱 Instant Mobile Web App Preview (Live Link):</h4>
         <div style="font-size:12px;color:#475569;margin-bottom:8px">Test the jeweller's branded mobile interface directly in your browser or phone without downloading:</div>
         <div style="display:flex;gap:10px;align-items:center">
-          <a href="https://master.vaultragold.com/api/admin/jeweller?token=preview" target="_blank" class="btn sm primary">?? Open Web App Preview ?</a>
+          <a href="https://master.vaultragold.com/api/admin/jeweller?token=preview" target="_blank" class="btn sm primary">🚀 Open Web App Preview ↗</a>
           <span class="sub">Pre-connected to Mumbai Server & Live Rates</span>
         </div>
       </div>
 
       <div style="display:flex;justify-content:space-between;gap:10px;margin-top:18px;padding-top:14px;border-top:1px solid #e2e8f0">
-        <button class="btn" onclick="setStudioStep(4)">? Back to Custom Domain</button>
-        <button class="btn green" onclick="toast('Jeweller app and shop setup completed! You can build or download above.')">? Setup Complete</button>
+        <button class="btn" onclick="setStudioStep(4)">← Back to Custom Domain</button>
+        <button class="btn green" onclick="toast('Jeweller app and shop setup completed! You can build or download above.')">✓ Setup Complete</button>
       </div>
     </div>`;
   }
@@ -427,11 +427,11 @@ function vStudio() {
       <div class="card pad" style="margin-bottom:12px">
         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
           <div>
-            <h3 style="margin:0 0 2px 0;font-size:16px">?? ${esc(a.business_name)}</h3>
-            <div class="sub">App Name: <b>${esc(d.app_name)}</b> ? Package: <code>${esc(d.bundle_id)}</code></div>
+            <h3 style="margin:0 0 2px 0;font-size:16px">👑 ${esc(a.business_name)}</h3>
+            <div class="sub">App Name: <b>${esc(d.app_name)}</b> • Package: <code>${esc(d.bundle_id)}</code></div>
           </div>
           <div style="display:flex;gap:8px;align-items:center">
-            <button class="btn sm" onclick="openShopAdmin('${a.id}')" style="background:#16a34a;color:#fff">?? Open Shop Admin ?</button>
+            <button class="btn sm" onclick="openShopAdmin('${a.id}')" style="background:#16a34a;color:#fff">🏪 Open Shop Admin ↗</button>
             <select class="select" style="width:auto;font-size:12px" onchange="studioStatus('${a.id}',this.value)">${s.statuses.map((x) => `<option value="${x.key}" ${x.key === a.app_status ? 'selected' : ''}>${x.label}</option>`).join('')}</select>
           </div>
         </div>
@@ -443,7 +443,7 @@ function vStudio() {
       <div class="studio-grid">
         <div style="min-width:0">${stepContent}</div>
         <div class="studio-preview-col">
-          <div class="sub" style="margin-bottom:8px;font-weight:700">?? Live Real-Time Phone Preview</div>
+          <div class="sub" style="margin-bottom:8px;font-weight:700">📱 Live Real-Time Phone Preview</div>
           <div id="studio-preview">${phone()}</div>
           <div class="sub" style="margin-top:10px">Connected to <code>https://master.vaultragold.com</code></div>
         </div>
