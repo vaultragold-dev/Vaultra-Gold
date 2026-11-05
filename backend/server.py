@@ -1,7 +1,7 @@
 """Vaultra DigiGold — Multi-tenant Digital Gold Platform Backend
 FastAPI + PostgreSQL (SQLAlchemy async)
 """
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Query
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from dotenv import load_dotenv
@@ -125,6 +125,23 @@ def gold_rate(jid: Optional[str] = None):
 def silver_rate(jid: Optional[str] = None):
     return _apply_margin(SILVER_PRICE["base"], "silver", jid)
 
+
+
+# --- Real-Time Rate Streaming (WebSocket) ---
+CONNECTED_WEBSOCKETS = set()
+
+async def broadcast_rates(payload: dict):
+    if not CONNECTED_WEBSOCKETS:
+        return
+    dead = set()
+    msg = json.dumps(payload)
+    for ws in list(CONNECTED_WEBSOCKETS):
+        try:
+            await ws.send_text(msg)
+        except Exception:
+            dead.add(ws)
+    for ws in dead:
+        CONNECTED_WEBSOCKETS.discard(ws)
 
 def price_payload(jid: Optional[str] = None):
     buy, sell = gold_rate(jid)
@@ -351,6 +368,9 @@ async def price_loop():
                     _set_live(PRICE, g, gp)
                     _set_live(SILVER_PRICE, s, sp)
                     RATE_FEED.update(source="mt5", last_live_at=now_utc(), error="")
+                    if CONNECTED_WEBSOCKETS:
+                        data = price_payload() | {"feed": rate_feed_status(), "type": "rate_tick"}
+                        asyncio.create_task(broadcast_rates(data))
                     if asyncio.get_event_loop().time() - last_save > 60:
                         last_save = asyncio.get_event_loop().time()
                         await _setting("last_live_rates", json.dumps({"g": g, "gp": gp, "s": s, "sp": sp, "at": now_iso()}))
@@ -699,6 +719,25 @@ async def add_to_pool(db: AsyncSession, txn: Transaction, customer: Customer):
 @api.get("/")
 async def root():
     return {"app": "Vaultra DigiGold", "version": "2.0"}
+
+
+
+@app.websocket("/ws/rates")
+@api.websocket("/ws/rates")
+async def websocket_rates(websocket: WebSocket):
+    await websocket.accept()
+    CONNECTED_WEBSOCKETS.add(websocket)
+    try:
+        init_data = price_payload() | {"feed": rate_feed_status(), "type": "initial"}
+        await websocket.send_text(json.dumps(init_data))
+        while True:
+            text_data = await websocket.receive_text()
+            if text_data == "ping":
+                await websocket.send_text(json.dumps({"type": "pong"}))
+    except (WebSocketDisconnect, Exception):
+        pass
+    finally:
+        CONNECTED_WEBSOCKETS.discard(websocket)
 
 
 @api.get("/price")

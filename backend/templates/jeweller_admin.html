@@ -440,9 +440,38 @@ async function boot() {
   if (!VIEWS[S.tab]) S.tab = 'dashboard';
   render(); LOAD[S.tab]?.(); if (S.tab !== 'dashboard') loadDash();
 }
+function applyShopLiveTick(data) {
+  if (!data || data.base_rate === undefined) return;
+  S.price = data;
+  const chip = $('#ratechip'); if (chip) chip.outerHTML = rateChip(S.price);
+  refreshLiveRates();
+}
+
+function startShopRatesWs() {
+  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const wsUrl = `${proto}//${window.location.host}/ws/rates`;
+  try {
+    const ws = new WebSocket(wsUrl);
+    ws.onmessage = (e) => {
+      try {
+        const payload = JSON.parse(e.data);
+        if (payload && payload.base_rate) applyShopLiveTick(payload);
+      } catch (_) {}
+    };
+    ws.onclose = () => setTimeout(startShopRatesWs, 2000);
+    ws.onerror = () => ws?.close();
+  } catch (_) {
+    setTimeout(startShopRatesWs, 3000);
+  }
+}
+startShopRatesWs();
+
 setInterval(async () => {
   if (!S.me) return;
-  try { S.price = await api('/price?jeweller_id=' + S.me.id); const chip = $('#ratechip'); if (chip) chip.outerHTML = rateChip(S.price); refreshLiveRates(); } catch {}
+  try {
+    S.price = await api('/price?jeweller_id=' + S.me.id);
+    applyShopLiveTick(S.price);
+  } catch {}
 }, 1500);
 // Customer redeem requests → Accept / Decline pop-up
 S.rrSeen = S.rrSeen || {};
