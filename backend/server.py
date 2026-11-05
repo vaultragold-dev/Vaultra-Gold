@@ -3203,9 +3203,10 @@ def _mt5_auth():
 async def _mt5_place(metal, volume):
     headers, params = _mt5_auth()
     symbol = MT5_SILVER_SYMBOL if metal == "silver" else MT5_GOLD_SYMBOL
+    vol = round(float(volume), 2)
     async with httpx.AsyncClient(timeout=15) as client:
         r = await client.post(_mt5_base() + "/order", params=params, headers=headers,
-                              json={"symbol": symbol, "type": "BUY", "volume": volume})
+                              json={"symbol": symbol, "type": "BUY", "volume": vol})
     try:
         d = r.json()
     except ValueError:
@@ -3223,13 +3224,13 @@ async def mt5_book(metal, add_grams=0.0, trigger="auto"):
         if not cfg["enabled"] or not MT5_RATES_URL:
             return None
         lot_g = cfg["silver_lot_g" if metal == "silver" else "gold_lot_g"]
-        step = cfg["step"] or 1.0
-        volume = round(math.floor(pend[metal] / lot_g / step + 1e-9) * step, 4)
-        if volume <= 0 or volume < cfg["min_volume"]:
+        step = cfg.get("step") or 0.1
+        volume = round(math.floor(pend[metal] / lot_g / step + 1e-9) * step, 2)
+        if volume <= 0 or volume < cfg.get("min_volume", 0.1):
             return None
         if trigger == "auto" and time.time() - MT5_LAST_FAIL[metal] < MT5_RETRY_AFTER:
             return None
-        volume = min(volume, round(math.floor(cfg["max_volume"] / step + 1e-9) * step, 4) or cfg["max_volume"])
+        volume = min(volume, round(math.floor(cfg["max_volume"] / step + 1e-9) * step, 2) or cfg["max_volume"])
         grams = r4(volume * lot_g)
         try:
             symbol, d = await _mt5_place(metal, volume)
