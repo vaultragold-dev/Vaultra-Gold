@@ -210,8 +210,8 @@ function vRates() {
   const head = `<div class="page-head"><div><h2>Live rates</h2><p>Base market rate before each store's commission.</p></div><button class="btn" onclick="loadRate()">Refresh</button></div>`;
   const r = S.rate; if (!r) return head + loading; const f = r.feed;
   return head + `<div class="grid g2">
-    <div class="card rate-card"><div class="coin"></div><div style="flex:1"><div class="label"><span class="dot ${r.live ? 'live' : ''}"></span> Gold · ${esc(f.gold_symbol)}</div><div class="value num">${r.has_live === false ? '—' : inr(r.base_rate)} <small>/g</small></div></div><div class="chg ${r.change_pct >= 0 ? 'up' : 'down'}">${r.change_pct >= 0 ? '▲' : '▼'} ${Math.abs(r.change_pct)}%</div></div>
-    <div class="card rate-card"><div class="coin silver"></div><div style="flex:1"><div class="label"><span class="dot ${r.live ? 'live' : ''}"></span> Silver · ${esc(f.silver_symbol)}</div><div class="value num">${r.has_live === false ? '—' : inr(r.silver.base_rate)} <small>/g</small></div></div><div class="chg ${r.silver.change_pct >= 0 ? 'up' : 'down'}">${r.silver.change_pct >= 0 ? '▲' : '▼'} ${Math.abs(r.silver.change_pct)}%</div></div></div>
+    <div class="card rate-card"><div class="coin"></div><div style="flex:1"><div class="label"><span class="dot ${r.live ? 'live' : ''}"></span> Gold · ${esc(f.gold_symbol)}</div><div class="value num" id="rates-view-gold-val" style="transition:all 0.25s ease-out">${r.has_live === false ? '—' : inr(r.base_rate)} <small>/g</small></div></div><div class="chg ${r.change_pct >= 0 ? 'up' : 'down'}" id="rates-view-gold-chg">${r.change_pct >= 0 ? '▲' : '▼'} ${Math.abs(r.change_pct)}%</div></div>
+    <div class="card rate-card"><div class="coin silver"></div><div style="flex:1"><div class="label"><span class="dot ${r.live ? 'live' : ''}"></span> Silver · ${esc(f.silver_symbol)}</div><div class="value num" id="rates-view-silver-val" style="transition:all 0.25s ease-out">${r.has_live === false ? '—' : inr(r.silver.base_rate)} <small>/g</small></div></div><div class="chg ${r.silver.change_pct >= 0 ? 'up' : 'down'}" id="rates-view-silver-chg">${r.silver.change_pct >= 0 ? '▲' : '▼'} ${Math.abs(r.silver.change_pct)}%</div></div></div>
     <div class="card section"><div class="card-h"><h3>Feed status</h3>${r.live ? '<span class="badge green">Live</span>' : r.offline ? '<span class="badge red">Feed down</span>' : '<span class="badge amber">Indicative</span>'}</div><div style="padding:8px 20px 16px">
       <div class="kv"><span>Last live tick</span><b>${f.last_live_at ? dt(f.last_live_at) : '—'}</b></div>
       <div class="kv"><span>Quote units</span><b>Gold per ${f.gold_unit_grams}g · Silver per ${f.silver_unit_grams}g</b></div>
@@ -288,45 +288,101 @@ let lastSilverRate = null;
 function applyLiveTick(data) {
   if (!data || data.base_rate === undefined) return;
   S.price = data;
+  S.rate = data;
   if (data.feed) S.feed = data.feed;
 
-  // 1. Update top ratechip (Gold & Silver)
-  const chip = $('#ratechip');
-  if (chip) chip.outerHTML = rateChip(S.price);
+  const goldUp = lastGoldRate && data.base_rate > lastGoldRate;
+  const goldDown = lastGoldRate && data.base_rate < lastGoldRate;
+  const sRate = data.silver?.base_rate;
+  const silverUp = lastSilverRate && sRate && sRate > lastSilverRate;
+  const silverDown = lastSilverRate && sRate && sRate < lastSilverRate;
 
-  // 2. Update feed alert banner
-  const alertEl = $('#feedalert');
-  if (alertEl) alertEl.innerHTML = feedAlert(S.price);
+  // 1. Top Header Ratechip (Gold & Silver numbers with green/red pulse)
+  const gChip = $('#ratechip-gold-val');
+  if (gChip) {
+    gChip.textContent = inr(data.base_rate);
+    if (goldUp || goldDown) {
+      gChip.style.color = goldUp ? '#16a34a' : '#dc2626';
+      setTimeout(() => { if (gChip) gChip.style.color = 'inherit'; }, 500);
+    }
+  }
+  const sChip = $('#ratechip-silver-val');
+  if (sChip && sRate !== undefined) {
+    sChip.textContent = inr(sRate);
+    if (silverUp || silverDown) {
+      sChip.style.color = silverUp ? '#16a34a' : '#dc2626';
+      setTimeout(() => { if (sChip) sChip.style.color = 'inherit'; }, 500);
+    }
+  }
+  if (!gChip || !sChip) {
+    const chip = $('#ratechip');
+    if (chip) chip.outerHTML = rateChip(S.price);
+  }
 
-  // 3. Update Overview Market Feed Box synchronously with green/red tick animation
+  // 2. Overview Market Feed Card
   const gBox = $('#feed-box-gold-rate');
   if (gBox) {
     const gText = inr(data.base_rate) + '/g';
     if (gBox.textContent !== gText) {
-      const up = lastGoldRate && data.base_rate > lastGoldRate;
-      const down = lastGoldRate && data.base_rate < lastGoldRate;
       gBox.textContent = gText;
-      gBox.style.color = up ? '#16a34a' : down ? '#dc2626' : 'inherit';
-      gBox.style.fontWeight = '800';
-      setTimeout(() => { if (gBox) { gBox.style.color = 'inherit'; gBox.style.fontWeight = '700'; } }, 500);
+      if (goldUp || goldDown) {
+        gBox.style.color = goldUp ? '#16a34a' : '#dc2626';
+        gBox.style.fontWeight = '800';
+        setTimeout(() => { if (gBox) { gBox.style.color = 'inherit'; gBox.style.fontWeight = '700'; } }, 500);
+      }
     }
   }
 
   const sBox = $('#feed-box-silver-rate');
-  if (sBox && data.silver) {
-    const sText = inr(data.silver.base_rate) + '/g';
+  if (sBox && sRate !== undefined) {
+    const sText = inr(sRate) + '/g';
     if (sBox.textContent !== sText) {
-      const up = lastSilverRate && data.silver.base_rate > lastSilverRate;
-      const down = lastSilverRate && data.silver.base_rate < lastSilverRate;
       sBox.textContent = sText;
-      sBox.style.color = up ? '#16a34a' : down ? '#dc2626' : 'inherit';
-      sBox.style.fontWeight = '800';
-      setTimeout(() => { if (sBox) { sBox.style.color = 'inherit'; sBox.style.fontWeight = '700'; } }, 500);
+      if (silverUp || silverDown) {
+        sBox.style.color = silverUp ? '#16a34a' : '#dc2626';
+        sBox.style.fontWeight = '800';
+        setTimeout(() => { if (sBox) { sBox.style.color = 'inherit'; sBox.style.fontWeight = '700'; } }, 500);
+      }
     }
   }
 
+  // 3. Market & Feed Full View (tab 'rates')
+  const rvGold = $('#rates-view-gold-val');
+  if (rvGold) {
+    rvGold.innerHTML = `${inr(data.base_rate)} <small>/g</small>`;
+    if (goldUp || goldDown) {
+      rvGold.style.color = goldUp ? '#16a34a' : '#dc2626';
+      setTimeout(() => { if (rvGold) rvGold.style.color = 'inherit'; }, 500);
+    }
+  }
+  const rvGoldChg = $('#rates-view-gold-chg');
+  if (rvGoldChg && data.change_pct !== undefined) {
+    const up = data.change_pct >= 0;
+    rvGoldChg.className = `chg ${up ? 'up' : 'down'}`;
+    rvGoldChg.textContent = `${up ? '▲' : '▼'} ${Math.abs(data.change_pct)}%`;
+  }
+
+  const rvSilver = $('#rates-view-silver-val');
+  if (rvSilver && sRate !== undefined) {
+    rvSilver.innerHTML = `${inr(sRate)} <small>/g</small>`;
+    if (silverUp || silverDown) {
+      rvSilver.style.color = silverUp ? '#16a34a' : '#dc2626';
+      setTimeout(() => { if (rvSilver) rvSilver.style.color = 'inherit'; }, 500);
+    }
+  }
+  const rvSilverChg = $('#rates-view-silver-chg');
+  if (rvSilverChg && data.silver?.change_pct !== undefined) {
+    const up = data.silver.change_pct >= 0;
+    rvSilverChg.className = `chg ${up ? 'up' : 'down'}`;
+    rvSilverChg.textContent = `${up ? '▲' : '▼'} ${Math.abs(data.silver.change_pct)}%`;
+  }
+
+  // 4. Feed Alert Banner
+  const alertEl = $('#feedalert');
+  if (alertEl) alertEl.innerHTML = feedAlert(S.price);
+
   lastGoldRate = data.base_rate;
-  if (data.silver) lastSilverRate = data.silver.base_rate;
+  if (sRate !== undefined) lastSilverRate = sRate;
 }
 
 let ws = null;

@@ -86,8 +86,8 @@ function rateChip(price) {
   const live = price.live;
   const nodata = price.has_live === false;
   return `<div class="ratechip" id="ratechip"><span class="dot ${live ? 'live' : ''}"></span>
-    <span>Gold <b class="num">${nodata ? '—' : inr(price.base_rate)}</b>/g</span><span class="sep"></span>
-    <span>Silver <b class="num">${nodata ? '—' : inr(price.silver?.base_rate)}</b>/g</span>
+    <span>Gold <b class="num" id="ratechip-gold-val" style="transition:color 0.25s ease-out">${nodata ? '—' : inr(price.base_rate)}</b>/g</span><span class="sep"></span>
+    <span>Silver <b class="num" id="ratechip-silver-val" style="transition:color 0.25s ease-out">${nodata ? '—' : inr(price.silver?.base_rate)}</b>/g</span>
     <span class="sep"></span><span style="color:${price.offline ? 'var(--red)' : 'var(--mute)'}">${live ? 'Live' : price.offline ? 'Feed down' : 'Indicative'}</span></div>`;
 }
 

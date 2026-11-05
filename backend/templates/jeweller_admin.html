@@ -440,11 +440,43 @@ async function boot() {
   if (!VIEWS[S.tab]) S.tab = 'dashboard';
   render(); LOAD[S.tab]?.(); if (S.tab !== 'dashboard') loadDash();
 }
+let lastShopGold = null;
+let lastShopSilver = null;
+
 function applyShopLiveTick(data) {
   if (!data || data.base_rate === undefined) return;
   S.price = data;
-  const chip = $('#ratechip'); if (chip) chip.outerHTML = rateChip(S.price);
+
+  const goldUp = lastShopGold && data.base_rate > lastShopGold;
+  const goldDown = lastShopGold && data.base_rate < lastShopGold;
+  const sRate = data.silver?.base_rate;
+  const silverUp = lastShopSilver && sRate && sRate > lastShopSilver;
+  const silverDown = lastShopSilver && sRate && sRate < lastShopSilver;
+
+  const gChip = $('#ratechip-gold-val');
+  if (gChip) {
+    gChip.textContent = inr(data.base_rate);
+    if (goldUp || goldDown) {
+      gChip.style.color = goldUp ? '#16a34a' : '#dc2626';
+      setTimeout(() => { if (gChip) gChip.style.color = 'inherit'; }, 500);
+    }
+  }
+  const sChip = $('#ratechip-silver-val');
+  if (sChip && sRate !== undefined) {
+    sChip.textContent = inr(sRate);
+    if (silverUp || silverDown) {
+      sChip.style.color = silverUp ? '#16a34a' : '#dc2626';
+      setTimeout(() => { if (sChip) sChip.style.color = 'inherit'; }, 500);
+    }
+  }
+  if (!gChip || !sChip) {
+    const chip = $('#ratechip');
+    if (chip) chip.outerHTML = rateChip(S.price);
+  }
+
   refreshLiveRates();
+  lastShopGold = data.base_rate;
+  if (sRate !== undefined) lastShopSilver = sRate;
 }
 
 function startShopRatesWs() {
