@@ -25,6 +25,7 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://vaultra:vaultra_secure_db_password@db:5432/vaultra_digigold
     volumes:
+      - ./backend:/app
       - ./backend/uploads:/app/uploads
 
 volumes:
