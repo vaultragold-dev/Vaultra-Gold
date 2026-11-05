@@ -112,18 +112,82 @@ function vJewellers() {
 }
 async function toggleJ(id) { const j = S.jewellers.find((x) => x.id === id); if (j.status === 'active' && !confirm(`Suspend ${j.business_name}? Their app and panel stop working.`)) return; await safe(async () => { await api(`/master/jewellers/${id}/toggle`, { method: 'POST' }); S.jewellers = await api('/master/jewellers'); toast('Updated'); }, 'jewellers'); }
 function onboard() {
-  const f = (id, l, ph = '', t = 'text', full) => `<div class="field" ${full ? 'style="grid-column:1/-1"' : ''}><label>${l}</label><input class="input" id="${id}" type="${t}" placeholder="${ph}"></div>`;
-  openModal(`<div class="modal-h"><div><h3>Onboard jeweller</h3><p>Creates their store, panel login and a starter catalogue</p></div><button class="x" onclick="closeModal()">×</button></div>
-    <div class="modal-b grid g2">${f('ob_b', 'Business name', 'Sharma Jewellers', 'text', 1)}${f('ob_o', 'Owner name')}${f('ob_p', 'Phone', '10 digits', 'tel')}${f('ob_e', 'Email', 'owner@store.com', 'email')}${f('ob_pw', 'Panel password', 'min 4 characters', 'password')}
-      ${f('ob_c', 'City')}${f('ob_s', 'State')}${f('ob_d', 'App domain (optional)', 'gold.store.in', 'text', 1)}
-      <div class="field"><label>Brand colour</label><input class="input" id="ob_col" type="color" value="#B8892B" style="padding:4px"></div>${f('ob_m', 'Min. redemption (g)', '1', 'number')}</div>
-    <div class="modal-f"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" onclick="saveOnboard()" id="ob-save">Create store</button></div>`, true);
+  const f = (id, l, ph = '', t = 'text', full = false) => `<div class="field" ${full ? 'style="grid-column:1/-1"' : ''}><label>${l}</label><input class="input" id="${id}" type="${t}" placeholder="${ph}"></div>`;
+  openModal(`<div class="modal-h"><div><h3>Onboard New Jeweller</h3><p>Creates store, custom Shop Admin subdomain, and initial gold/silver catalogue</p></div><button class="x" onclick="closeModal()">?</button></div>
+    <div class="modal-b grid g2">
+      ${f('ob_b', 'Business name *', 'e.g. Sharma Gold & Jewellers', 'text', true)}
+      ${f('ob_o', 'Owner name *', 'e.g. Rajesh Sharma')}
+      ${f('ob_p', 'Phone (10 digits) *', '9876543210', 'tel')}
+      ${f('ob_e', 'Login Email *', 'owner@sharmagold.com', 'email')}
+      ${f('ob_pw', 'Shop Panel Password *', 'Min 6 characters', 'password')}
+      ${f('ob_c', 'City *', 'e.g. Mumbai')}
+      ${f('ob_s', 'State *', 'e.g. Maharashtra')}
+      <div class="field" style="grid-column:1/-1">
+        <label>Jeweller Main Website (Root Domain)</label>
+        <input class="input" id="ob_web" placeholder="e.g. sharmajewellers.com" oninput="autoDoms(this.value)">
+        <div class="hint">Type their domain (without www/https); subdomains will auto-fill below</div>
+      </div>
+      <div class="field">
+        <label>Shop Admin Portal Domain</label>
+        <input class="input" id="ob_admin_d" placeholder="shop.sharmajewellers.com">
+      </div>
+      <div class="field">
+        <label>Customer App Domain (Web / PWA)</label>
+        <input class="input" id="ob_app_d" placeholder="gold.sharmajewellers.com">
+      </div>
+      <div style="background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:12px;font-size:12px;color:#166534;grid-column:1/-1">
+        <div style="font-weight:700;margin-bottom:4px">?? DNS Instructions for Jeweller (GoDaddy / Hostinger / Cloudflare):</div>
+        <div>1. Add <b>CNAME</b> Record: Host = <code>shop</code> &bull; Points To = <code>master.vaultragold.com</code></div>
+        <div>2. Add <b>CNAME</b> Record: Host = <code>gold</code> &bull; Points To = <code>master.vaultragold.com</code></div>
+        <div class="sub" style="margin-top:4px">Once added, <code>https://shop.their-domain.com</code> automatically opens their branded Shop Admin Panel!</div>
+      </div>
+      <div class="field"><label>Brand colour</label><input class="input" id="ob_col" type="color" value="#D4AF37" style="padding:4px"></div>
+      ${f('ob_m', 'Min. redemption (grams)', '1.0', 'number')}
+    </div>
+    <div class="modal-f"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" onclick="saveOnboard()" id="ob-save">Create Store & Generate App</button></div>`, true);
+}
+function autoDoms(val) {
+  val = val.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0];
+  if (!val) return;
+  const adminInp = document.getElementById('ob_admin_d');
+  const appInp = document.getElementById('ob_app_d');
+  if (adminInp) adminInp.value = 'shop.' + val;
+  if (appInp) appInp.value = 'gold.' + val;
 }
 async function saveOnboard() {
-  const v = (id) => $('#' + id).value.trim();
-  try { await api('/master/jewellers', { method: 'POST', body: { business_name: v('ob_b'), owner_name: v('ob_o'), phone: v('ob_p'), email: v('ob_e'), password: $('#ob_pw').value, city: v('ob_c'), state: v('ob_s'), domain: v('ob_d'), primary_color: v('ob_col'), min_redemption_grams: Number(v('ob_m') || 1) } });
-    closeModal(); toast('Store created'); loadJ(); } catch (e) { toast(e.message, true); }
+  const v = (id) => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
+  if (!v('ob_b') || !v('ob_o') || !v('ob_p') || !v('ob_e') || !document.getElementById('ob_pw').value) {
+    toast('Please fill all required fields (*)', true);
+    return;
+  }
+  try {
+    const res = await api('/master/jewellers', {
+      method: 'POST',
+      body: {
+        business_name: v('ob_b'),
+        owner_name: v('ob_o'),
+        phone: v('ob_p'),
+        email: v('ob_e'),
+        password: document.getElementById('ob_pw').value,
+        city: v('ob_c'),
+        state: v('ob_s'),
+        domain: v('ob_app_d'),
+        admin_domain: v('ob_admin_d'),
+        primary_color: v('ob_col') || '#D4AF37',
+        min_redemption_grams: Number(v('ob_m') || 1)
+      }
+    });
+    closeModal();
+    toast('Shop onboarded successfully!');
+    loadJ();
+    if (res && res.id) {
+      setTimeout(() => { go('studio'); studioSelect(res.id); }, 400);
+    }
+  } catch (e) {
+    toast(e.message, true);
+  }
 }
+
 function domains(id) {
   const j = S.jewellers.find((x) => x.id === id);
   openModal(`<div class="modal-h"><div><h3>Custom domains</h3><p>${esc(j.business_name)}</p></div><button class="x" onclick="closeModal()">×</button></div>

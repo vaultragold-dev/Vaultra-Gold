@@ -599,6 +599,7 @@ class JewellerOnboard(BaseModel):
     primary_color: str = "#D4AF37"
     secondary_color: str = "#1A1A2E"
     domain: str = ""
+    admin_domain: str = ""
     min_redemption_grams: float = 1.0
 
 
@@ -1982,6 +1983,7 @@ async def master_onboard_jeweller(body: JewellerOnboard, admin: MasterAdmin = De
         city=body.city, state=body.state, pincode=body.pincode,
         logo_url=body.logo_url, primary_color=body.primary_color,
         secondary_color=body.secondary_color, domain=normalize_domain(body.domain),
+        admin_domain=normalize_domain(body.admin_domain),
         min_redemption_grams=body.min_redemption_grams,
     )
     db.add(j)
@@ -2210,167 +2212,25 @@ async def update_margins(body: MarginUpdate, jeweller: Jeweller = Depends(get_cu
     return jeweller_dict(jeweller) | {"price": price_payload(jeweller.id)}
 
 
-# ═══════════════════ SEED DATA ════════════════════════════════════════════════
+# ------------------- SEED DATA (PRODUCTION) -------------------
 async def seed_data():
-    """Seed demo jeweller, customers, and master admin."""
+    """Ensure master admins exist. Clean production state with no demo data."""
     async with AsyncSessionLocal() as db:
-        # Check if already seeded
         existing = await db.execute(select(MasterAdmin).where(MasterAdmin.username == "admin"))
-        if existing.scalar_one_or_none():
-            existing_master = await db.execute(select(MasterAdmin).where(MasterAdmin.username == "master"))
-            if not existing_master.scalar_one_or_none():
-                db.add(MasterAdmin(
-                    id=str(uuid.uuid4()), username="master", name="Vaultra Master Admin",
-                    password_hash=bcrypt.hashpw("Vaultra@2026".encode(), bcrypt.gensalt()).decode()
-                ))
-                await db.commit()
-            logger.info("Database already seeded")
-            return
-
-        # Master admins (both 'admin'/'admin123' and 'master'/'Vaultra@2026')
-        admin = MasterAdmin(
-            id=str(uuid.uuid4()), username="admin", name="Vaultra Super Admin",
-            password_hash=bcrypt.hashpw("admin123".encode(), bcrypt.gensalt()).decode()
-        )
-        admin2 = MasterAdmin(
-            id=str(uuid.uuid4()), username="master", name="Vaultra Master Admin",
-            password_hash=bcrypt.hashpw("Vaultra@2026".encode(), bcrypt.gensalt()).decode()
-        )
-        db.add(admin)
-        db.add(admin2)
-
-        # Demo jeweller
-        jeweller = Jeweller(
-            id="demo-jeweller-001", business_name="Sharma Gold & Jewellers",
-            owner_name="Rajesh Sharma", phone="9999000001",
-            email="sharma@vaultra.in",
-            password_hash=bcrypt.hashpw("jeweller123".encode(), bcrypt.gensalt()).decode(),
-            address="Shop No. 12, Gold Market", city="Mumbai", state="Maharashtra",
-            pincode="400001", primary_color="#D4AF37", secondary_color="#1A1A2E",
-            min_redemption_grams=1.0,
-        )
-        db.add(jeweller)
-
-        # Second jeweller
-        jeweller2 = Jeweller(
-            id="demo-jeweller-002", business_name="Patel Jewellery House",
-            owner_name="Amit Patel", phone="9999000002",
-            email="patel@vaultra.in",
-            password_hash=bcrypt.hashpw("jeweller123".encode(), bcrypt.gensalt()).decode(),
-            address="15, Jewellers Lane", city="Ahmedabad", state="Gujarat",
-            pincode="380001", primary_color="#B8860B", secondary_color="#2D2D44",
-            min_redemption_grams=0.5,
-        )
-        db.add(jeweller2)
-
-        await db.flush()
-
-        # Default products for jewellers
-        for jid in [jeweller.id, jeweller2.id]:
-            products_data = [
-                ("Heritage 24K Necklace", "necklaces", 12.5, 4850, "Trending"),
-                ("Minimalist Gold Bangle", "bangles", 8.2, 2650, "Bestseller"),
-                ("Classic Solitaire Ring", "rings", 3.4, 1150, "New"),
-                ("Rope Twist Chain", "chains", 6.8, 1980, "Trending"),
-                ("Royal Kada", "kadas", 15.0, 5200, "Premium"),
-                ("Lakshmi Pendant Set", "pendant-sets", 9.6, 3400, "Festive"),
-                ("Gold Dial Watch", "watches", 18.0, 7900, "Luxury"),
-                ("Tanmaniya Mangalsutra", "necklaces", 7.1, 2300, "Classic"),
-            ]
-            for name, cat, grams, mc, tag in products_data:
-                db.add(Product(
-                    id=str(uuid.uuid4()), jeweller_id=jid, name=name,
-                    category=cat, grams=grams, making_charges=mc, tag=tag,
-                    description=f"Exquisite {name} in hallmarked gold. Weight: {grams}g. BIS Hallmarked."
-                ))
-
-        # Create initial pool
-        pool = PoolAccumulator(id=str(uuid.uuid4()), total_grams=0.0, threshold_grams=POOL_THRESHOLD)
-        db.add(pool)
-
-        # Demo customers for jeweller 1
-        base = now_utc()
-        demo_customers = [
-            ("9876543210", "Aarav", "Sharma", "approved"),
-            ("9812345670", "Diya", "Patel", "pending"),
-            ("9823456781", "Kabir", "Singh", "not_submitted"),
-            ("9834567892", "Meera", "Iyer", "approved"),
-        ]
-        for phone, fname, lname, kyc in demo_customers:
-            kyc_data = {}
-            if kyc != "not_submitted":
-                kyc_data = {
-                    "full_name": f"{fname} {lname}", "aadhaar": f"{random.randint(200000000000, 999999999999)}",
-                    "pan": f"{''.join(random.choice('ABCDEFGHJKL') for _ in range(5))}{random.randint(1000, 9999)}{'ABCFGHLPT'[random.randint(0,8)]}",
-                    "dob": f"19{random.randint(80, 99)}-0{random.randint(1,9)}-{random.randint(10,28)}",
-                    "submitted_at": now_iso(),
-                }
-                if kyc == "approved":
-                    kyc_data["reviewed_by"] = "Rajesh Sharma"
-                    kyc_data["reviewed_at"] = now_iso()
-
-            c = Customer(
-                id=str(uuid.uuid4()), jeweller_id=jeweller.id, phone=phone,
-                first_name=fname, last_name=lname,
-                wallet_id=gen_wallet_id(), referral_code=gen_referral_code(),
-                kyc_status=kyc, kyc_data=kyc_data,
-                gold_grams=0.0, silver_grams=0.0, invested=0.0,
-                created_at=base - timedelta(days=random.randint(10, 60))
-            )
-            db.add(c)
-            await db.flush()
-
-            # Seed some transactions
-            seed_txns = []
-            for _ in range(random.randint(2, 4)):
-                rate = r2(7120 + random.uniform(-60, 120))
-                amount = float(random.choice([1000, 2000, 2500, 5000]))
-                grams = r4(amount / rate)
-                c.gold_grams = r4(c.gold_grams + grams)
-                c.invested = r2(c.invested + amount)
-                gst = r2(amount * GST_RATE)
-                txn = Transaction(
-                    id=str(uuid.uuid4()), invoice_no=invoice_no(), customer_id=c.id,
-                    jeweller_id=jeweller.id, type=random.choice(["buy", "buy", "sip"]),
-                    grams=grams, rate=rate, amount=amount, gst=gst,
-                    total=r2(amount + gst), method="upi", status="completed",
-                    pool_contribution=True,
-                    created_at=base - timedelta(days=random.randint(1, 30))
-                )
-                db.add(txn)
-                seed_txns.append((txn, c, grams))
-                pool.total_grams = r4(pool.total_grams + grams)
-
-            # Flush transactions first so FKs are satisfied
-            await db.flush()
-            for txn, cust, g in seed_txns:
-                db.add(PoolContribution(
-                    id=str(uuid.uuid4()), pool_id=pool.id, transaction_id=txn.id,
-                    customer_id=cust.id, jeweller_id=jeweller.id, grams=g
-                ))
-
-        # Demo customers for jeweller 2
-        for phone, fname, lname, kyc in [("9845678903", "Rohan", "Gupta", "approved"), ("9856789014", "Ananya", "Reddy", "pending")]:
-            kyc_data = {}
-            if kyc != "not_submitted":
-                kyc_data = {"full_name": f"{fname} {lname}", "aadhaar": f"{random.randint(200000000000, 999999999999)}",
-                            "pan": f"ABCDE{random.randint(1000, 9999)}F", "submitted_at": now_iso()}
-                if kyc == "approved":
-                    kyc_data["reviewed_by"] = "Amit Patel"
-                    kyc_data["reviewed_at"] = now_iso()
-            c = Customer(
-                id=str(uuid.uuid4()), jeweller_id=jeweller2.id, phone=phone,
-                first_name=fname, last_name=lname,
-                wallet_id=gen_wallet_id(), referral_code=gen_referral_code(),
-                kyc_status=kyc, kyc_data=kyc_data,
-                gold_grams=r4(random.uniform(1, 5)), silver_grams=0.0,
-                invested=r2(random.uniform(5000, 30000)),
-                created_at=base - timedelta(days=random.randint(10, 40))
-            )
-            db.add(c)
-
+        if not existing.scalar_one_or_none():
+            db.add(MasterAdmin(
+                id=str(uuid.uuid4()), username="admin", name="Vaultra Super Admin",
+                password_hash=bcrypt.hashpw("admin123".encode(), bcrypt.gensalt()).decode()
+            ))
+        existing_master = await db.execute(select(MasterAdmin).where(MasterAdmin.username == "master"))
+        if not existing_master.scalar_one_or_none():
+            db.add(MasterAdmin(
+                id=str(uuid.uuid4()), username="master", name="Vaultra Master Admin",
+                password_hash=bcrypt.hashpw("Vaultra@2026".encode(), bcrypt.gensalt()).decode()
+            ))
         await db.commit()
-        logger.info("Seeded demo data with 2 jewellers, 6 customers, master admin")
+        logger.info("Master admins verified - clean production database")
+
 
 
 # ═══════════════════ ADMIN WEB PANELS ═════════════════════════════════════════

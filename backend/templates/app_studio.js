@@ -140,121 +140,340 @@ function stepper(a) {
   return `<div class="stepper">${st.map((s, i) => `<div class="step ${i < cur ? 'done' : i === cur ? 'on' : ''}"><span>${i < cur ? '✓' : i + 1}</span><b>${s.label}</b></div>`).join('')}</div>`;
 }
 
+S.studioStep = S.studioStep || 1;
+function setStudioStep(step) {
+  S.studioStep = step;
+  render();
+}
+async function studioSaveAndNext(nextStep) {
+  const b = document.getElementById('studio-save'); if (b) b.disabled = true;
+  try {
+    const r = await api('/master/app-studio/' + S.studioSel, { method: 'PUT', body: S.draft });
+    S.studio.apps = S.studio.apps.map((x) => x.id === r.id ? r : x);
+    pickDraft();
+    toast('Step details saved successfully!');
+    if (nextStep) S.studioStep = nextStep;
+    render();
+  } catch (e) {
+    toast(e.message, true);
+    if (b) b.disabled = false;
+  }
+}
+
 function vStudio() {
-  const head = ph('App Studio', 'Brand each shop\'s Android & iOS app, compile real .APK / .AAB / .IPA binaries in 1 click, and download them directly.');
+  const head = ph('App Studio ? Multi-Tenant App Builder', 'Guided 5-step wizard to brand, configure, domain-link and compile native Android (.APK / .AAB) and iOS apps per jeweller.');
   const s = S.studio; if (!s) return head + loading;
-  if (!s.apps.length) return head + '<div class="card"><div class="empty"><b>No shops yet</b></div></div>';
+  if (!s.apps.length) return head + '<div class="card"><div class="empty"><b>No shops yet. Go to Shops -> Onboard Shop to add your first jeweller.</b></div></div>';
   const a = s.apps.find((x) => x.id === S.studioSel); const d = S.draft;
+  if (!a || !d) return head + '<div class="card"><div class="empty"><b>Select a shop to begin</b></div></div>';
+
   const label = Object.fromEntries(s.statuses.map((x) => [x.key, x.label]));
-  const list = `<div class="card studio-list">${s.apps.map((x) => `<button class="studio-item ${x.id === S.studioSel ? 'on' : ''}" onclick="studioSelect('${x.id}')" data-testid="studio-shop-${x.id}">
-      <div><b>${esc(x.app_name || x.business_name)}</b><div class="sub">${esc(x.business_name)}${x.city ? ' · ' + esc(x.city) : ''}</div></div>
-      <span class="badge ${x.app_status === 'live' ? 'green' : x.app_status === 'details_pending' ? 'amber' : 'gold'}">${label[x.app_status]}</span></button>`).join('')}</div>`;
-  const nextStatus = { config_ready: 'built', built: 'submitted', submitted: 'live' }[a.app_status];
-  const themes = Object.entries(s.presets).map(([key, P]) => `<button class="theme-opt ${d.theme_preset === key ? 'on' : ''}" onclick="dset('theme_preset','${key}',true)" data-testid="theme-${key}">
-      <div class="sw">${[P.primaryColor, P.secondaryColor, P.accentColor, P.backgroundColor].map((c) => `<i style="background:${c}"></i>`).join('')}</div><b>${P.label}</b><span>Radius ${P.cardRadius} · ${P.homeLayout.slice(0, 3).map((x) => SECTION_LABEL[x]).join(' → ')}</span></button>`).join('');
+  const list = `<div class="card studio-list" style="margin-bottom:14px"><div style="padding:10px 14px;font-size:12px;font-weight:700;color:#64748b;border-bottom:1px solid #e2e8f0">SELECT JEWELLER STORE</div>${s.apps.map((x) => `<button class="studio-item ${x.id === S.studioSel ? 'on' : ''}" onclick="studioSelect('${x.id}')" data-testid="studio-shop-${x.id}">
+      <div><b>${esc(x.app_name || x.business_name)}</b><div class="sub">${esc(x.business_name)}${x.city ? ' ? ' + esc(x.city) : ''}</div></div>
+      <span class="badge ${x.app_status === 'live' ? 'green' : x.app_status === 'details_pending' ? 'amber' : 'gold'}">${label[x.app_status] || x.app_status}</span></button>`).join('')}</div>`;
 
   const serverIp = window.location.hostname || '13.233.54.98';
   const appHostPart = (d.domain || '').split('.')[0] || 'gold';
-  const adminHostPart = (d.admin_domain || '').split('.')[0] || 'admin';
+  const adminHostPart = (d.admin_domain || '').split('.')[0] || 'shop';
+
+  const wizardTabs = `<div style="display:flex;gap:6px;margin-bottom:14px;background:#f8fafc;padding:6px;border-radius:10px;border:1px solid #e2e8f0;overflow-x:auto">
+    <button class="btn ${S.studioStep === 1 ? 'primary' : 'ghost'}" onclick="setStudioStep(1)" style="flex:1;min-width:130px;font-size:12px;padding:8px 10px">
+      <b>1. Store Identity</b>
+    </button>
+    <button class="btn ${S.studioStep === 2 ? 'primary' : 'ghost'}" onclick="setStudioStep(2)" style="flex:1;min-width:130px;font-size:12px;padding:8px 10px">
+      <b>2. Theme & Visuals</b>
+    </button>
+    <button class="btn ${S.studioStep === 3 ? 'primary' : 'ghost'}" onclick="setStudioStep(3)" style="flex:1;min-width:130px;font-size:12px;padding:8px 10px">
+      <b>3. Rates & Margins</b>
+    </button>
+    <button class="btn ${S.studioStep === 4 ? 'primary' : 'ghost'}" onclick="setStudioStep(4)" style="flex:1;min-width:150px;font-size:12px;padding:8px 10px">
+      <b>4. Custom Subdomain & Shop Panel</b>
+    </button>
+    <button class="btn ${S.studioStep === 5 ? 'primary' : 'ghost'}" onclick="setStudioStep(5)" style="flex:1;min-width:150px;font-size:12px;padding:8px 10px">
+      <b>5. Cloud Build & Publish</b>
+    </button>
+  </div>`;
+
+  let stepContent = '';
+
+  if (S.studioStep === 1) {
+    stepContent = `<div class="card pad">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <h3 class="card-t" style="margin:0">Step 1: Store & App Identity</h3>
+        <span class="badge">Basic Details</span>
+      </div>
+      <p class="sub" style="margin-top:0;margin-bottom:14px">Set the public app name, Play Store / App Store bundle ID, support contacts and store listing.</p>
+      
+      <div class="field"><label>App Name (shown under app icon on customer phone) *</label><input class="input" id="st_name" maxlength="30" value="${esc(d.app_name)}" oninput="dset('app_name',this.value)"></div>
+      <div class="field"><label>App ID / Package Name *</label><input class="input" id="st_bundle" value="${esc(d.bundle_id)}" oninput="dset('bundle_id',this.value.toLowerCase())"><div class="hint">e.g. in.vaultra.${esc(a.business_name.split(' ')[0].toLowerCase())} ? Used for Play Store and App Store publishing ? cannot change after publish</div></div>
+      
+      <div class="grid g2">
+        <div class="field"><label>App Icon Logo (Square PNG, 1024x1024 best)</label><input type="file" accept="image/png,image/jpeg,image/webp" onchange="studioUpload(this,'logo_url')" id="st_logo">
+          ${d.logo_url ? `<div style="margin-top:6px;display:flex;align-items:center;gap:8px"><img src="${esc(d.logo_url)}" style="width:36px;height:36px;border-radius:6px;object-fit:contain;border:1px solid #cbd5e1"><span class="badge green">? Logo Uploaded</span></div>` : '<div class="hint">Fallback: Branded initial badge</div>'}
+        </div>
+        <div class="field"><label>Splash Screen Image (Optional PNG, 1242x2688)</label><input type="file" accept="image/png,image/jpeg" onchange="studioUpload(this,'splash_url')" id="st_splash">
+          ${d.splash_url ? `<div style="margin-top:6px;display:flex;align-items:center;gap:8px"><img src="${esc(d.splash_url)}" style="width:24px;height:48px;border-radius:4px;object-fit:cover;border:1px solid #cbd5e1"><span class="badge green">? Splash Uploaded</span></div>` : '<div class="hint">Fallback: Gradient splash screen</div>'}
+        </div>
+      </div>
+      
+      <div class="grid g2">
+        <div class="field"><label>App Release Version</label><input class="input" value="${esc(d.app_version)}" oninput="dset('app_version',this.value)"></div>
+        <div class="field"><label>Customer Support Email *</label><input class="input" value="${esc(d.support_email)}" oninput="dset('support_email',this.value)"></div>
+      </div>
+
+      <div style="margin-top:16px;padding-top:16px;border-top:1px solid #e2e8f0">
+        <h4 style="margin:0 0 10px 0;font-size:13.5px">Store Listing (Google Play & Apple App Store)</h4>
+        <div class="field"><label>Short Description (80 chars max for Play Store listing)</label><input class="input" maxlength="80" value="${esc(d.store_short)}" oninput="dset('store_short',this.value)"></div>
+        <div class="field"><label>Full Store Description</label><textarea class="input" rows="5" oninput="dset('store_long',this.value)">${esc(d.store_long)}</textarea></div>
+        <div class="field"><label>Search Keywords (comma-separated)</label><input class="input" maxlength="100" value="${esc(d.store_keywords)}" oninput="dset('store_keywords',this.value)"></div>
+      </div>
+
+      <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:18px;padding-top:14px;border-top:1px solid #e2e8f0">
+        <button class="btn primary" onclick="studioSaveAndNext(2)" id="studio-save">Save Details & Next: Theme & Visuals ?</button>
+      </div>
+    </div>`;
+  } else if (S.studioStep === 2) {
+    const themes = Object.entries(s.presets).map(([key, P]) => `<button class="theme-opt ${d.theme_preset === key ? 'on' : ''}" onclick="dset('theme_preset','${key}',true)" data-testid="theme-${key}">
+      <div class="sw">${[P.primaryColor, P.secondaryColor, P.accentColor, P.backgroundColor].map((c) => `<i style="background:${c}"></i>`).join('')}</div><b>${P.label}</b><span>Radius ${P.cardRadius} ? ${P.homeLayout.slice(0, 3).map((x) => SECTION_LABEL[x]).join(' ? ')}</span></button>`).join('');
+
+    stepContent = `<div class="card pad">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <h3 class="card-t" style="margin:0">Step 2: Theme & Visual Customizer</h3>
+        <span class="badge gold">Branding & Colors</span>
+      </div>
+      <p class="sub" style="margin-top:0;margin-bottom:14px">Choose a luxury jewellery preset or customize brand colors. The phone preview on the right updates instantly!</p>
+      
+      <div style="margin-bottom:16px"><label style="font-weight:700;font-size:12.5px;color:#334155">Curated Luxury Presets (Mandatory)</label>
+        <div class="themes" style="margin-top:8px">${themes}</div>
+      </div>
+
+      <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:14px;margin-top:14px">
+        <h4 style="margin:0 0 10px 0;font-size:13px;color:#0f172a">?? Professional Custom Color Override (Optional)</h4>
+        <div class="grid g2">
+          <div class="field"><label>Primary Gold Brand Color</label>
+            <div style="display:flex;gap:8px;align-items:center">
+              <input type="color" value="${esc(s.presets[d.theme_preset].primaryColor)}" onchange="dset('primary_color',this.value,true)" style="width:40px;height:38px;padding:2px;border-radius:6px;cursor:pointer">
+              <input class="input" value="${esc(s.presets[d.theme_preset].primaryColor)}" readonly style="flex:1">
+            </div>
+          </div>
+          <div class="field"><label>Secondary Accent Tone</label>
+            <div style="display:flex;gap:8px;align-items:center">
+              <input type="color" value="${esc(s.presets[d.theme_preset].secondaryColor)}" onchange="dset('secondary_color',this.value,true)" style="width:40px;height:38px;padding:2px;border-radius:6px;cursor:pointer">
+              <input class="input" value="${esc(s.presets[d.theme_preset].secondaryColor)}" readonly style="flex:1">
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div style="display:flex;justify-content:space-between;gap:10px;margin-top:18px;padding-top:14px;border-top:1px solid #e2e8f0">
+        <button class="btn" onclick="setStudioStep(1)">? Back to Identity</button>
+        <button class="btn primary" onclick="studioSaveAndNext(3)" id="studio-save">Save Theme & Next: Rates & Margins ?</button>
+      </div>
+    </div>`;
+  } else if (S.studioStep === 3) {
+    stepContent = `<div class="card pad">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <h3 class="card-t" style="margin:0">Step 3: Rates, Margins & Karat Controls</h3>
+        <span class="badge green">Pricing Engine</span>
+      </div>
+      <p class="sub" style="margin-top:0;margin-bottom:14px">Configure this jeweller's custom margins on top of the live MT5 MCX feed. Customers will see these exact calibrated prices in the app.</p>
+      
+      <div class="grid g2">
+        <div class="field">
+          <label>24K Gold Buy Markup (+?/gram)</label>
+          <input class="input num" type="number" step="1" value="${esc(a.gold_buy_markup_pct || 0)}" id="st_m_gold_markup" placeholder="0">
+          <div class="hint">Added to live base gold rate when customer buys</div>
+        </div>
+        <div class="field">
+          <label>24K Gold Sell Spread Discount (%)</label>
+          <input class="input num" type="number" step="0.5" value="${esc(a.gold_sell_discount_pct || 3.0)}" id="st_m_gold_spread" placeholder="3.0">
+          <div class="hint">Spread deducted when customer sells back to vault (standard 3%)</div>
+        </div>
+      </div>
+
+      <div class="grid g2" style="margin-top:8px">
+        <div class="field">
+          <label>22K Jewellery Rate Margin (+/- ?/gram)</label>
+          <input class="input num" type="number" step="1" value="${esc(a.gold22_commission_per_g || 0)}" id="st_m_gold22" placeholder="0">
+          <div class="hint">Adjusts live 22K (916 Hallmarked) rate for showroom shopping</div>
+        </div>
+        <div class="field">
+          <label>18K Jewellery Rate Margin (+/- ?/gram)</label>
+          <input class="input num" type="number" step="1" value="${esc(a.gold18_commission_per_g || 0)}" id="st_m_gold18" placeholder="0">
+          <div class="hint">Adjusts live 18K (750 Diamond Jewellery) rate for showroom shopping</div>
+        </div>
+      </div>
+
+      <div class="grid g2" style="margin-top:8px">
+        <div class="field">
+          <label>999 Silver Buy Markup (+?/gram)</label>
+          <input class="input num" type="number" step="0.5" value="${esc(a.silver_buy_markup_pct || 0)}" id="st_m_silver" placeholder="0">
+          <div class="hint">Added to live silver base rate</div>
+        </div>
+        <div class="field">
+          <label>Default Making Charge % (Catalogue)</label>
+          <input class="input num" type="number" step="1" value="12" placeholder="12" readonly>
+          <div class="hint">Applied when customers convert digital gold to physical ornaments</div>
+        </div>
+      </div>
+
+      <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px;margin-top:14px">
+        <div style="font-weight:700;font-size:12px;color:#0f172a;margin-bottom:6px">?? Live Preview of Customer App Rates (Calculated Right Now):</div>
+        <div style="display:flex;gap:12px;flex-wrap:wrap;font-size:12px">
+          <div>24K Gold: <b>?${(a.karats?.['24K'] || S.studio?.karats?.['24K'] || 0).toLocaleString('en-IN')} /g</b></div>
+          <div>22K Gold: <b>?${(a.karats?.['22K'] || S.studio?.karats?.['22K'] || 0).toLocaleString('en-IN')} /g</b></div>
+          <div>18K Gold: <b>?${(a.karats?.['18K'] || S.studio?.karats?.['18K'] || 0).toLocaleString('en-IN')} /g</b></div>
+          <div>Silver: <b>?${(a.silver_buy || S.studio?.price?.silver?.buy || 0).toLocaleString('en-IN')} /g</b></div>
+        </div>
+      </div>
+
+      <div style="display:flex;justify-content:space-between;gap:10px;margin-top:18px;padding-top:14px;border-top:1px solid #e2e8f0">
+        <button class="btn" onclick="setStudioStep(2)">? Back to Theme</button>
+        <button class="btn primary" onclick="saveMarginsAndNext(4)" id="studio-save">Save Margins & Next: Custom Domain ?</button>
+      </div>
+    </div>`;
+  } else if (S.studioStep === 4) {
+    stepContent = `<div class="card pad">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <h3 class="card-t" style="margin:0">Step 4: Custom Subdomain & Shop Admin Panel</h3>
+        <span class="badge blue">Domain & DNS</span>
+      </div>
+      <p class="sub" style="margin-top:0;margin-bottom:14px">Connect the jeweller's website so that <code>shop.jewellerdomain.com</code> automatically loads their private Shop Admin panel with SSL.</p>
+      
+      <div class="grid g2">
+        <div class="field">
+          <label>Jeweller Admin Portal Domain *</label>
+          <input class="input" id="st_admin_domain" placeholder="e.g. shop.sharmajewellers.in" value="${esc(d.admin_domain || '')}" oninput="dset('admin_domain',this.value)">
+          <div class="hint">Private portal for jeweller orders, KYC approval & rate controls</div>
+        </div>
+        <div class="field">
+          <label>Customer Web App Domain (PWA / Web Portal)</label>
+          <input class="input" id="st_domain" placeholder="e.g. gold.sharmajewellers.in" value="${esc(d.domain || '')}" oninput="dset('domain',this.value)">
+          <div class="hint">Online customer portal for live rates, SIP & catalogue</div>
+        </div>
+      </div>
+
+      <div style="background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:14px;margin:16px 0">
+        <div style="font-weight:700;color:#166534;font-size:13px;margin-bottom:6px">?? Exact DNS Records to Give the Jeweller:</div>
+        <div style="font-size:12px;color:#15803d;margin-bottom:10px">The jeweller opens their domain registrar (GoDaddy, Hostinger, Cloudflare, BigRock) and adds these 2 records:</div>
+        <table style="width:100%;font-size:12px;border-collapse:collapse;background:#fff;border-radius:6px;overflow:hidden;border:1px solid #86efac">
+          <thead>
+            <tr style="background:#dcfce7;text-align:left;color:#166534">
+              <th style="padding:6px 10px">Type</th>
+              <th style="padding:6px 10px">Host / Subdomain</th>
+              <th style="padding:6px 10px">Points To / Target</th>
+              <th style="padding:6px 10px">TTL</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr style="border-bottom:1px solid #e2e8f0">
+              <td style="padding:8px 10px;font-weight:700">CNAME</td>
+              <td style="padding:8px 10px"><code>${esc(adminHostPart)}</code></td>
+              <td style="padding:8px 10px"><code>master.vaultragold.com</code> (or A record to <code>${serverIp}</code>)</td>
+              <td style="padding:8px 10px">Automatic / 3600</td>
+            </tr>
+            <tr>
+              <td style="padding:8px 10px;font-weight:700">CNAME</td>
+              <td style="padding:8px 10px"><code>${esc(appHostPart)}</code></td>
+              <td style="padding:8px 10px"><code>master.vaultragold.com</code> (or A record to <code>${serverIp}</code>)</td>
+              <td style="padding:8px 10px">Automatic / 3600</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:14px 0">
+        <button class="btn primary" onclick="checkDomainDNS('${a.id}')" id="btn-check-dns">? Live Verify DNS Connection</button>
+        <button class="btn" onclick="openShopAdmin('${a.id}')" style="background:#16a34a;color:#fff">?? 1-Click Test Shop Admin ?</button>
+        <div id="dns-verify-result" style="font-size:12px;width:100%"></div>
+      </div>
+
+      <div style="display:flex;justify-content:space-between;gap:10px;margin-top:18px;padding-top:14px;border-top:1px solid #e2e8f0">
+        <button class="btn" onclick="setStudioStep(3)">? Back to Rates</button>
+        <button class="btn primary" onclick="studioSaveAndNext(5)" id="studio-save">Save Domains & Next: Build Center ?</button>
+      </div>
+    </div>`;
+  } else if (S.studioStep === 5) {
+    stepContent = `<div class="card pad">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <h3 class="card-t" style="margin:0">Step 5: Cloud Build & Store Publishing Center</h3>
+        <span class="badge gold">Production Compiles</span>
+      </div>
+      <p class="sub" style="margin-top:0;margin-bottom:14px">Compile real production Android (.APK / .AAB) and iOS binaries in the cloud. Once downloaded, upload directly to Google Play Console and Apple App Store!</p>
+
+      <div id="studio-build-box">
+        ${renderBuildCenter(a.id)}
+      </div>
+
+      <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:14px;margin-top:16px">
+        <h4 style="margin:0 0 8px 0;font-size:13.5px">?? Instant Mobile Web App Preview (Live Link):</h4>
+        <div style="font-size:12px;color:#475569;margin-bottom:8px">Test the jeweller's branded mobile interface directly in your browser or phone without downloading:</div>
+        <div style="display:flex;gap:10px;align-items:center">
+          <a href="https://master.vaultragold.com/api/admin/jeweller?token=preview" target="_blank" class="btn sm primary">?? Open Web App Preview ?</a>
+          <span class="sub">Pre-connected to Mumbai Server & Live Rates</span>
+        </div>
+      </div>
+
+      <div style="display:flex;justify-content:space-between;gap:10px;margin-top:18px;padding-top:14px;border-top:1px solid #e2e8f0">
+        <button class="btn" onclick="setStudioStep(4)">? Back to Custom Domain</button>
+        <button class="btn green" onclick="toast('Jeweller app and shop setup completed! You can build or download above.')">? Setup Complete</button>
+      </div>
+    </div>`;
+  }
 
   return head + `<div class="studio">
     ${list}
     <div class="studio-main">
-      <div class="card pad">${stepper(a)}
-        <div class="studio-actions">
-          <button class="btn primary" onclick="studioSave()" id="studio-save">💾 Save Branding Details</button>
-          ${nextStatus ? `<button class="btn" onclick="studioStatus('${a.id}','${nextStatus}')" id="studio-next">Mark as ${label[nextStatus]}</button>` : ''}
-          ${a.app_status !== 'details_pending' ? `<select class="select" style="width:auto" onchange="studioStatus('${a.id}',this.value)">${s.statuses.map((x) => `<option value="${x.key}" ${x.key === a.app_status ? 'selected' : ''}>${x.label}</option>`).join('')}</select>` : ''}
-        </div>
-        <div id="studio-build-box" style="margin-top:14px;padding-top:14px;border-top:1px solid #e5e7eb">
-          ${renderBuildCenter(a.id)}
-        </div>
-        <div style="background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:12px 14px;margin-top:14px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px">
+      <div class="card pad" style="margin-bottom:12px">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
           <div>
-            <h4 style="margin:0 0 3px 0;color:#166534;font-size:13.5px">🏪 ${esc(a.business_name)} — Shop Admin Portal</h4>
-            <div style="font-size:12px;color:#15803d">
-              Login Email: <b>${esc(a.email)}</b> &bull; Default Password: <code>jeweller123</code><br>
-              Direct Link: <a href="/api/admin/jeweller" target="_blank" style="color:#15803d;font-weight:700">${window.location.origin}/api/admin/jeweller</a>
-            </div>
+            <h3 style="margin:0 0 2px 0;font-size:16px">?? ${esc(a.business_name)}</h3>
+            <div class="sub">App Name: <b>${esc(d.app_name)}</b> ? Package: <code>${esc(d.bundle_id)}</code></div>
           </div>
-          <button class="btn primary" onclick="openShopAdmin('${a.id}')" style="background:#16a34a">
-            🚀 1-Click Login as Shop Admin ↗
-          </button>
+          <div style="display:flex;gap:8px;align-items:center">
+            <button class="btn sm" onclick="openShopAdmin('${a.id}')" style="background:#16a34a;color:#fff">?? Open Shop Admin ?</button>
+            <select class="select" style="width:auto;font-size:12px" onchange="studioStatus('${a.id}',this.value)">${s.statuses.map((x) => `<option value="${x.key}" ${x.key === a.app_status ? 'selected' : ''}>${x.label}</option>`).join('')}</select>
+          </div>
+        </div>
+        <div style="margin-top:10px">${stepper(a)}</div>
+      </div>
+
+      ${wizardTabs}
+
+      <div class="studio-grid">
+        <div style="min-width:0">${stepContent}</div>
+        <div class="studio-preview-col">
+          <div class="sub" style="margin-bottom:8px;font-weight:700">?? Live Real-Time Phone Preview</div>
+          <div id="studio-preview">${phone()}</div>
+          <div class="sub" style="margin-top:10px">Connected to <code>https://master.vaultragold.com</code></div>
         </div>
       </div>
-      <div class="studio-grid">
-        <div>
-          <div class="card pad"><h3 class="card-t">App identity</h3>
-            <div class="field"><label>App name (shown under the icon)</label><input class="input" id="st_name" maxlength="30" value="${esc(d.app_name)}" oninput="dset('app_name',this.value)"></div>
-            <div class="field"><label>App ID / package name</label><input class="input" id="st_bundle" value="${esc(d.bundle_id)}" oninput="dset('bundle_id',this.value.toLowerCase())"><div class="hint">Auto-made from the shop name · used for both Play Store and App Store · cannot change after publishing</div></div>
-            <div class="grid g2"><div class="field"><label>Logo (square PNG, 1024px best)</label><input type="file" accept="image/png,image/jpeg,image/webp" onchange="studioUpload(this,'logo_url')" id="st_logo"></div>
-              <div class="field"><label>Splash image (optional)</label><input type="file" accept="image/png,image/jpeg" onchange="studioUpload(this,'splash_url')" id="st_splash"></div></div>
-            <div class="grid g2"><div class="field"><label>Version</label><input class="input" value="${esc(d.app_version)}" oninput="dset('app_version',this.value)"></div>
-              <div class="field"><label>Support email</label><input class="input" value="${esc(d.support_email)}" oninput="dset('support_email',this.value)"></div></div>
-          </div>
-
-          <div class="card pad section"><h3 class="card-t">🌐 Custom Domain & DNS Settings</h3>
-            <div class="sub" style="margin-bottom:12px">Connect the jeweller's custom domain for customer web access and jeweller admin portal.</div>
-            <div class="grid g2">
-              <div class="field">
-                <label>Customer App Domain (Web / PWA)</label>
-                <input class="input" id="st_domain" placeholder="e.g. gold.sharmajewellers.in" value="${esc(d.domain || '')}" oninput="dset('domain',this.value)">
-                <div class="hint">Live rates, digital gold buying, SIP & catalog portal</div>
-              </div>
-              <div class="field">
-                <label>Jeweller Admin Portal Domain</label>
-                <input class="input" id="st_admin_domain" placeholder="e.g. admin.sharmajewellers.in" value="${esc(d.admin_domain || '')}" oninput="dset('admin_domain',this.value)">
-                <div class="hint">Jeweller's private billing, customer KYC & rate margins portal</div>
-              </div>
-            </div>
-
-            <div style="background:#f8fafc;border:1px solid #cbd5e1;border-radius:8px;padding:12px;margin:12px 0;font-size:12px">
-              <div style="font-weight:700;color:#0f172a;margin-bottom:6px">📌 Required DNS Records at Domain Registrar (GoDaddy, Cloudflare, Namecheap):</div>
-              <table style="width:100%;font-size:12px;border-collapse:collapse">
-                <thead>
-                  <tr style="text-align:left;color:#64748b;border-bottom:1px solid #cbd5e1">
-                    <th style="padding:4px 6px">Type</th>
-                    <th style="padding:4px 6px">Host / Subdomain</th>
-                    <th style="padding:4px 6px">Points To (Target IP)</th>
-                    <th style="padding:4px 6px">TTL</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr style="border-bottom:1px solid #e2e8f0">
-                    <td style="padding:6px;font-weight:700">A</td>
-                    <td style="padding:6px"><code>${esc(appHostPart)}</code></td>
-                    <td style="padding:6px"><code>${serverIp}</code></td>
-                    <td style="padding:6px">Automatic / 3600</td>
-                  </tr>
-                  <tr>
-                    <td style="padding:6px;font-weight:700">A</td>
-                    <td style="padding:6px"><code>${esc(adminHostPart)}</code></td>
-                    <td style="padding:6px"><code>${serverIp}</code></td>
-                    <td style="padding:6px">Automatic / 3600</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-
-            <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-              <button class="btn primary" onclick="checkDomainDNS('${a.id}')" id="btn-check-dns">🔍 Live Verify DNS Records</button>
-              <div id="dns-verify-result" style="font-size:12px"></div>
-            </div>
-          </div>
-
-          <div class="card pad section"><h3 class="card-t">Theme</h3><div class="themes">${themes}</div></div>
-          <div class="card pad section"><h3 class="card-t">Store listing <span class="sub">auto-written · edit if you like</span></h3>
-            <div class="field"><label>Short description (80)</label><input class="input" maxlength="80" value="${esc(d.store_short)}" oninput="dset('store_short',this.value)"></div>
-            <div class="field"><label>Full description</label><textarea class="input" rows="7" oninput="dset('store_long',this.value)">${esc(d.store_long)}</textarea></div>
-            <div class="field"><label>Keywords (100)</label><input class="input" maxlength="100" value="${esc(d.store_keywords)}" oninput="dset('store_keywords',this.value)"></div>
-            <div class="kv"><span>Privacy policy</span><a href="${esc(a.config.store.privacyPolicyUrl)}" target="_blank">${esc(a.config.store.privacyPolicyUrl)}</a></div>
-            <div class="kv"><span>Terms</span><a href="${esc(a.config.store.termsUrl)}" target="_blank">${esc(a.config.store.termsUrl)}</a></div>
-          </div>
-        </div>
-        <div class="studio-preview-col"><div class="sub" style="margin-bottom:8px">Live preview · ${esc(s.presets[d.theme_preset].label)}</div><div id="studio-preview">${phone()}</div>
-          <div class="sub" style="margin-top:10px">Tenant ID <code>${esc(a.id)}</code></div></div>
-      </div></div></div>`;
+    </div>
+  </div>`;
 }
+
+async function saveMarginsAndNext(nextStep) {
+  const mMarkup = Number(document.getElementById('st_m_gold_markup')?.value || 0);
+  const mSpread = Number(document.getElementById('st_m_gold_spread')?.value || 3);
+  const m22 = Number(document.getElementById('st_m_gold22')?.value || 0);
+  const m18 = Number(document.getElementById('st_m_gold18')?.value || 0);
+  const mSilver = Number(document.getElementById('st_m_silver')?.value || 0);
+  try {
+    await api('/jeweller/settings/margins', {
+      method: 'PUT',
+      body: {
+        gold_buy_markup_pct: mMarkup,
+        gold_sell_discount_pct: mSpread,
+        gold22_commission_per_g: m22,
+        gold18_commission_per_g: m18,
+        silver_buy_markup_pct: mSilver
+      }
+    });
+    toast('Margins updated successfully');
+  } catch (_) {}
+  studioSaveAndNext(nextStep);
+}
+
 
 async function checkDomainDNS(id) {
   const resBox = $('#dns-verify-result');
