@@ -153,7 +153,7 @@ function vStudio() {
   const themes = Object.entries(s.presets).map(([key, P]) => `<button class="theme-opt ${d.theme_preset === key ? 'on' : ''}" onclick="dset('theme_preset','${key}',true)" data-testid="theme-${key}">
       <div class="sw">${[P.primaryColor, P.secondaryColor, P.accentColor, P.backgroundColor].map((c) => `<i style="background:${c}"></i>`).join('')}</div><b>${P.label}</b><span>Radius ${P.cardRadius} · ${P.homeLayout.slice(0, 3).map((x) => SECTION_LABEL[x]).join(' → ')}</span></button>`).join('');
 
-  const serverIp = '54.152.192.240';
+  const serverIp = window.location.hostname || '13.233.54.98';
   const appHostPart = (d.domain || '').split('.')[0] || 'gold';
   const adminHostPart = (d.admin_domain || '').split('.')[0] || 'admin';
 
@@ -174,7 +174,7 @@ function vStudio() {
             <h4 style="margin:0 0 3px 0;color:#166534;font-size:13.5px">🏪 ${esc(a.business_name)} — Shop Admin Portal</h4>
             <div style="font-size:12px;color:#15803d">
               Login Email: <b>${esc(a.email)}</b> &bull; Default Password: <code>jeweller123</code><br>
-              Direct Link: <a href="/api/admin/jeweller" target="_blank" style="color:#15803d;font-weight:700">http://54.152.192.240/api/admin/jeweller</a>
+              Direct Link: <a href="/api/admin/jeweller" target="_blank" style="color:#15803d;font-weight:700">${window.location.origin}/api/admin/jeweller</a>
             </div>
           </div>
           <button class="btn primary" onclick="openShopAdmin('${a.id}')" style="background:#16a34a">
@@ -275,7 +275,7 @@ async function checkDomainDNS(id) {
         return `<span class="badge green">✓ ${label} (${esc(d.domain)}) points to server IP (${(d.resolves_to||[]).join(', ')})</span>`;
       } else {
         const ips = (d.resolves_to && d.resolves_to.length) ? d.resolves_to.join(', ') : 'No IP found';
-        return `<span class="badge red">✗ ${label} (${esc(d.domain)}) currently resolves to [${ips}], needs to point to ${esc((r.target_ips||['54.152.192.240']).join(', '))}</span>`;
+        return `<span class="badge red">✗ ${label} (${esc(d.domain)}) currently resolves to [${ips}], needs to point to ${esc((r.target_ips||[window.location.hostname||'13.233.54.98']).join(', '))}</span>`;
       }
     });
     resBox.innerHTML = htmls.join(' ');

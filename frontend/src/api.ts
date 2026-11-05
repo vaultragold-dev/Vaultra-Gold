@@ -3,7 +3,7 @@ import { tenantConfig } from "./tenantConfig";
 const rawBase = (
   process.env.EXPO_PUBLIC_BACKEND_URL ||
   tenantConfig?.apiBaseUrl ||
-  "http://54.152.192.240"
+  "https://master.vaultragold.com"
 ).trim().replace(/\/+$/, "");
 
 const BASE = rawBase.endsWith("/api") ? rawBase : `${rawBase}/api`;
