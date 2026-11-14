@@ -62,6 +62,13 @@ export function BuyWidget() {
         method: "POST",
         body: { quote_id: quote.id, mode, value: n, method: "upi" },
       });
+      if (order.provider === "razorpay" && order.checkout_url) {
+        // Real payment: the store's own Razorpay checkout; gold is credited only after the payment is verified
+        setShowPay(false);
+        setPayStage("select");
+        router.push({ pathname: "/checkout", params: { url: order.checkout_url, id: order.id } });
+        return;
+      }
       const r = await api(`/orders/${order.id}/mock-confirm`, { method: "POST", body: { method: "upi", success: true } });
       setLastTxn(r.transaction || order);
       setPayStage("success");

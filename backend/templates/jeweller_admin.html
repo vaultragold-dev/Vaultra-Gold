@@ -22,7 +22,7 @@ const S = {
 const NAV = [
   ['Overview', [['dashboard', 'Dashboard', 'dashboard'], ['commission', 'Commission', 'commission'], ['orders', 'Orders', 'orders'], ['holdings', 'Wallet & Holdings', 'wallet'], ['sips', 'SIP', 'refresh'], ['dues', 'Payments to Master', 'invoice']]],
   ['Customers', [['customers', 'Customers', 'customers'], ['kyc', 'KYC', 'kyc'], ['redemptions', 'Redemptions', 'redeem'], ['goals', 'Goals', 'target']]],
-  ['Store', [['catalogue', 'Catalogue', 'catalogue'], ['content', 'App Content', 'image'], ['referral', 'Referral', 'referral'], ['settings', 'Settings', 'settings']]],
+  ['Store', [['catalogue', 'Catalogue', 'catalogue'], ['content', 'App Content', 'image'], ['referral', 'Referral', 'referral'], ['payments', 'Payments & API', 'shield'], ['settings', 'Settings', 'settings']]],
 ];
 const TITLES = Object.fromEntries(NAV.flatMap(([, items]) => items.map(([k, l]) => [k, l])));
 
@@ -431,8 +431,50 @@ function vSettings() {
 }
 async function saveMin() { try { await api('/jeweller/settings/min-redemption', { method: 'PUT', body: { min_grams: Number($('#minr').value) } }); toast('Saved'); S.me.min_redemption_grams = Number($('#minr').value); loadSettings(); } catch (e) { toast(e.message, true); } }
 
+/* ── Payments & API (Razorpay) ───────────────────────────────── */
+S.pay = null;
+async function loadPayments() { try { S.pay = await api('/jeweller/payments'); } catch (e) { toast(e.message, true); } if (S.tab === 'payments') render(); }
+function copyTxt(t) { navigator.clipboard?.writeText(t).then(() => toast('Copied'), () => toast('Copy failed', true)); }
+async function payConnect() {
+  const b = $('#pay-save'); if (b) { b.disabled = true; b.textContent = 'Verifying with Razorpay…'; }
+  try {
+    S.pay = await api('/jeweller/payments', { method: 'PUT', body: { key_id: $('#pay_kid').value.trim(), key_secret: $('#pay_ksec').value.trim(), webhook_secret: $('#pay_wsec').value.trim(), enabled: true } });
+    toast('Razorpay connected. Customers can now pay online');
+    render();
+  } catch (e) { toast(e.message, true); if (b) { b.disabled = false; b.textContent = 'Verify & Connect'; } }
+}
+async function payDisable() {
+  if (!confirm('Turn off online payments for your customers?')) return;
+  try { S.pay = await api('/jeweller/payments/disable', { method: 'POST' }); toast('Online payments turned off'); render(); } catch (e) { toast(e.message, true); }
+}
+function vPayments() {
+  const head = `<div class="page-head"><div><h2>Payments & API</h2><p>Connect your own Razorpay account. Customer payments settle directly into your bank account.</p></div></div>`;
+  const p = S.pay; if (!p) return head + loading;
+  const step = (n, t, body) => `<div class="card pad section"><div style="display:flex;gap:12px;align-items:flex-start"><div style="min-width:28px;height:28px;border-radius:14px;background:var(--ink,#111);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700">${n}</div><div style="flex:1"><h3 style="margin:2px 0 8px">${t}</h3>${body}</div></div></div>`;
+  const status = p.connected
+    ? `<div class="card pad section" style="border-color:#A6F4C5;background:#ECFDF3"><div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+        <div><b style="font-size:16px">✓ Razorpay connected</b> <span class="badge ${p.mode === 'live' ? 'green' : 'amber'}">${p.mode === 'live' ? 'LIVE' : 'TEST MODE'}</span>
+        <div class="sub" style="margin-top:4px">Key ID <code>${esc(p.key_id)}</code> · Secret <code>${esc(p.key_secret_masked)}</code>${p.verified_at ? ' · verified ' + esc(new Date(p.verified_at).toLocaleString('en-IN')) : ''}</div>
+        ${p.mode !== 'live' ? '<div class="sub" style="color:#B54708;margin-top:4px">Test keys: no real money moves. Switch Razorpay to Live mode and paste live keys before launch.</div>' : ''}
+        ${p.has_webhook_secret ? '' : '<div class="sub" style="color:#B54708;margin-top:4px">Webhook secret missing. Add it (step 4) so payments confirm even if the customer closes the app.</div>'}</div>
+        <button class="btn" onclick="payDisable()">Turn off</button></div></div>`
+    : `<div class="card pad section" style="border-color:#FEDF89;background:#FFFAEB"><b>Online payments are not connected yet.</b><div class="sub">Customers can't buy until you finish the steps below.</div></div>`;
+  return head + status
+    + step(1, 'Create your Razorpay account', `<p class="sub" style="margin-top:0">Already have Razorpay? Skip to step 2. Otherwise create it using this button, then complete your business KYC (PAN, GST, bank account) inside Razorpay.</p>
+        <a class="btn primary" href="${esc(p.referral_link)}" target="_blank" rel="noopener">Create Razorpay Account ↗</a>`)
+    + step(2, 'Generate your API keys', `<ol class="sub" style="margin:0;padding-left:18px;line-height:1.8"><li>Open <b>dashboard.razorpay.com</b> and choose <b>Live Mode</b> at the top (Test Mode for trial)</li><li>Go to <b>Account & Settings → API Keys</b></li><li>Click <b>Generate Key</b>, then copy the <b>Key ID</b> and <b>Key Secret</b></li></ol>`)
+    + step(3, 'Paste keys and connect', `<div class="grid g2"><div class="field"><label>Key ID</label><input class="input" id="pay_kid" placeholder="rzp_live_XXXXXXXXXXXX" value="${esc(p.key_id || '')}" autocomplete="off"></div>
+        <div class="field"><label>Key Secret ${p.key_secret_masked ? '<span class="sub">(leave empty to keep current)</span>' : ''}</label><input class="input" id="pay_ksec" type="password" placeholder="${p.key_secret_masked ? esc(p.key_secret_masked) : 'Key Secret'}" autocomplete="new-password"></div></div>
+        <div class="field"><label>Webhook Secret <span class="sub">(the secret you type in step 4)</span></label><input class="input" id="pay_wsec" type="password" placeholder="${p.has_webhook_secret ? 'Saved (leave empty to keep)' : 'Create any strong password'}" autocomplete="new-password"></div>
+        <button class="btn primary" id="pay-save" onclick="payConnect()">Verify & Connect</button>
+        <div class="sub" style="margin-top:6px">We check the keys live with Razorpay before saving. Secrets are stored encrypted.</div>`)
+    + step(4, 'Add the webhook in Razorpay', `<ol class="sub" style="margin:0 0 10px;padding-left:18px;line-height:1.8"><li>Razorpay → <b>Account & Settings → Webhooks → Add New Webhook</b></li><li>Paste this URL and the same Webhook Secret as step 3</li><li>Tick events: <b>${p.webhook_events.join(', ')}</b> → Save</li></ol>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><code style="background:#F8F5EE;border:1px solid #EADFC8;border-radius:8px;padding:8px 10px;word-break:break-all;flex:1">${esc(p.webhook_url)}</code><button class="btn sm" onclick="copyTxt('${esc(p.webhook_url)}')">${icon('copy')} Copy</button></div>`);
+}
+
 const VIEWS = { dues: () => `<div class="page-head"><div><h2>Payments to Master</h2><p>You pay Master the metal value + GST of every customer purchase and keep your commission. Master enters each payment when received.</p></div></div>` + (S.mydues ? duesDetail(S.mydues, false) : loading), dashboard: vDashboard, commission: () => { syncComm(); return vCommission(); }, orders: vOrders, holdings: vHoldings, customers: vCustomers, kyc: vKyc, redemptions: vRedemptions, catalogue: vCatalogue2, content: vContent, sips: vSips, goals: vGoals, gifts: vGifts, referral: vReferral, settings: vSettings };
 const LOAD = { dues: async () => { try { S.mydues = await api('/jeweller/v3/dues'); } catch (e) { toast(e.message, true); } if (S.tab === 'dues') render(); }, dashboard: () => { loadDash(); api('/jeweller/v3/dues').then((d) => { S.mydues = d; if (S.tab === 'dashboard') render(); }).catch(() => {}); }, commission: loadDash, orders: loadOrders, holdings: loadHold, customers: loadCustomers, kyc: loadKyc, redemptions: loadPickups, catalogue: loadCat, content: loadContent, sips: loadSips, goals: loadGoals, gifts: loadGifts, referral: loadRefs, settings: loadSettings };
+VIEWS.payments = vPayments; LOAD.payments = loadPayments;
 
 async function boot() {
   try { if (!S.me) S.me = await api('/jeweller/me'); } catch (e) { localStorage.removeItem('jeweller_token'); render(); return; }

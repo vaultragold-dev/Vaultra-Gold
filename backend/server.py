@@ -1096,8 +1096,8 @@ async def create_quote(
 
 
 @api.post("/orders/buy-silver")
-async def buy_silver(body: BuyRequest, customer: Customer = Depends(get_current_customer), db: AsyncSession = Depends(get_db)):
-    return await buy(body, customer, db)
+async def buy_silver(body: BuyRequest, request: Request, customer: Customer = Depends(get_current_customer), db: AsyncSession = Depends(get_db)):
+    return await buy(body, request, customer, db)
 
 
 @api.get("/orders/{order_id}")
@@ -1112,7 +1112,7 @@ async def order_status(order_id: str, customer: Customer = Depends(get_current_c
 
 
 @api.post("/orders/buy")
-async def buy(body: BuyRequest, customer: Customer = Depends(get_current_customer), db: AsyncSession = Depends(get_db)):
+async def buy(body: BuyRequest, request: Request, customer: Customer = Depends(get_current_customer), db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Quote).where(Quote.id == body.quote_id))
     q = result.scalar_one_or_none()
     if not q:
@@ -1134,18 +1134,36 @@ async def buy(body: BuyRequest, customer: Customer = Depends(get_current_custome
     amount = r2(total - gst)
     grams = r4(amount / rate)
 
+    cfg = await _pay_cfg(customer.jeweller_id)
+    if not cfg and not ALLOW_MOCK_PAYMENTS:
+        raise HTTPException(503, "Online payments are not set up for this store yet. Please contact the store.")
     order = Order(
         id=str(uuid.uuid4()), customer_id=customer.id, jeweller_id=customer.jeweller_id,
         metal=metal, grams=grams, rate=rate, amount=amount, gst=gst, total=total,
-        provider="mock"
+        provider="razorpay" if cfg else "mock"
     )
     db.add(order)
     await db.commit()
-    return {
+    out = {
         "id": order.id, "metal": metal, "grams": r4(grams), "rate": rate,
         "amount": r2(amount), "gst": r2(gst), "total": r2(total), "tenant": customer.jeweller_id,
-        "status": "created", "provider": "mock"
+        "status": "created", "provider": order.provider
     }
+    if cfg:
+        try:
+            rzp = await _rzp_call(cfg, "POST", "/orders", {
+                "amount": int(round(total * 100)), "currency": "INR", "receipt": order.id[:40],
+                "notes": {"order_id": order.id, "customer_id": customer.id, "metal": metal, "grams": str(r4(grams))},
+            })
+        except HTTPException:
+            order.status = "failed"
+            await db.commit()
+            raise
+        await _setting(f"rzp_order:{order.id}", rzp["id"])
+        await _setting(f"rzp_map:{rzp['id']}", order.id)
+        out["gateway_order_id"] = rzp["id"]
+        out["checkout_url"] = f"{_public_base(request)}/api/payments/checkout/{order.id}?sig={_order_sig(order.id)}"
+    return out
 
 
 @api.post("/orders/{order_id}/mock-confirm")
@@ -1155,17 +1173,35 @@ async def mock_confirm(order_id: str, body: MockConfirm,
     order = result.scalar_one_or_none()
     if not order:
         raise HTTPException(404, "Order not found")
+    if order.provider != "mock" or not ALLOW_MOCK_PAYMENTS or await _pay_cfg(order.jeweller_id):
+        raise HTTPException(403, "Please complete the payment through the payment gateway")
     if order.status != "created":
         raise HTTPException(400, "Order already processed")
     if not body.success:
         order.status = "failed"
         await db.commit()
         raise HTTPException(402, "Payment declined")
+    out = await _fulfil_order(db, order.id, body.method, "pay_mock_" + uuid.uuid4().hex[:14])
+    return out
+
+
+async def _fulfil_order(db: AsyncSession, order_id: str, method: str, payment_id: str):
+    """Mark an order paid and credit metal exactly once (row-locked, idempotent)."""
+    order = (await db.execute(select(Order).where(Order.id == order_id).with_for_update().execution_options(populate_existing=True))).scalar_one_or_none()
+    if not order:
+        raise HTTPException(404, "Order not found")
+    customer = (await db.execute(select(Customer).where(Customer.id == order.customer_id).with_for_update().execution_options(populate_existing=True))).scalar_one()
+    if order.status == "paid":
+        txn = (await db.execute(select(Transaction).where(Transaction.customer_id == customer.id, Transaction.extra["order_id"].as_string() == order.id))).scalars().first()
+        return {"status": "paid", "transaction": txn_dict(txn) if txn else None, "user": customer_dict(customer)}
+    if order.status != "created":
+        raise HTTPException(400, "Order already processed")
 
     order.status = "paid"
-    order.method = body.method
-    order.payment_id = "pay_mock_" + uuid.uuid4().hex[:14]
+    order.method = method
+    order.payment_id = payment_id
     order.paid_at = now_utc()
+    body = MockConfirm(method=method or "upi", success=True)
 
     # Credit gold/silver
     metal = order.metal or "gold"
@@ -1197,6 +1233,313 @@ async def mock_confirm(order_id: str, body: MockConfirm,
     await db.refresh(customer)
     mt5_cover(metal, order.grams)
     return {"status": "paid", "transaction": txn_dict(txn), "user": customer_dict(customer)}
+
+
+# ─── Razorpay: per-jeweller payment gateway ─────────────────────────────────
+# Each shop connects its OWN Razorpay account, so money settles directly to the jeweller.
+# Keys are stored encrypted in app_settings ("pay:<jeweller_id>"). OAuth tokens can be added later
+# to the same record without changing the checkout flow.
+try:
+    from cryptography.fernet import Fernet, InvalidToken
+except ImportError:  # pragma: no cover
+    Fernet = None
+    InvalidToken = Exception
+import base64 as _b64
+
+RZP_API = "https://api.razorpay.com/v1"
+RZP_REFERRAL_DEFAULT = os.environ.get("RAZORPAY_REFERRAL_LINK", "https://rzp.io/rzp/NBlgliw")
+ALLOW_MOCK_PAYMENTS = os.environ.get("ALLOW_MOCK_PAYMENTS", "1") != "0"
+
+
+def _fernet():
+    if Fernet is None:
+        raise HTTPException(500, "Server encryption library missing (cryptography)")
+    seed = os.environ.get("PAYMENT_ENC_KEY") or JWT_SECRET
+    return Fernet(_b64.urlsafe_b64encode(hashlib.sha256(("vaultra-pay:" + seed).encode()).digest()))
+
+
+def _enc(v: str) -> str:
+    return _fernet().encrypt(v.encode()).decode() if v else ""
+
+
+def _dec(v: str) -> str:
+    if not v:
+        return ""
+    try:
+        return _fernet().decrypt(v.encode()).decode()
+    except InvalidToken:
+        return ""
+
+
+def _order_sig(order_id: str) -> str:
+    return hmac.new(JWT_SECRET.encode(), ("pay:" + order_id).encode(), hashlib.sha256).hexdigest()[:32]
+
+
+async def _pay_raw(jid: str) -> dict:
+    raw = await _setting(f"pay:{jid}")
+    try:
+        return json.loads(raw) if raw else {}
+    except ValueError:
+        return {}
+
+
+async def _pay_cfg(jid: str) -> Optional[dict]:
+    """Decrypted, enabled gateway config for a shop, or None."""
+    r = await _pay_raw(jid)
+    if not r.get("enabled") or not r.get("key_id"):
+        return None
+    secret = _dec(r.get("key_secret_enc", ""))
+    if not secret:
+        return None
+    return {"key_id": r["key_id"], "key_secret": secret, "webhook_secret": _dec(r.get("webhook_secret_enc", "")),
+            "mode": r.get("mode", "test")}
+
+
+async def _rzp_call(cfg: dict, method: str, path: str, payload: Optional[dict] = None, key_id: str = "", key_secret: str = ""):
+    auth = (key_id or cfg["key_id"], key_secret or cfg["key_secret"])
+    try:
+        async with httpx.AsyncClient(timeout=20) as c:
+            r = await c.request(method, RZP_API + path, auth=auth, json=payload)
+    except httpx.HTTPError:
+        raise HTTPException(502, "Could not reach Razorpay. Please try again")
+    if r.status_code == 401:
+        raise HTTPException(400, "Razorpay rejected the keys (invalid Key ID or Key Secret)")
+    if r.status_code >= 400:
+        try:
+            msg = r.json().get("error", {}).get("description") or r.text[:200]
+        except ValueError:
+            msg = r.text[:200]
+        raise HTTPException(502, f"Razorpay error: {msg}")
+    return r.json()
+
+
+def _mask(v: str) -> str:
+    return (v[:4] + "•" * 6 + v[-4:]) if v and len(v) > 8 else ("•" * 6 if v else "")
+
+
+async def _pay_public(jid: str, request: Request) -> dict:
+    r = await _pay_raw(jid)
+    base = _public_base(request)
+    link = await _setting("rzp_referral_link") or RZP_REFERRAL_DEFAULT
+    return {
+        "provider": "razorpay",
+        "connected": bool(r.get("enabled") and r.get("key_id")),
+        "enabled": bool(r.get("enabled")),
+        "mode": r.get("mode", ""),
+        "key_id": r.get("key_id", ""),
+        "key_secret_masked": _mask(_dec(r.get("key_secret_enc", ""))),
+        "has_webhook_secret": bool(r.get("webhook_secret_enc")),
+        "verified_at": r.get("verified_at"),
+        "connected_via": r.get("via", "keys"),
+        "webhook_url": f"{base}/api/payments/razorpay/webhook/{jid}",
+        "webhook_events": ["payment.captured", "order.paid", "payment.failed"],
+        "referral_link": link,
+        "oauth_available": bool(os.environ.get("RAZORPAY_OAUTH_CLIENT_ID")),
+    }
+
+
+class PaymentKeysBody(BaseModel):
+    key_id: str = Field(min_length=10, max_length=60)
+    key_secret: str = ""
+    webhook_secret: str = ""
+    enabled: bool = True
+
+
+async def _save_pay_keys(jid: str, body: PaymentKeysBody, actor_kind: str, actor, db: AsyncSession):
+    key_id = body.key_id.strip()
+    if not re.fullmatch(r"rzp_(test|live)_[A-Za-z0-9]{6,40}", key_id):
+        raise HTTPException(400, "Key ID should look like rzp_live_XXXXXXXX or rzp_test_XXXXXXXX")
+    cur = await _pay_raw(jid)
+    secret = body.key_secret.strip() or (_dec(cur.get("key_secret_enc", "")) if cur.get("key_id") == key_id else "")
+    if not secret:
+        raise HTTPException(400, "Enter the Key Secret")
+    # Live check against Razorpay before saving
+    await _rzp_call({}, "GET", "/orders?count=1", key_id=key_id, key_secret=secret)
+    rec = {
+        "provider": "razorpay", "via": "keys", "key_id": key_id, "key_secret_enc": _enc(secret),
+        "webhook_secret_enc": _enc(body.webhook_secret.strip()) if body.webhook_secret.strip() else cur.get("webhook_secret_enc", ""),
+        "mode": "live" if key_id.startswith("rzp_live_") else "test",
+        "enabled": bool(body.enabled), "verified_at": now_iso(),
+    }
+    await _setting(f"pay:{jid}", json.dumps(rec))
+    await audit(db, actor_kind, actor, "payments.keys_saved", jid, {"key_id": key_id, "mode": rec["mode"], "enabled": rec["enabled"]}, jid)
+    await db.commit()
+
+
+@api.get("/jeweller/payments")
+async def jw_payments_get(request: Request, jeweller: Jeweller = Depends(get_current_jeweller)):
+    return await _pay_public(jeweller.id, request)
+
+
+@api.put("/jeweller/payments")
+async def jw_payments_put(body: PaymentKeysBody, request: Request, jeweller: Jeweller = Depends(get_current_jeweller), db: AsyncSession = Depends(get_db)):
+    await _save_pay_keys(jeweller.id, body, "jeweller", jeweller, db)
+    return await _pay_public(jeweller.id, request)
+
+
+@api.post("/jeweller/payments/disable")
+async def jw_payments_disable(request: Request, jeweller: Jeweller = Depends(get_current_jeweller), db: AsyncSession = Depends(get_db)):
+    r = await _pay_raw(jeweller.id)
+    if r:
+        r["enabled"] = False
+        await _setting(f"pay:{jeweller.id}", json.dumps(r))
+        await audit(db, "jeweller", jeweller, "payments.disabled", jeweller.id, {}, jeweller.id)
+        await db.commit()
+    return await _pay_public(jeweller.id, request)
+
+
+@api.get("/master/jewellers/{jid}/payments")
+async def ms_payments_get(jid: str, request: Request, admin: MasterAdmin = Depends(get_master_admin)):
+    return await _pay_public(jid, request)
+
+
+@api.put("/master/jewellers/{jid}/payments")
+async def ms_payments_put(jid: str, body: PaymentKeysBody, request: Request, admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
+    if not (await db.execute(select(Jeweller.id).where(Jeweller.id == jid))).first():
+        raise HTTPException(404, "Shop not found")
+    await _save_pay_keys(jid, body, "master", admin, db)
+    return await _pay_public(jid, request)
+
+
+class ReferralLinkBody(BaseModel):
+    url: str = Field(min_length=8, max_length=300)
+
+
+@api.put("/master/payments/referral-link")
+async def ms_referral_link(body: ReferralLinkBody, admin: MasterAdmin = Depends(get_master_admin)):
+    if not body.url.startswith("https://"):
+        raise HTTPException(400, "Use an https:// link")
+    await _setting("rzp_referral_link", body.url.strip())
+    return {"referral_link": body.url.strip()}
+
+
+def _pay_page(title: str, body_html: str) -> HTMLResponse:
+    return HTMLResponse(f"""<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{title}</title><style>body{{font-family:-apple-system,Segoe UI,Roboto,sans-serif;background:#FBF7EF;margin:0;display:flex;min-height:100vh;align-items:center;justify-content:center}}
+.c{{background:#fff;border:1px solid #EADFC8;border-radius:18px;padding:28px 24px;max-width:380px;width:90%;text-align:center;box-shadow:0 8px 30px rgba(0,0,0,.06)}}
+h2{{margin:0 0 6px;font-size:20px}}p{{color:#6b7280;font-size:14px;margin:6px 0}}.amt{{font-size:30px;font-weight:800;margin:10px 0}}
+button{{background:#B8860B;color:#fff;border:0;border-radius:12px;padding:14px 18px;font-size:16px;font-weight:700;width:100%;margin-top:14px}}</style></head>
+<body><div class="c">{body_html}</div></body></html>""")
+
+
+@api.get("/payments/checkout/{order_id}", response_class=HTMLResponse)
+async def pay_checkout_page(order_id: str, request: Request, sig: str = "", db: AsyncSession = Depends(get_db)):
+    if not hmac.compare_digest(sig, _order_sig(order_id)):
+        raise HTTPException(403, "Invalid payment link")
+    o = (await db.execute(select(Order).where(Order.id == order_id))).scalar_one_or_none()
+    if not o:
+        raise HTTPException(404, "Order not found")
+    base = _public_base(request)
+    if o.status == "paid":
+        return _pay_page("Paid", f'<h2>Already paid ✓</h2><p>Returning to the app…</p><script>location.href="{base}/api/payments/result?status=success&order={o.id}"</script>')
+    if o.status != "created":
+        return _pay_page("Closed", "<h2>This order is closed</h2><p>Please start a new purchase in the app.</p>")
+    cfg = await _pay_cfg(o.jeweller_id)
+    rzp_order = await _setting(f"rzp_order:{o.id}")
+    if not cfg or not rzp_order:
+        return _pay_page("Unavailable", "<h2>Payment unavailable</h2><p>The store's payment gateway is not active right now.</p>")
+    j = (await db.execute(select(Jeweller).where(Jeweller.id == o.jeweller_id))).scalar_one()
+    c = (await db.execute(select(Customer).where(Customer.id == o.customer_id))).scalar_one()
+    opts = {
+        "key": cfg["key_id"], "amount": int(round(o.total * 100)), "currency": "INR", "order_id": rzp_order,
+        "name": j.app_name or j.business_name, "description": f"{r4(o.grams)} g {'Silver' if o.metal == 'silver' else '24K Gold'}",
+        "prefill": {"contact": c.phone or "", "name": getattr(c, "name", "") or ""},
+        "callback_url": f"{base}/api/payments/razorpay/callback/{o.id}?sig={sig}", "redirect": True,
+        "theme": {"color": "#B8860B"}, "notes": {"order_id": o.id},
+    }
+    cancel = f"{base}/api/payments/result?status=cancelled&order={o.id}"
+    return _pay_page("Secure Payment", f"""<h2>{j.app_name or j.business_name}</h2><p>{opts['description']}</p>
+<div class="amt">₹{o.total:,.2f}</div><p>Secured by Razorpay</p><button id="pay">Pay now</button>
+<script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+<script>var o={json.dumps(opts)};o.modal={{ondismiss:function(){{location.href={json.dumps(cancel)};}}}};
+var rz=new Razorpay(o);document.getElementById('pay').onclick=function(){{rz.open();}};setTimeout(function(){{rz.open();}},300);</script>""")
+
+
+async def _confirm_rzp_payment(db: AsyncSession, order_id: str, payment_id: str):
+    """Fetch the payment from Razorpay, capture if needed, check amount/order, then credit metal."""
+    o = (await db.execute(select(Order).where(Order.id == order_id))).scalar_one_or_none()
+    if not o:
+        raise HTTPException(404, "Order not found")
+    if o.status == "paid":
+        return True
+    cfg = await _pay_cfg(o.jeweller_id)
+    rzp_order = await _setting(f"rzp_order:{o.id}")
+    if not cfg or not rzp_order:
+        return False
+    pay = await _rzp_call(cfg, "GET", f"/payments/{payment_id}")
+    amount = int(round(o.total * 100))
+    if pay.get("order_id") != rzp_order or int(pay.get("amount", 0)) != amount:
+        logging.warning("Razorpay mismatch for order %s: %s", o.id, pay.get("order_id"))
+        return False
+    if pay.get("status") == "authorized":
+        pay = await _rzp_call(cfg, "POST", f"/payments/{payment_id}/capture", {"amount": amount, "currency": "INR"})
+    if pay.get("status") != "captured":
+        return False
+    res = await _fulfil_order(db, o.id, pay.get("method") or "razorpay", payment_id)
+    return res.get("status") == "paid"
+
+
+@api.post("/payments/razorpay/callback/{order_id}")
+async def rzp_callback(order_id: str, request: Request, sig: str = "", db: AsyncSession = Depends(get_db)):
+    base = _public_base(request)
+    fail = lambda: Response(status_code=303, headers={"Location": f"{base}/api/payments/result?status=failed&order={order_id}"})
+    if not hmac.compare_digest(sig, _order_sig(order_id)):
+        return fail()
+    form = await request.form()
+    pid, roid, rsig = form.get("razorpay_payment_id", ""), form.get("razorpay_order_id", ""), form.get("razorpay_signature", "")
+    o = (await db.execute(select(Order).where(Order.id == order_id))).scalar_one_or_none()
+    cfg = await _pay_cfg(o.jeweller_id) if o else None
+    if not (o and cfg and pid and roid and rsig) or roid != await _setting(f"rzp_order:{order_id}"):
+        return fail()
+    expected = hmac.new(cfg["key_secret"].encode(), f"{roid}|{pid}".encode(), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(expected, rsig):
+        return fail()
+    try:
+        ok = await _confirm_rzp_payment(db, order_id, pid)
+    except HTTPException:
+        ok = False
+    status = "success" if ok else "pending"
+    return Response(status_code=303, headers={"Location": f"{base}/api/payments/result?status={status}&order={order_id}"})
+
+
+@api.get("/payments/result", response_class=HTMLResponse)
+async def pay_result(status: str = "", order: str = ""):
+    msg = {"success": ("Payment successful ✓", "Your metal has been added to your vault. Returning to the app…"),
+           "pending": ("Payment received", "We are confirming it with the bank. Your vault will update shortly."),
+           "cancelled": ("Payment cancelled", "No money was taken. You can close this screen."),
+           }.get(status, ("Payment failed", "If money was deducted, it will be refunded automatically by your bank."))
+    return _pay_page(msg[0], f"<h2>{msg[0]}</h2><p>{msg[1]}</p>")
+
+
+@api.post("/payments/razorpay/webhook/{jid}")
+async def rzp_webhook(jid: str, request: Request, db: AsyncSession = Depends(get_db)):
+    raw = await request.body()
+    cfg = await _pay_cfg(jid)
+    if not cfg or not cfg.get("webhook_secret"):
+        raise HTTPException(400, "Webhook not configured for this store")
+    expected = hmac.new(cfg["webhook_secret"].encode(), raw, hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(expected, request.headers.get("x-razorpay-signature", "")):
+        raise HTTPException(400, "Invalid signature")
+    try:
+        evt = json.loads(raw)
+    except ValueError:
+        return {"ok": True}
+    ent = ((evt.get("payload") or {}).get("payment") or {}).get("entity") or {}
+    rzp_order = ent.get("order_id") or (((evt.get("payload") or {}).get("order") or {}).get("entity") or {}).get("id")
+    order_id = await _setting(f"rzp_map:{rzp_order}") if rzp_order else None
+    if not order_id:
+        return {"ok": True}
+    o = (await db.execute(select(Order).where(Order.id == order_id, Order.jeweller_id == jid))).scalar_one_or_none()
+    if not o:
+        return {"ok": True}
+    if evt.get("event") in ("payment.captured", "order.paid", "payment.authorized") and ent.get("id"):
+        try:
+            await _confirm_rzp_payment(db, o.id, ent["id"])
+        except HTTPException as e:
+            logging.warning("Webhook confirm failed for %s: %s", o.id, e.detail)
+    elif evt.get("event") == "payment.failed" and o.status == "created":
+        logging.info("Razorpay payment failed for order %s", o.id)
+    return {"ok": True}
 
 
 # ─── Sell ─────────────────────────────────────────────────────────────────────
