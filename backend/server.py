@@ -3674,13 +3674,23 @@ async def ms_build_status(jid: str, admin: MasterAdmin = Depends(get_master_admi
     headers = _gh_headers()
     gh_repo = _gh_repo()
 
+    bundle = j.bundle_id or wl.default_bundle_id(j.business_name)
+
     def _fetch_status():
         nonlocal run_id
+        arts = {}
+        for suffix in ("-android-builds", "-ios-build", "-store-kit"):
+            ar = _requests.get(f"https://api.github.com/repos/{gh_repo}/actions/artifacts?name={bundle}{suffix}&per_page=3", headers=headers, timeout=15)
+            if ar.status_code == 200:
+                for a in ar.json().get("artifacts", []):
+                    if not a.get("expired") and a.get("name") == f"{bundle}{suffix}":
+                        arts[a.get("name")] = {"id": a.get("id"), "size": a.get("size_in_bytes", 0)}
+                        break
         if not run_id:
-            return {"status": "idle", "conclusion": None, "jobs": [], "artifacts": {}}
+            return {"status": "idle", "conclusion": None, "jobs": [], "artifacts": arts}
         run_r = _requests.get(f"https://api.github.com/repos/{gh_repo}/actions/runs/{run_id}", headers=headers, timeout=15)
         if run_r.status_code != 200:
-            return {"status": "idle", "conclusion": None, "jobs": [], "artifacts": {}}
+            return {"status": "idle", "conclusion": None, "jobs": [], "artifacts": arts}
         run_data = run_r.json()
         jobs_r = _requests.get(f"https://api.github.com/repos/{gh_repo}/actions/runs/{run_id}/jobs", headers=headers, timeout=15)
         jobs = []
@@ -3692,10 +3702,9 @@ async def ms_build_status(jid: str, admin: MasterAdmin = Depends(get_master_admi
                     "conclusion": jb.get("conclusion"),
                 })
         arts_r = _requests.get(f"https://api.github.com/repos/{gh_repo}/actions/runs/{run_id}/artifacts", headers=headers, timeout=15)
-        arts = {}
         if arts_r.status_code == 200:
             for a in arts_r.json().get("artifacts", []):
-                if not a.get("expired"):
+                if not a.get("expired") and (a.get("name") or "").startswith(bundle):
                     arts[a.get("name")] = {"id": a.get("id"), "size": a.get("size_in_bytes", 0)}
         return {
             "run_id": run_id,
@@ -3707,12 +3716,10 @@ async def ms_build_status(jid: str, admin: MasterAdmin = Depends(get_master_admi
         }
 
     st = await run_in_threadpool(_fetch_status)
-    bundle = j.bundle_id or wl.default_bundle_id(j.business_name)
     arts = st.get("artifacts") or {}
-    is_this_store = (meta.get("tenant_id") == j.id) or any(k.startswith(bundle) for k in arts)
-    has_android = is_this_store and any(k.endswith("-android-builds") for k in arts)
-    has_ios = is_this_store and any(k.endswith("-ios-build") for k in arts)
-    has_kit = is_this_store and any(k.endswith("-store-kit") for k in arts)
+    has_android = f"{bundle}-android-builds" in arts
+    has_ios = f"{bundle}-ios-build" in arts
+    has_kit = f"{bundle}-store-kit" in arts
     if (has_android or has_ios) and j.app_status in ("details_pending", "config_ready"):
         j.app_status = "built"
         await db.commit()
@@ -3755,22 +3762,27 @@ async def ms_download_build(jid: str, kind: str, request: Request, token: str = 
     def _download_artifact_file():
         nonlocal run_id
         import zipfile, io
-        if not run_id:
-            raise HTTPException(404, f"No build has been run for {j.app_name} yet. Click 'Fast Build Android .APK' or 'Build iOS .IPA' to compile.")
-        arts_r = _requests.get(f"https://api.github.com/repos/{gh_repo}/actions/runs/{run_id}/artifacts", headers=headers, timeout=15)
-        if arts_r.status_code != 200:
-            raise HTTPException(502, "Could not fetch build artifacts")
         target_suffix = "-android-builds" if kind in ("apk", "aab") else "-ios-build"
         bundle = j.bundle_id or wl.default_bundle_id(j.business_name)
         expected_name = f"{bundle}{target_suffix}"
         art_id = None
-        for a in arts_r.json().get("artifacts", []):
-            aname = a.get("name") or ""
-            if not a.get("expired") and (aname == expected_name or aname.endswith(target_suffix)):
-                art_id = a.get("id")
-                break
+        if run_id:
+            arts_r = _requests.get(f"https://api.github.com/repos/{gh_repo}/actions/runs/{run_id}/artifacts", headers=headers, timeout=15)
+            if arts_r.status_code == 200:
+                for a in arts_r.json().get("artifacts", []):
+                    aname = a.get("name") or ""
+                    if not a.get("expired") and aname == expected_name:
+                        art_id = a.get("id")
+                        break
         if not art_id:
-            raise HTTPException(404, f"{kind.upper()} build is still compiling or not ready yet. Please wait for the build to finish.")
+            ar = _requests.get(f"https://api.github.com/repos/{gh_repo}/actions/artifacts?name={expected_name}&per_page=5", headers=headers, timeout=15)
+            if ar.status_code == 200:
+                for a in ar.json().get("artifacts", []):
+                    if not a.get("expired") and a.get("name") == expected_name:
+                        art_id = a.get("id")
+                        break
+        if not art_id:
+            raise HTTPException(404, f"{kind.upper()} build for {j.app_name} is not ready yet. Click the Build button above first.")
         dl_r = _requests.get(f"https://api.github.com/repos/{gh_repo}/actions/artifacts/{art_id}/zip", headers=headers, timeout=180)
         if dl_r.status_code != 200:
             raise HTTPException(502, f"Failed to download {kind.upper()} artifact ({dl_r.status_code})")

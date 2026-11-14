@@ -58,12 +58,14 @@ function renderBuildCenter(id) {
   const isRunning = st.status === 'queued' || st.status === 'in_progress';
   const statusBadgeHtml = isRunning
     ? `<span class="badge gold">⏳ Building in Cloud (${st.status.replace('_', ' ')})… Auto-refreshing every 5s</span>`
-    : st.conclusion === 'success' || dl.apk || dl.ipa
+    : st.conclusion === 'success'
     ? `<span class="badge green">✓ Build Ready for Direct Download</span>`
     : st.conclusion === 'failure'
     ? `<span class="badge red">⚠ Last build stopped — select an option below to rebuild</span>`
     : st.conclusion === 'cancelled'
     ? `<span class="badge amber">⏹ Build was cancelled</span>`
+    : (dl.apk || dl.ipa)
+    ? `<span class="badge green">✓ Build Ready for Direct Download</span>`
     : `<span class="badge">Ready to Build</span>`;
 
   const jobsHtml = (st.jobs && st.jobs.length)

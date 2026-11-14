@@ -222,7 +222,10 @@ jobs:
     name: "3. Build iOS (.ipa / Xcode Archive)"
     needs: prepare-branding
     if: ${{ inputs.platform == 'ios' || inputs.platform == 'all' }}
-    runs-on: macos-14
+    runs-on: macos-latest
+    env:
+      LANG: en_US.UTF-8
+      LC_ALL: en_US.UTF-8
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -233,15 +236,23 @@ jobs:
           name: ${{ inputs.bundle_id }}-store-kit
           path: .
 
-      - name: Select Xcode 16.1+
+      - name: Verify Xcode 16.1+ Toolchain
         run: |
-          sudo xcode-select -s /Applications/Xcode_16.1.app || sudo xcode-select -s /Applications/Xcode_16.2.app || sudo xcode-select -s /Applications/Xcode_16.app || true
+          VER=$(xcodebuild -version 2>/dev/null | head -n 1 | awk '{print $2}')
+          MAJOR=$(echo "$VER" | cut -d. -f1)
+          MINOR=$(echo "$VER" | cut -d. -f2)
+          if [ -z "$MAJOR" ] || [ "$MAJOR" -lt 16 ] || { [ "$MAJOR" -eq 16 ] && [ "${MINOR:-0}" -lt 1 ]; }; then
+            LATEST_XCODE=$(ls -d /Applications/Xcode*.app 2>/dev/null | grep -v -i beta | sort -V | tail -n 1)
+            if [ -n "$LATEST_XCODE" ]; then
+              sudo xcode-select -s "$LATEST_XCODE"
+            fi
+          fi
           xcodebuild -version
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
 
       - name: Install Frontend Dependencies
         working-directory: frontend
@@ -268,7 +279,7 @@ jobs:
             pod install --repo-update
             WORKSPACE=$(ls -d *.xcworkspace | head -n 1)
             SCHEME="${WORKSPACE%.xcworkspace}"
-            xcodebuild -workspace "$WORKSPACE" -scheme "$SCHEME" -configuration Release -sdk iphoneos -archivePath "$RUNNER_TEMP/app.xcarchive" archive CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=""
+            xcodebuild -workspace "$WORKSPACE" -scheme "$SCHEME" -configuration Release -sdk iphoneos -archivePath "$RUNNER_TEMP/app.xcarchive" archive CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" EXPANDED_CODE_SIGN_IDENTITY="" DEVELOPMENT_TEAM="" COMPILER_INDEX_STORE_ENABLE=NO
             mkdir -p "$RUNNER_TEMP/Payload"
             cp -r "$RUNNER_TEMP/app.xcarchive/Products/Applications/"*.app "$RUNNER_TEMP/Payload/"
             cd "$RUNNER_TEMP"
