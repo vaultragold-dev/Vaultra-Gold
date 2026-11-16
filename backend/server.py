@@ -974,7 +974,7 @@ async def _save_otp(scope: str, body: OtpConfigBody, actor_kind: str, actor, db:
         raise HTTPException(400, "Enter your Hanu OTP API key")
     tpl = body.template_id.strip()
     if body.enabled and body.channel in ("sms", "sms_whatsapp") and not tpl:
-        raise HTTPException(400, "SMS needs your DLT Template ID (from the Hanu OTP dashboard)")
+        raise HTTPException(400, "SMS needs a Template ID: type default for SMS without DLT")
     rec = dict(cur)
     rec |= {"provider": "hanuotp", "api_key_enc": _enc(key) if key else "", "channel": body.channel,
             "template_id": tpl, "enabled": bool(body.enabled)}

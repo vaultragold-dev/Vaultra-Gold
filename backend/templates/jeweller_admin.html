@@ -477,7 +477,7 @@ function otpForm(p, prefix) {
   const opt = (v, l) => `<option value="${v}" ${ch === v ? 'selected' : ''}>${l}</option>`;
   return `<div class="grid g2"><div class="field"><label>Hanu OTP API Key ${p.api_key_masked ? '<span class="sub">(leave empty to keep current)</span>' : ''}</label><input class="input" id="${prefix}_key" type="password" placeholder="${p.api_key_masked ? esc(p.api_key_masked) : 'Paste API key'}" autocomplete="new-password"></div>
     <div class="field"><label>Send OTP by</label><select class="select" id="${prefix}_ch">${opt('sms', 'SMS')}${opt('whatsapp', 'WhatsApp')}${opt('sms_whatsapp', 'SMS, WhatsApp if SMS fails')}</select></div></div>
-    <div class="field"><label>DLT Template ID <span class="sub">(needed for SMS, shown in your Hanu OTP dashboard)</span></label><input class="input" id="${prefix}_tpl" value="${esc(p.template_id || '')}" placeholder="e.g. 1707XXXXXXXXXXXXXXX"></div>`;
+    <div class="field"><label>SMS Template ID <span class="sub">(type <b>default</b> for SMS without DLT, or your DLT template ID)</span></label><input class="input" id="${prefix}_tpl" value="${esc(p.template_id || 'default')}" placeholder="default"></div>`;
 }
 function otpBody(prefix) { return { api_key: $('#' + prefix + '_key').value.trim(), channel: $('#' + prefix + '_ch').value, template_id: $('#' + prefix + '_tpl').value.trim(), enabled: true }; }
 function otpStatus(p, extra) {
