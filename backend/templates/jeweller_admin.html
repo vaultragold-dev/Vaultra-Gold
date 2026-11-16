@@ -22,7 +22,7 @@ const S = {
 const NAV = [
   ['Overview', [['dashboard', 'Dashboard', 'dashboard'], ['commission', 'Commission', 'commission'], ['orders', 'Orders', 'orders'], ['holdings', 'Wallet & Holdings', 'wallet'], ['sips', 'SIP', 'refresh'], ['dues', 'Payments to Master', 'invoice']]],
   ['Customers', [['customers', 'Customers', 'customers'], ['kyc', 'KYC', 'kyc'], ['redemptions', 'Redemptions', 'redeem'], ['goals', 'Goals', 'target']]],
-  ['Store', [['catalogue', 'Catalogue', 'catalogue'], ['content', 'App Content', 'image'], ['referral', 'Referral', 'referral'], ['payments', 'Payments & API', 'shield'], ['settings', 'Settings', 'settings']]],
+  ['Store', [['catalogue', 'Catalogue', 'catalogue'], ['content', 'App Content', 'image'], ['referral', 'Referral', 'referral'], ['payments', 'Payments & API', 'shield'], ['otp', 'OTP & SMS', 'kyc'], ['settings', 'Settings', 'settings']]],
 ];
 const TITLES = Object.fromEntries(NAV.flatMap(([, items]) => items.map(([k, l]) => [k, l])));
 
@@ -472,9 +472,42 @@ function vPayments() {
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><code style="background:#F8F5EE;border:1px solid #EADFC8;border-radius:8px;padding:8px 10px;word-break:break-all;flex:1">${esc(p.webhook_url)}</code><button class="btn sm" onclick="copyTxt('${esc(p.webhook_url)}')">${icon('copy')} Copy</button></div>`);
 }
 
+function otpForm(p, prefix) {
+  const ch = p.channel || 'sms';
+  const opt = (v, l) => `<option value="${v}" ${ch === v ? 'selected' : ''}>${l}</option>`;
+  return `<div class="grid g2"><div class="field"><label>Hanu OTP API Key ${p.api_key_masked ? '<span class="sub">(leave empty to keep current)</span>' : ''}</label><input class="input" id="${prefix}_key" type="password" placeholder="${p.api_key_masked ? esc(p.api_key_masked) : 'Paste API key'}" autocomplete="new-password"></div>
+    <div class="field"><label>Send OTP by</label><select class="select" id="${prefix}_ch">${opt('sms', 'SMS')}${opt('whatsapp', 'WhatsApp')}${opt('sms_whatsapp', 'SMS, WhatsApp if SMS fails')}</select></div></div>
+    <div class="field"><label>DLT Template ID <span class="sub">(needed for SMS, shown in your Hanu OTP dashboard)</span></label><input class="input" id="${prefix}_tpl" value="${esc(p.template_id || '')}" placeholder="e.g. 1707XXXXXXXXXXXXXXX"></div>`;
+}
+function otpBody(prefix) { return { api_key: $('#' + prefix + '_key').value.trim(), channel: $('#' + prefix + '_ch').value, template_id: $('#' + prefix + '_tpl').value.trim(), enabled: true }; }
+function otpStatus(p, extra) {
+  return p.connected
+    ? `<div class="card pad section" style="border-color:#A6F4C5;background:#ECFDF3"><b>✓ OTP service connected</b> <span class="badge green">${{ sms: 'SMS', whatsapp: 'WhatsApp', sms_whatsapp: 'SMS + WhatsApp' }[p.channel] || p.channel}</span><div class="sub" style="margin-top:4px">API key <code>${esc(p.api_key_masked)}</code>${p.verified_at ? ' · last test ' + esc(new Date(p.verified_at).toLocaleString('en-IN')) : ' · send a test OTP below to confirm'}</div></div>`
+    : `<div class="card pad section" style="border-color:#FEDF89;background:#FFFAEB"><b>OTP service not connected.</b><div class="sub">${extra || ''}</div></div>`;
+}
+
+S.otp = null;
+async function loadOtp() { try { S.otp = await api('/jeweller/otp'); } catch (e) { toast(e.message, true); } if (S.tab === 'otp') render(); }
+async function otpSave() {
+  const b = $('#otp-save'); if (b) b.disabled = true;
+  try { S.otp = await api('/jeweller/otp', { method: 'PUT', body: otpBody('otp') }); toast('Saved. Now send a test OTP'); render(); } catch (e) { toast(e.message, true); if (b) b.disabled = false; }
+}
+async function otpTest() {
+  try { const r = await api('/jeweller/otp/test', { method: 'POST', body: { phone: $('#otp_test').value.trim() } }); toast(r.message); loadOtp(); } catch (e) { toast(e.message, true); }
+}
+function vOtp() {
+  const head = `<div class="page-head"><div><h2>OTP & SMS</h2><p>Your customers get their login OTP from your own Hanu OTP account, under your brand.</p></div></div>`;
+  const p = S.otp; if (!p) return head + loading;
+  const step = (n, t, body) => `<div class="card pad section"><div style="display:flex;gap:12px;align-items:flex-start"><div style="min-width:28px;height:28px;border-radius:14px;background:var(--ink,#111);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700">${n}</div><div style="flex:1"><h3 style="margin:2px 0 8px">${t}</h3>${body}</div></div></div>`;
+  return head + otpStatus(p, p.platform_fallback_active ? 'Right now your customers get OTPs from the Vaultra platform account. Connect your own below to send OTPs under your name.' : 'Customers cannot log in until an OTP service is connected.')
+    + step(1, 'Create your Hanu OTP account', `<p class="sub" style="margin-top:0">Sign up, add balance, and finish DLT setup for SMS (WhatsApp OTP works without DLT).</p><a class="btn primary" href="${esc(p.referral_link)}" target="_blank" rel="noopener">Create Hanu OTP Account ↗</a>`)
+    + step(2, 'Paste your API key', otpForm(p, 'otp') + `<button class="btn primary" id="otp-save" onclick="otpSave()">Save</button>`)
+    + step(3, 'Send a test OTP', `<div style="display:flex;gap:8px;flex-wrap:wrap"><input class="input" id="otp_test" placeholder="Your 10-digit mobile number" maxlength="10" style="max-width:260px"><button class="btn" onclick="otpTest()">Send test OTP</button></div><div class="sub" style="margin-top:6px">If it arrives on your phone, your customers' login OTPs will work too.</div>`);
+}
+
 const VIEWS = { dues: () => `<div class="page-head"><div><h2>Payments to Master</h2><p>You pay Master the metal value + GST of every customer purchase and keep your commission. Master enters each payment when received.</p></div></div>` + (S.mydues ? duesDetail(S.mydues, false) : loading), dashboard: vDashboard, commission: () => { syncComm(); return vCommission(); }, orders: vOrders, holdings: vHoldings, customers: vCustomers, kyc: vKyc, redemptions: vRedemptions, catalogue: vCatalogue2, content: vContent, sips: vSips, goals: vGoals, gifts: vGifts, referral: vReferral, settings: vSettings };
 const LOAD = { dues: async () => { try { S.mydues = await api('/jeweller/v3/dues'); } catch (e) { toast(e.message, true); } if (S.tab === 'dues') render(); }, dashboard: () => { loadDash(); api('/jeweller/v3/dues').then((d) => { S.mydues = d; if (S.tab === 'dashboard') render(); }).catch(() => {}); }, commission: loadDash, orders: loadOrders, holdings: loadHold, customers: loadCustomers, kyc: loadKyc, redemptions: loadPickups, catalogue: loadCat, content: loadContent, sips: loadSips, goals: loadGoals, gifts: loadGifts, referral: loadRefs, settings: loadSettings };
-VIEWS.payments = vPayments; LOAD.payments = loadPayments;
+VIEWS.payments = vPayments; LOAD.payments = loadPayments; VIEWS.otp = vOtp; LOAD.otp = loadOtp;
 
 async function boot() {
   try { if (!S.me) S.me = await api('/jeweller/me'); } catch (e) { localStorage.removeItem('jeweller_token'); render(); return; }

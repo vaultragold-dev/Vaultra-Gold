@@ -141,7 +141,8 @@ export default function Login() {
         ) : step === "otp" ? (
           <>
             <Text style={styles.title}>Verify your number</Text>
-            <Text style={styles.sub}>Enter the 6-digit code sent to +91 {phone}</Text>
+            <Text style={styles.sub}>Enter the 6-digit code sent to +91 {phone}{challenge?.sent_via === "whatsapp" ? " on WhatsApp" : ""}</Text>
+            {challenge?.demo_otp ? (
             <View style={styles.demo} testID="login-demo-otp-banner">
               <KeyRound size={18} color={colors.onBrandTertiary} />
               <Text style={styles.demoText}>
@@ -151,6 +152,7 @@ export default function Login() {
                 <Text style={styles.fillText}>Use code</Text>
               </Pressable>
             </View>
+            ) : null}
             <Text style={styles.label}>One-time password</Text>
             <TextInput
               testID="login-otp-input"
@@ -239,7 +241,7 @@ export default function Login() {
 
         <View style={styles.secure}>
           <ShieldCheck size={16} color={colors.success} />
-          <Text style={styles.secureText}>256-bit encrypted · RBI-compliant KYC partners</Text>
+          <Text style={styles.secureText}>256-bit encrypted · Secure OTP login</Text>
         </View>
       </KeyboardAwareScrollView>
     </View>

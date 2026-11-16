@@ -22,7 +22,7 @@ const NAV = [
   ['Platform', [['overview', 'Overview', 'dashboard'], ['jewellers', 'Shops', 'store'], ['studio', 'App Studio', 'image'], ['pricing', 'Pricing', 'commission'], ['rates', 'Market & Feed', 'rate'], ['catalogue', 'Catalogue', 'catalogue'], ['content', 'App Content', 'image']]],
   ['Business', [['orders', 'Orders', 'orders'], ['customers', 'Customers', 'customers'], ['kyc', 'KYC', 'kyc'], ['transactions', 'Transactions', 'invoice'], ['settlement', 'Settlement', 'wallet'], ['dues', 'Shop Dues', 'invoice']]],
   ['Engagement', [['sips', 'SIP', 'refresh'], ['referrals', 'Referrals', 'referral'], ['redemptions', 'Redemptions', 'redeem'], ['goals', 'Goals', 'target']]],
-  ['Treasury', [['mt5', 'MT5 Bookings', 'rate'], ['pool', 'Gold Pool', 'pool'], ['invoices', 'Invoices', 'invoice'], ['security', 'Security & Controls', 'shield'], ['audit', 'Audit Log', 'log']]],
+  ['Treasury', [['mt5', 'MT5 Bookings', 'rate'], ['pool', 'Gold Pool', 'pool'], ['invoices', 'Invoices', 'invoice'], ['security', 'Security & Controls', 'shield'], ['otp', 'OTP Service', 'kyc'], ['audit', 'Audit Log', 'log']]],
 ];
 const TITLES = Object.fromEntries(NAV.flatMap(([, i]) => i.map(([k, l]) => [k, l])));
 const loading = '<div class="grid g4"><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div></div>';
@@ -264,8 +264,54 @@ function vCustomers() {
     </tbody></table></div></div>`;
 }
 
+function otpForm(p, prefix) {
+  const ch = p.channel || 'sms';
+  const opt = (v, l) => `<option value="${v}" ${ch === v ? 'selected' : ''}>${l}</option>`;
+  return `<div class="grid g2"><div class="field"><label>Hanu OTP API Key ${p.api_key_masked ? '<span class="sub">(leave empty to keep current)</span>' : ''}</label><input class="input" id="${prefix}_key" type="password" placeholder="${p.api_key_masked ? esc(p.api_key_masked) : 'Paste API key'}" autocomplete="new-password"></div>
+    <div class="field"><label>Send OTP by</label><select class="select" id="${prefix}_ch">${opt('sms', 'SMS')}${opt('whatsapp', 'WhatsApp')}${opt('sms_whatsapp', 'SMS, WhatsApp if SMS fails')}</select></div></div>
+    <div class="field"><label>DLT Template ID <span class="sub">(needed for SMS, shown in your Hanu OTP dashboard)</span></label><input class="input" id="${prefix}_tpl" value="${esc(p.template_id || '')}" placeholder="e.g. 1707XXXXXXXXXXXXXXX"></div>`;
+}
+function otpBody(prefix) { return { api_key: $('#' + prefix + '_key').value.trim(), channel: $('#' + prefix + '_ch').value, template_id: $('#' + prefix + '_tpl').value.trim(), enabled: true }; }
+function otpStatus(p, extra) {
+  return p.connected
+    ? `<div class="card pad section" style="border-color:#A6F4C5;background:#ECFDF3"><b>✓ OTP service connected</b> <span class="badge green">${{ sms: 'SMS', whatsapp: 'WhatsApp', sms_whatsapp: 'SMS + WhatsApp' }[p.channel] || p.channel}</span><div class="sub" style="margin-top:4px">API key <code>${esc(p.api_key_masked)}</code>${p.verified_at ? ' · last test ' + esc(new Date(p.verified_at).toLocaleString('en-IN')) : ' · send a test OTP below to confirm'}</div></div>`
+    : `<div class="card pad section" style="border-color:#FEDF89;background:#FFFAEB"><b>OTP service not connected.</b><div class="sub">${extra || ''}</div></div>`;
+}
+
+S.motp = null;
+const loadMotp = () => safe(async () => { S.motp = await api('/master/otp'); }, 'otp');
+async function motpSave() {
+  const b = $('#motp-save'); if (b) b.disabled = true;
+  const body = otpBody('motp');
+  body.enabled = !!(body.api_key || S.motp.api_key_masked);
+  body.fallback_for_shops = $('#motp_fb').checked;
+  body.review_enabled = $('#motp_rv').checked;
+  body.review_phone = $('#motp_rvp').value.trim();
+  body.review_otp = $('#motp_rvo').value.trim();
+  try { S.motp = await api('/master/otp', { method: 'PUT', body }); toast('OTP settings saved'); render(); } catch (e) { toast(e.message, true); if (b) b.disabled = false; }
+}
+async function motpTest() { try { const r = await api('/master/otp/test', { method: 'POST', body: { phone: $('#motp_test').value.trim() } }); toast(r.message); loadMotp(); } catch (e) { toast(e.message, true); } }
+async function motpLink() { const url = prompt('Hanu OTP referral link for shops', S.motp.referral_link); if (!url) return; try { await api('/master/otp/referral-link', { method: 'PUT', body: { url } }); toast('Link updated'); loadMotp(); } catch (e) { toast(e.message, true); } }
+function vMotp() {
+  const head = ph('OTP Service', 'Platform Hanu OTP account, fallback for shops, and the App Store / Play Store review login.');
+  const p = S.motp; if (!p) return head + loading;
+  const st = { own: '<span class="badge green">Own account</span>', platform: '<span class="badge amber">Using platform</span>', none: '<span class="badge red">Not set, customers cannot log in</span>' };
+  return head + otpStatus(p, 'Shops without their own account will use this platform account if fallback is on.')
+    + (p.demo_otp_allowed ? '<div class="card pad section" style="border-color:#FECDCA;background:#FEF3F2"><b>Testing mode is ON</b><div class="sub">If no OTP service is set for a shop, the code is shown on the login screen. Set ALLOW_DEMO_OTP=0 on the server before launch.</div></div>' : '')
+    + `<div class="card pad section"><h3 class="card-t">Platform account (Vaultra)</h3>${otpForm(p, 'motp')}
+      <label style="display:flex;gap:8px;align-items:center;margin:6px 0 12px"><input type="checkbox" id="motp_fb" ${p.fallback_for_shops ? 'checked' : ''}> Use this account for shops that have not connected their own</label>
+      <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" id="motp-save" onclick="motpSave()">Save</button><input class="input" id="motp_test" placeholder="10-digit mobile" maxlength="10" style="max-width:200px"><button class="btn" onclick="motpTest()">Send test OTP</button></div></div>
+    <div class="card pad section"><h3 class="card-t">App Store / Play Store review login</h3><div class="sub" style="margin-bottom:10px">Apple and Google reviewers cannot receive your SMS. Give them this number and fixed code in the store submission notes. It works only for this one number.</div>
+      <label style="display:flex;gap:8px;align-items:center;margin-bottom:10px"><input type="checkbox" id="motp_rv" ${p.review.enabled ? 'checked' : ''}> Enable review login</label>
+      <div class="grid g2"><div class="field"><label>Review mobile number</label><input class="input" id="motp_rvp" maxlength="10" value="${esc(p.review.phone)}" placeholder="e.g. 9000000001"></div><div class="field"><label>Fixed 6-digit code</label><input class="input" id="motp_rvo" maxlength="6" value="${esc(p.review.otp)}" placeholder="e.g. 246810"></div></div>
+      <button class="btn primary" onclick="motpSave()">Save</button></div>
+    <div class="card section"><div class="card-h"><h3>Shops</h3><button class="btn sm" onclick="motpLink()">Shop signup link</button></div><div class="table-wrap"><table><thead><tr><th>Shop</th><th>OTP status</th></tr></thead><tbody>
+      ${p.shops.map((x) => `<tr><td><b>${esc(x.name)}</b></td><td>${st[x.status]}</td></tr>`).join('') || '<tr><td colspan="2"><div class="empty">No shops yet</div></td></tr>'}</tbody></table></div></div>`;
+}
+
 const VIEWS = { dues: vDues, overview: vOverview, jewellers: vJewellers, studio: vStudio, security: vSecurity, rates: vRates, pool: vPool, invoices: vInvoices, transactions: vTransactions, customers: vCustomers, pricing: vPricing, catalogue: vMCatalogue, content: vMContent, orders: vMOrders, kyc: vMKyc, settlement: vSettlement, sips: vMSips, referrals: vMRefs, gifts: vMGifts, redemptions: vMRed, goals: vMGoals, audit: vAudit, mt5: vMt5 };
 const LOAD = { dues: loadDues, overview: loadOv, jewellers: loadJ, studio: loadStudio, security: loadCtl, rates: loadRate, pool: loadPool, invoices: loadInv, transactions: loadTx, customers: loadC, pricing: loadPricing, catalogue: loadMCat, content: loadMContent, orders: loadMOrders, kyc: loadMKyc, settlement: loadSettle, sips: loadMSips, referrals: loadMRefs, gifts: loadMGifts, redemptions: loadMRed, goals: loadMGoals, audit: loadAudit, mt5: loadMt5 };
+VIEWS.otp = vMotp; LOAD.otp = loadMotp;
 function boot() { if (!VIEWS[S.tab]) S.tab = 'overview'; render(); LOAD[S.tab](); if (S.tab !== 'jewellers') api('/master/jewellers').then((j) => { S.jewellers = j; }).catch(() => {}); }
 function feedAlert(p) {
   const f = p?.feed || S.feed;

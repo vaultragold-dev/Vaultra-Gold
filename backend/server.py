@@ -853,6 +853,218 @@ async def get_product(product_id: str, db: AsyncSession = Depends(get_db)):
 
 
 # ═══════════════════ CUSTOMER AUTH ════════════════════════════════════════════
+# ─── OTP delivery (Hanu OTP): per shop, with platform fallback ─────────────
+# Customers of a shop get OTPs from that shop's own Hanu OTP account ("otp:<jeweller_id>").
+# The platform account ("otp:master") is used for shops without their own, if fallback is on.
+HANU_SMS_URL = "https://api.hanuotp.in/sms-otp.php"
+HANU_WA_URL = "https://api.hanuotp.in/whatsapp-otp.php"
+HANU_REFERRAL_DEFAULT = os.environ.get("HANU_REFERRAL_LINK", "https://hanuotp.in/E7242BF7")
+ALLOW_DEMO_OTP = os.environ.get("ALLOW_DEMO_OTP", "1") != "0"
+OTP_CHANNELS = ("sms", "whatsapp", "sms_whatsapp")
+
+
+async def _otp_raw(scope: str) -> dict:
+    raw = await _setting(f"otp:{scope}")
+    try:
+        return json.loads(raw) if raw else {}
+    except ValueError:
+        return {}
+
+
+def _otp_usable(r: dict) -> Optional[dict]:
+    if not r.get("enabled"):
+        return None
+    key = _dec(r.get("api_key_enc", ""))
+    if not key:
+        return None
+    ch = r.get("channel", "sms")
+    if ch in ("sms", "sms_whatsapp") and not r.get("template_id"):
+        ch = "whatsapp"
+    return {"api_key": key, "channel": ch, "template_id": r.get("template_id", "")}
+
+
+async def _otp_provider_for(jid: str) -> Optional[dict]:
+    shop = _otp_usable(await _otp_raw(jid))
+    if shop:
+        return shop | {"scope": "shop"}
+    m = await _otp_raw("master")
+    if m.get("fallback_for_shops", True):
+        plat = _otp_usable(m)
+        if plat:
+            return plat | {"scope": "platform"}
+    return None
+
+
+async def _hanu_get(url: str, params: dict):
+    try:
+        async with httpx.AsyncClient(timeout=15) as c:
+            r = await c.get(url, params=params)
+        d = r.json()
+    except (httpx.HTTPError, ValueError):
+        return False, "OTP service not reachable"
+    ok = d.get("status") == "success" or d.get("return") is True
+    msg = d.get("message")
+    if isinstance(msg, list):
+        msg = " ".join(str(x) for x in msg)
+    return ok, str(msg or "")
+
+
+async def _otp_send(prov: dict, phone: str, code: str):
+    """Returns (ok, error_message). phone = 10-digit Indian number."""
+    ch = prov["channel"]
+    err = ""
+    if ch in ("sms", "sms_whatsapp"):
+        ok, err = await _hanu_get(HANU_SMS_URL, {"apikey": prov["api_key"], "number": phone, "OTP": code, "templatesid": prov["template_id"]})
+        if ok:
+            return True, ""
+        if ch == "sms":
+            return False, err
+    ok, err2 = await _hanu_get(HANU_WA_URL, {"apikey": prov["api_key"], "number": "91" + phone, "OTP": code})
+    return (True, "") if ok else (False, err2 or err)
+
+
+async def _review_login() -> Optional[dict]:
+    r = await _otp_raw("master")
+    rv = r.get("review") or {}
+    if rv.get("enabled") and re.fullmatch(r"[6-9]\d{9}", rv.get("phone", "")) and re.fullmatch(r"\d{6}", rv.get("otp", "")):
+        return rv
+    return None
+
+
+async def _otp_public(scope: str) -> dict:
+    r = await _otp_raw(scope)
+    out = {
+        "provider": "hanuotp",
+        "connected": bool(_otp_usable(r)),
+        "enabled": bool(r.get("enabled")),
+        "channel": r.get("channel", "sms"),
+        "template_id": r.get("template_id", ""),
+        "api_key_masked": _mask(_dec(r.get("api_key_enc", ""))),
+        "verified_at": r.get("verified_at"),
+        "referral_link": await _setting("hanu_referral_link") or HANU_REFERRAL_DEFAULT,
+    }
+    if scope == "master":
+        rv = r.get("review") or {}
+        out |= {"fallback_for_shops": r.get("fallback_for_shops", True),
+                "review": {"enabled": bool(rv.get("enabled")), "phone": rv.get("phone", ""), "otp": rv.get("otp", "")},
+                "demo_otp_allowed": ALLOW_DEMO_OTP}
+    else:
+        m = await _otp_raw("master")
+        out["platform_fallback_active"] = bool(not out["connected"] and m.get("fallback_for_shops", True) and _otp_usable(m))
+    return out
+
+
+class OtpConfigBody(BaseModel):
+    api_key: str = ""
+    channel: str = "sms"
+    template_id: str = ""
+    enabled: bool = True
+    fallback_for_shops: Optional[bool] = None
+    review_enabled: Optional[bool] = None
+    review_phone: str = ""
+    review_otp: str = ""
+
+
+async def _save_otp(scope: str, body: OtpConfigBody, actor_kind: str, actor, db: AsyncSession):
+    if body.channel not in OTP_CHANNELS:
+        raise HTTPException(400, "Choose SMS, WhatsApp or SMS with WhatsApp backup")
+    cur = await _otp_raw(scope)
+    key = body.api_key.strip() or _dec(cur.get("api_key_enc", ""))
+    if body.enabled and not key:
+        raise HTTPException(400, "Enter your Hanu OTP API key")
+    tpl = body.template_id.strip()
+    if body.enabled and body.channel in ("sms", "sms_whatsapp") and not tpl:
+        raise HTTPException(400, "SMS needs your DLT Template ID (from the Hanu OTP dashboard)")
+    rec = dict(cur)
+    rec |= {"provider": "hanuotp", "api_key_enc": _enc(key) if key else "", "channel": body.channel,
+            "template_id": tpl, "enabled": bool(body.enabled)}
+    if scope == "master":
+        if body.fallback_for_shops is not None:
+            rec["fallback_for_shops"] = bool(body.fallback_for_shops)
+        if body.review_enabled is not None:
+            ph, code = norm_phone(body.review_phone), body.review_otp.strip()
+            if body.review_enabled and not (re.fullmatch(r"[6-9]\d{9}", ph) and re.fullmatch(r"\d{6}", code)):
+                raise HTTPException(400, "Review login needs a 10-digit mobile number and a 6-digit code")
+            rec["review"] = {"enabled": bool(body.review_enabled), "phone": ph, "otp": code}
+    await _setting(f"otp:{scope}", json.dumps(rec))
+    await audit(db, actor_kind, actor, "otp.config_saved", scope, {"channel": body.channel, "enabled": rec["enabled"]}, None if scope == "master" else scope)
+    await db.commit()
+
+
+class OtpReferralBody(BaseModel):
+    url: str = Field(min_length=8, max_length=300)
+
+
+class OtpTestBody(BaseModel):
+    phone: str
+
+
+async def _otp_test(scope: str, phone: str):
+    ph = norm_phone(phone)
+    if not re.fullmatch(r"[6-9]\d{9}", ph):
+        raise HTTPException(400, "Enter a valid 10-digit mobile number")
+    prov = _otp_usable(await _otp_raw(scope))
+    if not prov:
+        raise HTTPException(400, "Save and enable your OTP settings first")
+    ok, err = await _otp_send(prov, ph, f"{secrets.randbelow(1_000_000):06d}")
+    if not ok:
+        raise HTTPException(400, f"Hanu OTP: {err or 'sending failed'}")
+    r = await _otp_raw(scope)
+    r["verified_at"] = now_iso()
+    await _setting(f"otp:{scope}", json.dumps(r))
+    return {"ok": True, "message": f"Test OTP sent to +91 {ph}"}
+
+
+@api.get("/jeweller/otp")
+async def jw_otp_get(jeweller: Jeweller = Depends(get_current_jeweller)):
+    return await _otp_public(jeweller.id)
+
+
+@api.put("/jeweller/otp")
+async def jw_otp_put(body: OtpConfigBody, jeweller: Jeweller = Depends(get_current_jeweller), db: AsyncSession = Depends(get_db)):
+    body.fallback_for_shops = None
+    body.review_enabled = None
+    await _save_otp(jeweller.id, body, "jeweller", jeweller, db)
+    return await _otp_public(jeweller.id)
+
+
+@api.post("/jeweller/otp/test")
+async def jw_otp_test(body: OtpTestBody, jeweller: Jeweller = Depends(get_current_jeweller)):
+    return await _otp_test(jeweller.id, body.phone)
+
+
+@api.get("/master/otp")
+async def ms_otp_get(admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
+    out = await _otp_public("master")
+    js = (await db.execute(select(Jeweller).order_by(Jeweller.created_at))).scalars().all()
+    shops = []
+    for j in js:
+        own = bool(_otp_usable(await _otp_raw(j.id)))
+        shops.append({"id": j.id, "name": j.app_name or j.business_name, "own": own,
+                      "status": "own" if own else ("platform" if out["connected"] and out["fallback_for_shops"] else "none")})
+    out["shops"] = shops
+    return out
+
+
+@api.put("/master/otp")
+async def ms_otp_put(body: OtpConfigBody, admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
+    await _save_otp("master", body, "master", admin, db)
+    return await ms_otp_get(admin, db)
+
+
+@api.post("/master/otp/test")
+async def ms_otp_test(body: OtpTestBody, admin: MasterAdmin = Depends(get_master_admin)):
+    return await _otp_test("master", body.phone)
+
+
+@api.put("/master/otp/referral-link")
+async def ms_otp_referral(body: OtpReferralBody, admin: MasterAdmin = Depends(get_master_admin)):
+    if not body.url.startswith("https://"):
+        raise HTTPException(400, "Use an https:// link")
+    await _setting("hanu_referral_link", body.url.strip())
+    return {"referral_link": body.url.strip()}
+
+
 @api.post("/auth/otp/request")
 async def otp_request(body: OtpRequest, request: Request, db: AsyncSession = Depends(get_db)):
     phone = norm_phone(body.phone)
@@ -883,7 +1095,12 @@ async def otp_request(body: OtpRequest, request: Request, db: AsyncSession = Dep
     if count_result.scalar() >= 5:
         raise HTTPException(429, "Too many requests. Try again in a minute")
 
-    code = f"{secrets.randbelow(1_000_000):06d}"
+    review = await _review_login()
+    is_review = bool(review and phone == review["phone"])
+    code = review["otp"] if is_review else f"{secrets.randbelow(1_000_000):06d}"
+    prov = None if is_review else await _otp_provider_for(jeweller_id)
+    if not is_review and not prov and not ALLOW_DEMO_OTP:
+        raise HTTPException(503, "Login is temporarily unavailable for this store. Please contact the store.")
     cid = str(uuid.uuid4())
     challenge = OtpChallenge(
         id=cid, phone=phone, jeweller_id=jeweller_id,
@@ -898,7 +1115,16 @@ async def otp_request(body: OtpRequest, request: Request, db: AsyncSession = Dep
     )
     is_new = exists.scalar_one_or_none() is None
 
-    return {"challenge_id": cid, "demo_otp": code, "expires_in": 300, "is_new_user": is_new, "jeweller_id": jeweller_id}
+    resp = {"challenge_id": cid, "expires_in": 300, "is_new_user": is_new, "jeweller_id": jeweller_id}
+    if prov:
+        ok, err = await _otp_send(prov, phone, code)
+        if not ok:
+            logging.warning("OTP send failed for store %s via %s: %s", jeweller_id, prov.get("scope"), err)
+            raise HTTPException(502, "Could not send the OTP right now. Please try again in a minute")
+        resp["sent_via"] = "whatsapp" if prov["channel"] == "whatsapp" else "sms"
+    elif not is_review:
+        resp["demo_otp"] = code  # testing only: no OTP service configured and ALLOW_DEMO_OTP is on
+    return resp
 
 
 @api.post("/auth/otp/verify")
