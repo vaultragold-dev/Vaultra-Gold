@@ -128,20 +128,44 @@ def silver_rate(jid: Optional[str] = None):
 
 
 # --- Real-Time Rate Streaming (WebSocket) ---
-CONNECTED_WEBSOCKETS = set()
+CONNECTED_WEBSOCKETS = {}  # websocket -> jeweller_id (None = base rate, used by admin panels)
+_BCAST = {"busy": False, "again": False}
+FEED_STREAM = {"on": False, "error": "", "ticks": 0}
 
-async def broadcast_rates(payload: dict):
+
+def schedule_broadcast():
+    """Push the latest tick to every socket now. If a push is already running, send once more right after
+    it with the newest price (no queue build-up, slow clients never delay the feed)."""
     if not CONNECTED_WEBSOCKETS:
         return
-    dead = set()
-    msg = json.dumps(payload)
-    for ws in list(CONNECTED_WEBSOCKETS):
-        try:
-            await ws.send_text(msg)
-        except Exception:
-            dead.add(ws)
-    for ws in dead:
-        CONNECTED_WEBSOCKETS.discard(ws)
+    if _BCAST["busy"]:
+        _BCAST["again"] = True
+        return
+    _BCAST["busy"] = True
+    asyncio.create_task(_broadcast_worker())
+
+
+async def _broadcast_worker():
+    try:
+        while True:
+            _BCAST["again"] = False
+            feed = rate_feed_status()
+            cache, items = {}, list(CONNECTED_WEBSOCKETS.items())
+            for _, jid in items:
+                if jid not in cache:
+                    cache[jid] = json.dumps(price_payload(jid) | {"feed": feed, "type": "rate_tick"})
+            res = await asyncio.gather(*[asyncio.wait_for(ws.send_text(cache[jid]), 2) for ws, jid in items], return_exceptions=True)
+            for (ws, _), r in zip(items, res):
+                if isinstance(r, Exception):
+                    CONNECTED_WEBSOCKETS.pop(ws, None)
+            if not _BCAST["again"]:
+                break
+    finally:
+        _BCAST["busy"] = False
+
+
+async def broadcast_rates(payload: dict = None):  # backward compatible name
+    schedule_broadcast()
 
 def price_payload(jid: Optional[str] = None):
     buy, sell = gold_rate(jid)
@@ -349,13 +373,65 @@ def _simulate(state, jitter):
     state["updated_at"] = now_iso()
 
 
+async def _mt5_stream(client):
+    """Hold one open connection to the MT5 script's /stream and apply every tick the instant it arrives."""
+    headers = {"ngrok-skip-browser-warning": "1", "Accept": "text/event-stream"}
+    params = {"symbols": f"{MT5_GOLD_SYMBOL},{MT5_SILVER_SYMBOL}"}
+    if MT5_API_KEY:
+        headers["X-API-Key"] = MT5_API_KEY
+        params["key"] = MT5_API_KEY
+    url = _mt5_url()[: -len("/rates")] + "/stream"
+    last_save = 0.0
+    async with client.stream("GET", url, params=params, headers=headers, timeout=httpx.Timeout(10.0, read=25.0)) as r:
+        if r.status_code != 200:
+            raise ValueError(f"MT5 stream not available (HTTP {r.status_code}) - using polling")
+        FEED_STREAM.update(on=True, error="")
+        logger.info("MT5 live stream connected")
+        try:
+            async for line in r.aiter_lines():
+                if line.startswith(":"):  # heartbeat while market is quiet
+                    if RATE_FEED["source"] == "mt5":
+                        RATE_FEED["last_live_at"] = now_utc()
+                    continue
+                if not line.startswith("data:"):
+                    continue
+                data = json.loads(line[5:])
+                if MT5_GOLD_SYMBOL in data:
+                    g, gp = _per_gram(data, MT5_GOLD_SYMBOL, MT5_GOLD_UNIT_GRAMS)
+                    _set_live(PRICE, g, gp)
+                if MT5_SILVER_SYMBOL in data:
+                    sv, sp = _per_gram(data, MT5_SILVER_SYMBOL, MT5_SILVER_UNIT_GRAMS)
+                    _set_live(SILVER_PRICE, sv, sp)
+                RATE_FEED.update(source="mt5", last_live_at=now_utc(), error="")
+                FEED_STREAM["ticks"] += 1
+                schedule_broadcast()
+                t = asyncio.get_event_loop().time()
+                if t - last_save > 60:
+                    last_save = t
+                    await _setting("last_live_rates", json.dumps({"g": PRICE["base"], "gp": PRICE["open"], "s": SILVER_PRICE["base"], "sp": SILVER_PRICE["open"], "at": now_iso()}))
+        finally:
+            FEED_STREAM["on"] = False
+
+
 async def price_loop():
     import httpx
     last_err_log = 0.0
     last_save = 0.0
+    stream_retry_at = 0.0
     async with httpx.AsyncClient(timeout=5) as client:
         while True:
             live_cfg = bool(METAAPI_TOKEN) or bool(MT5_RATES_URL)
+            # Preferred: instant push stream. Falls back to polling (below) if the MT5 script has no /stream yet.
+            if MT5_RATES_URL and asyncio.get_event_loop().time() >= stream_retry_at:
+                try:
+                    await _mt5_stream(client)
+                except Exception as e:
+                    msg = str(e).replace(MT5_API_KEY, "***") if MT5_API_KEY else str(e)
+                    FEED_STREAM["error"] = msg[:200]
+                    if asyncio.get_event_loop().time() - last_err_log > 60:
+                        logger.warning(f"MT5 stream: {msg[:200]}")
+                        last_err_log = asyncio.get_event_loop().time()
+                stream_retry_at = asyncio.get_event_loop().time() + 15
             await asyncio.sleep(MT5_POLL_SECONDS if live_cfg else 3)
             if live_cfg:
                 try:
@@ -368,9 +444,7 @@ async def price_loop():
                     _set_live(PRICE, g, gp)
                     _set_live(SILVER_PRICE, s, sp)
                     RATE_FEED.update(source="mt5", last_live_at=now_utc(), error="")
-                    if CONNECTED_WEBSOCKETS:
-                        data = price_payload() | {"feed": rate_feed_status(), "type": "rate_tick"}
-                        asyncio.create_task(broadcast_rates(data))
+                    schedule_broadcast()
                     if asyncio.get_event_loop().time() - last_save > 60:
                         last_save = asyncio.get_event_loop().time()
                         await _setting("last_live_rates", json.dumps({"g": g, "gp": gp, "s": s, "sp": sp, "at": now_iso()}))
@@ -726,9 +800,10 @@ async def root():
 @app.websocket("/api/ws/rates")
 async def websocket_rates(websocket: WebSocket):
     await websocket.accept()
-    CONNECTED_WEBSOCKETS.add(websocket)
+    jid = (websocket.query_params.get("jeweller_id") or websocket.query_params.get("tenant") or "").strip() or None
+    CONNECTED_WEBSOCKETS[websocket] = jid
     try:
-        init_data = price_payload() | {"feed": rate_feed_status(), "type": "initial"}
+        init_data = price_payload(jid) | {"feed": rate_feed_status(), "type": "initial"}
         await websocket.send_text(json.dumps(init_data))
         while True:
             text_data = await websocket.receive_text()
@@ -737,7 +812,7 @@ async def websocket_rates(websocket: WebSocket):
     except (WebSocketDisconnect, Exception):
         pass
     finally:
-        CONNECTED_WEBSOCKETS.discard(websocket)
+        CONNECTED_WEBSOCKETS.pop(websocket, None)
 
 
 @api.get("/price")
@@ -2707,7 +2782,7 @@ async def master_rate(admin: MasterAdmin = Depends(get_master_admin)):
 def rate_feed_status():
     last = RATE_FEED["last_live_at"]
     return {
-        "source": RATE_FEED["source"], "configured": bool(MT5_RATES_URL or METAAPI_TOKEN),
+        "source": RATE_FEED["source"], "stream": FEED_STREAM["on"], "configured": bool(MT5_RATES_URL or METAAPI_TOKEN),
         "metaapi_state": META["state"], "metaapi_connection": META["connection"],
         "provider": "mt5_script" if MT5_RATES_URL else ("metaapi" if METAAPI_TOKEN else "none"),
         "last_live_at": last.isoformat() if last else None, "error": RATE_FEED["error"],

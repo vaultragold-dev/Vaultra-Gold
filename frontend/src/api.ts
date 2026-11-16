@@ -7,6 +7,7 @@ const rawBase = (
 ).trim().replace(/\/+$/, "");
 
 const BASE = rawBase.endsWith("/api") ? rawBase : `${rawBase}/api`;
+export const API_BASE = BASE;
 
 const tokens: { user: string | null; staff: string | null } = { user: null, staff: null };
 let tenantHeader = "";

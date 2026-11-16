@@ -1,7 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { AppState, Platform } from "react-native";
 
-import { api, setApiTenant, setToken } from "@/src/api";
+import { API_BASE, api, setApiTenant, setToken } from "@/src/api";
 import { storage } from "@/src/utils/storage";
 import { TENANT_NAME, TENANT_PHONE } from "@/src/format";
 import { LOCKED_TENANT_ID, tenantConfig } from "@/src/tenantConfig";
@@ -185,8 +185,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (token) refresh();
   }, [token, tenant, refresh]);
 
+  // Live rates: server pushes every MT5 tick over a WebSocket (no polling delay).
+  // HTTP polling is only a fallback while the socket is reconnecting.
   useEffect(() => {
     let active = true;
+    let ws: WebSocket | null = null;
+    let retry: ReturnType<typeof setTimeout> | null = null;
+    let poll: ReturnType<typeof setInterval> | null = null;
+    let ping: ReturnType<typeof setInterval> | null = null;
+    let backoff = 1000;
     const load = async () => {
       try {
         const p = await api<Price>(`/price?jeweller_id=${tenantRef.current}`, { auth: "none" });
@@ -198,20 +205,60 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         if (active) setPriceError(true);
       }
     };
-    load();
-    let id: ReturnType<typeof setInterval> | null = setInterval(load, 1000);
-    const sub = AppState.addEventListener("change", (s) => {
-      if (s === "active" && !id) {
-        load();
-        id = setInterval(load, 1000);
-      } else if (s !== "active" && id) {
-        clearInterval(id);
-        id = null;
+    const schedule = () => {
+      if (retry || !active) return;
+      retry = setTimeout(() => { retry = null; connect(); }, backoff);
+      backoff = Math.min(backoff * 2, 15000);
+    };
+    const connect = () => {
+      if (!active || ws) return;
+      const url = `${API_BASE.replace(/^http/, "ws")}/ws/rates?jeweller_id=${encodeURIComponent(tenantRef.current || "")}`;
+      try {
+        ws = new WebSocket(url);
+      } catch {
+        ws = null;
+        schedule();
+        return;
       }
+      ws.onopen = () => {
+        backoff = 1000;
+        if (ping) clearInterval(ping);
+        ping = setInterval(() => { try { ws?.send("ping"); } catch {} }, 25000);
+      };
+      ws.onmessage = (e) => {
+        try {
+          const { type, feed, ...p } = JSON.parse(String(e.data));
+          if (!active || type === "pong" || p.buy === undefined) return;
+          setPrice(p as Price);
+          setPriceError(false);
+        } catch {}
+      };
+      ws.onclose = () => {
+        ws = null;
+        if (ping) { clearInterval(ping); ping = null; }
+        if (active && AppState.currentState === "active") schedule();
+      };
+      ws.onerror = () => { try { ws?.close(); } catch {} };
+    };
+    const start = () => {
+      load();
+      connect();
+      if (!poll) poll = setInterval(() => { if (!ws || ws.readyState !== 1) load(); }, 3000);
+    };
+    const stop = () => {
+      if (poll) { clearInterval(poll); poll = null; }
+      if (retry) { clearTimeout(retry); retry = null; }
+      if (ping) { clearInterval(ping); ping = null; }
+      if (ws) { const w = ws; ws = null; w.onclose = null; try { w.close(); } catch {} }
+    };
+    start();
+    const sub = AppState.addEventListener("change", (s) => {
+      if (s === "active") start();
+      else stop();
     });
     return () => {
       active = false;
-      if (id) clearInterval(id);
+      stop();
       sub.remove();
     };
   }, [tenant]);
