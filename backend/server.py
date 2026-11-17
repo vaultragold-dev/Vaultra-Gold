@@ -236,12 +236,25 @@ def _mt5_url():
     return u if u.endswith("/rates") else u + "/rates"
 
 
+# Which MT5 price the platform uses: "ask" = MT5 Buy price (default), "bid" = MT5 Sell price, "mid", "last"
+RATE_SIDE = {"v": (os.environ.get("RATE_PRICE_SIDE") or "ask").lower()}
+RATE_SIDES = ("ask", "bid", "mid", "last")
+
+
 def _per_gram(data: dict, symbol: str, unit: float):
     v = data.get(symbol) or {}
     if not isinstance(v, dict) or v.get("error"):
         raise ValueError(f"{symbol}: {v.get('error') if isinstance(v, dict) else 'missing'}")
-    bid, ask = v.get("bid") or 0, v.get("ask") or 0
-    px = (bid + ask) / 2 if bid and ask else (v.get("last") or bid or ask)
+    bid, ask, last = v.get("bid") or 0, v.get("ask") or 0, v.get("last") or 0
+    side = RATE_SIDE["v"]
+    if side == "ask" and ask:
+        px = ask
+    elif side == "bid" and bid:
+        px = bid
+    elif side == "last" and last:
+        px = last
+    else:
+        px = (bid + ask) / 2 if bid and ask else (last or bid or ask)
     if not px:
         raise ValueError(f"{symbol}: no price yet")
     prev = v.get("prev_close") or v.get("open") or px
@@ -2782,7 +2795,7 @@ async def master_rate(admin: MasterAdmin = Depends(get_master_admin)):
 def rate_feed_status():
     last = RATE_FEED["last_live_at"]
     return {
-        "source": RATE_FEED["source"], "stream": FEED_STREAM["on"], "configured": bool(MT5_RATES_URL or METAAPI_TOKEN),
+        "source": RATE_FEED["source"], "stream": FEED_STREAM["on"], "price_side": RATE_SIDE["v"], "configured": bool(MT5_RATES_URL or METAAPI_TOKEN),
         "metaapi_state": META["state"], "metaapi_connection": META["connection"],
         "provider": "mt5_script" if MT5_RATES_URL else ("metaapi" if METAAPI_TOKEN else "none"),
         "last_live_at": last.isoformat() if last else None, "error": RATE_FEED["error"],
@@ -3708,6 +3721,22 @@ class ControlsUpdate(BaseModel):
     shops: dict = {}
 
 
+class RateSideBody(BaseModel):
+    side: str
+
+
+@api.put("/master/rate-side")
+async def ms_rate_side(body: RateSideBody, admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
+    side = body.side.lower().strip()
+    if side not in RATE_SIDES:
+        raise HTTPException(400, "Choose ask, bid, mid or last")
+    RATE_SIDE["v"] = side
+    await _setting("rate_side", side)
+    await audit(db, "master", admin, "rates.price_side", "platform", {"side": side}, None)
+    await db.commit()
+    return {"price_side": side}
+
+
 @api.get("/master/v3/controls")
 async def mc_get(admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
     js = (await db.execute(select(Jeweller).order_by(Jeweller.created_at))).scalars().all()
@@ -4549,6 +4578,9 @@ async def startup():
     saved_ctl = await _setting("platform_controls")
     if saved_ctl:
         CONTROLS.update(json.loads(saved_ctl))
+    side = await _setting("rate_side")
+    if side in RATE_SIDES:
+        RATE_SIDE["v"] = side
     saved = await _setting("last_live_rates")
     if saved:  # start from the last real MT5 price, not the demo default
         d = json.loads(saved)

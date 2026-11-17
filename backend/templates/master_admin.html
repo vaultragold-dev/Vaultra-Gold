@@ -206,6 +206,7 @@ async function checkDns(id) { try { const c = await api(`/master/jewellers/${id}
 
 /* rates */
 const loadRate = () => safe(async () => { S.rate = await api('/master/rate'); S.price = S.rate; S.feed = S.rate.feed; }, 'rates');
+async function setRateSide(side) { try { await api('/master/rate-side', { method: 'PUT', body: { side } }); toast('Price source updated'); setTimeout(loadRate, 800); } catch (e) { toast(e.message, true); } }
 function vRates() {
   const head = `<div class="page-head"><div><h2>Live rates</h2><p>Base market rate before each store's commission.</p></div><button class="btn" onclick="loadRate()">Refresh</button></div>`;
   const r = S.rate; if (!r) return head + loading; const f = r.feed;
@@ -215,6 +216,9 @@ function vRates() {
     <div class="card section"><div class="card-h"><h3>Feed status</h3>${r.live ? '<span class="badge green">Live</span>' : r.offline ? '<span class="badge red">Feed down</span>' : '<span class="badge amber">Indicative</span>'}</div><div style="padding:8px 20px 16px">
       <div class="kv"><span>Last live tick</span><b>${f.last_live_at ? dt(f.last_live_at) : '—'}</b></div>
       <div class="kv"><span>Quote units</span><b>Gold per ${f.gold_unit_grams}g · Silver per ${f.silver_unit_grams}g</b></div>
+      <div class="kv"><span>Same as MT5 now</span><b>Gold ${inr(r.base_rate * f.gold_unit_grams)} / ${f.gold_unit_grams}g · Silver ${inr(r.silver.base_rate * f.silver_unit_grams)} / ${f.silver_unit_grams}g</b></div>
+      <div class="kv"><span>Delivery</span><b>${f.stream ? '<span class="badge green">Instant push (every tick)</span>' : '<span class="badge amber">Polling (update MT5 script for instant push)</span>'}</b></div>
+      <div class="kv"><span>MT5 price used</span><select class="select" style="width:auto" onchange="setRateSide(this.value)">${[['ask', 'Ask (MT5 Buy price)'], ['bid', 'Bid (MT5 Sell price)'], ['mid', 'Mid (Bid+Ask)/2'], ['last', 'Last traded']].map(([v, l]) => `<option value="${v}" ${f.price_side === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
       ${f.error ? `<div class="kv"><span>Last message</span><b style="color:var(--red)">${esc(feedReason(f.error))}</b></div>` : ''}</div></div>`;
 }
 
