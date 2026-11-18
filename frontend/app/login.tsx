@@ -19,7 +19,8 @@ export default function Login() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const toast = useToast();
-  const { signIn, tenant } = useApp();
+  const { signIn, tenant, token } = useApp();
+  const [authToken, setAuthToken] = useState<string | null>(null);
   const [step, setStep] = useState<Step>("phone");
   const [phone, setPhone] = useState("");
   const [otp, setOtp] = useState("");
@@ -53,17 +54,27 @@ export default function Login() {
     setErr("");
     setBusy(true);
     try {
-      // Verify OTP first
-      if (challenge.is_new_user) {
-        // For new users, move to registration step
+      if (!challenge) throw new Error("Please request an OTP first");
+      if (otp.length !== 6) throw new Error("Please enter a valid 6-digit OTP");
+
+      // Verify OTP directly on OTP screen
+      const r = await api("/auth/otp/verify", {
+        method: "POST",
+        body: { challenge_id: challenge.challenge_id, otp, tenant },
+        auth: "none",
+      });
+
+      setAuthToken(r.access_token);
+      await signIn(r.access_token, r.user);
+
+      // If user is brand new or has default name, move to registration step to fill details
+      if (r.is_new_user || !r.user?.first_name || r.user?.first_name === "Gold") {
         setStep("register");
         setBusy(false);
         return;
       }
-      // Existing user - complete login
-      const r = await api("/auth/otp/verify", { method: "POST", body: { challenge_id: challenge.challenge_id, otp, tenant }, auth: "none" });
-      await signIn(r.access_token, r.user);
-      toast("success", `Welcome back, ${r.user.first_name || r.user.name.split(" ")[0]}`, "Your gold vault is ready");
+
+      toast("success", `Welcome back, ${r.user.first_name || r.user.name?.split(" ")[0]}`, "Your gold vault is ready");
       if (router.canGoBack()) router.back();
       else router.replace("/");
     } catch (e: any) {
@@ -78,17 +89,20 @@ export default function Login() {
     if (!firstName.trim()) { setErr("First name is required"); return; }
     setBusy(true);
     try {
-      const r = await api("/auth/otp/verify", {
-        method: "POST",
+      const activeTok = token || authToken;
+      const updated = await api("/me", {
+        method: "PATCH",
         body: {
-          challenge_id: challenge.challenge_id, otp, tenant,
-          first_name: firstName.trim(), last_name: lastName.trim(),
-          email: email.trim(), dob: dob.trim(), gender,
-          referral_code: referralCode.trim() || null,
+          first_name: firstName.trim(),
+          last_name: lastName.trim(),
+          email: email.trim(),
+          dob: dob.trim(),
+          gender,
+          referral_code: referralCode.trim() || undefined,
         },
-        auth: "none",
+        auth: "user",
       });
-      await signIn(r.access_token, r.user);
+      if (activeTok) await signIn(activeTok, updated);
       toast("success", `Welcome, ${firstName.trim()}!`, "Your gold vault is ready");
       if (router.canGoBack()) router.back();
       else router.replace("/");
@@ -100,10 +114,17 @@ export default function Login() {
   };
 
   const goBack = () => {
-    if (step === "register") setStep("otp");
-    else if (step === "otp") { setStep("phone"); setChallenge(null); }
-    else if (router.canGoBack()) router.back();
-    else router.replace("/");
+    if (step === "register") {
+      if (router.canGoBack()) router.back();
+      else router.replace("/");
+    } else if (step === "otp") {
+      setStep("phone");
+      setChallenge(null);
+    } else if (router.canGoBack()) {
+      router.back();
+    } else {
+      router.replace("/");
+    }
   };
 
   return (
@@ -236,6 +257,9 @@ export default function Login() {
             />
             {err ? <Text style={styles.err} testID="login-error">{err}</Text> : null}
             <Button title="Create Account" size="lg" loading={busy} disabled={!firstName.trim()} onPress={completeRegistration} style={{ marginTop: 16 }} testID="login-register-button" />
+            <Pressable onPress={() => { if (router.canGoBack()) router.back(); else router.replace("/"); }} style={styles.resend} testID="login-skip-profile">
+              <Text style={styles.resendText}>Skip for now</Text>
+            </Pressable>
           </>
         )}
 

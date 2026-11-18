@@ -622,6 +622,15 @@ class OtpVerify(BaseModel):
     referral_code: Optional[str] = None
 
 
+class CustomerProfileUpdate(BaseModel):
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    email: Optional[str] = None
+    dob: Optional[str] = None
+    gender: Optional[str] = None
+    referral_code: Optional[str] = None
+
+
 class BuyRequest(BaseModel):
     quote_id: str
     mode: str = "rupees"
@@ -1238,8 +1247,10 @@ async def otp_verify(body: OtpVerify, db: AsyncSession = Depends(get_db)):
         select(Customer).where(Customer.phone == c.phone, Customer.jeweller_id == jeweller_id)
     )
     customer = cust_result.scalar_one_or_none()
+    is_new = False
 
     if not customer:
+        is_new = True
         fname = (body.first_name or "").strip()
         lname = (body.last_name or "").strip()
         customer = Customer(
@@ -1273,12 +1284,26 @@ async def otp_verify(body: OtpVerify, db: AsyncSession = Depends(get_db)):
                     message="₹50 referral bonus credited to your rewards!"
                 ))
         db.add(customer)
+    else:
+        if not customer.first_name or customer.first_name == "Gold":
+            is_new = True
+        if body.first_name:
+            customer.first_name = body.first_name.strip()
+            if body.last_name:
+                customer.last_name = body.last_name.strip()
+            if body.email:
+                customer.email = body.email.strip()
+            if body.dob:
+                customer.dob = body.dob.strip()
+            if body.gender:
+                customer.gender = body.gender.strip()
+            is_new = False
 
     await db.commit()
     await db.refresh(customer)
 
     token = make_token(customer.id, "customer", {"jeweller_id": jeweller_id})
-    return {"access_token": token, "user": customer_dict(customer)}
+    return {"access_token": token, "user": customer_dict(customer), "is_new_user": is_new}
 
 
 # ═══════════════════ CUSTOMER ENDPOINTS ═══════════════════════════════════════
@@ -1289,16 +1314,81 @@ async def me(customer: Customer = Depends(get_current_customer)):
 
 @api.patch("/me")
 async def update_me(
-    first_name: Optional[str] = None, last_name: Optional[str] = None,
-    customer: Customer = Depends(get_current_customer), db: AsyncSession = Depends(get_db)
+    body: Optional[CustomerProfileUpdate] = None,
+    first_name: Optional[str] = None,
+    last_name: Optional[str] = None,
+    customer: Customer = Depends(get_current_customer),
+    db: AsyncSession = Depends(get_db)
 ):
-    if first_name:
-        customer.first_name = first_name.strip()
-    if last_name:
-        customer.last_name = last_name.strip()
+    fn = (body.first_name if body and body.first_name is not None else first_name)
+    ln = (body.last_name if body and body.last_name is not None else last_name)
+    em = (body.email if body and body.email is not None else None)
+    db_dob = (body.dob if body and body.dob is not None else None)
+    gn = (body.gender if body and body.gender is not None else None)
+    ref = (body.referral_code if body and body.referral_code is not None else None)
+
+    if fn is not None:
+        customer.first_name = fn.strip()
+    if ln is not None:
+        customer.last_name = ln.strip()
+    if em is not None:
+        customer.email = em.strip()
+    if db_dob is not None:
+        customer.dob = db_dob.strip()
+    if gn is not None:
+        customer.gender = gn.strip()
+    if ref and not customer.referred_by:
+        ref_code = ref.strip().upper()
+        ref_result = await db.execute(
+            select(Customer).where(Customer.referral_code == ref_code, Customer.jeweller_id == customer.jeweller_id)
+        )
+        referrer = ref_result.scalar_one_or_none()
+        if referrer and referrer.id != customer.id:
+            reward = await referral_reward(customer.jeweller_id)
+            customer.referred_by = referrer.id
+            customer.referral_balance = reward
+            referrer.referral_balance = (referrer.referral_balance or 0) + reward
+            db.add(Notification(
+                id=str(uuid.uuid4()), customer_id=referrer.id,
+                title="Referral Bonus!", type="referral",
+                message=f"Your friend {customer.first_name} joined! ₹50 added to your rewards."
+            ))
+            db.add(Notification(
+                id=str(uuid.uuid4()), customer_id=customer.id,
+                title="Welcome Bonus!", type="referral",
+                message="₹50 referral bonus credited to your rewards!"
+            ))
     await db.commit()
     await db.refresh(customer)
     return customer_dict(customer)
+
+
+@api.delete("/me")
+async def delete_me(
+    customer: Customer = Depends(get_current_customer),
+    db: AsyncSession = Depends(get_db)
+):
+    gold = customer.gold_grams or 0.0
+    silver = customer.silver_grams or 0.0
+    wallet = customer.wallet_balance or 0.0
+    if gold > 0.0001 or silver > 0.0001 or wallet > 1.0:
+        raise HTTPException(
+            400,
+            f"Cannot delete account with active balance ({round(gold, 4)}g gold, {round(silver, 4)}g silver, ₹{round(wallet, 2)} cash). Please sell, gift, or redeem your holdings first."
+        )
+
+    sips_result = await db.execute(select(SIP).where(SIP.customer_id == customer.id, SIP.status == "active"))
+    for s in sips_result.scalars().all():
+        s.status = "cancelled"
+
+    customer.status = "deleted"
+    customer.phone = f"del_{customer.id[:8]}_{customer.phone[-4:]}"
+    if customer.email:
+        customer.email = f"del_{customer.id[:8]}@deleted.local"
+    customer.first_name = "Deleted"
+    customer.last_name = "User"
+    await db.commit()
+    return {"success": True, "message": "Account successfully deleted"}
 
 
 # ─── KYC ──────────────────────────────────────────────────────────────────────
@@ -4503,6 +4593,24 @@ async def tenant_public_config(jid: str, request: Request, db: AsyncSession = De
     return {k: cfg[k] for k in ("tenantId", "appName", "theme", "homeLayout", "assets", "support")} | {"business_name": j.business_name}
 
 
+@app.get("/privacy", response_class=HTMLResponse)
+@api.get("/privacy", response_class=HTMLResponse)
+async def master_privacy():
+    return HTMLResponse(wl.privacy_html(None))
+
+
+@app.get("/terms", response_class=HTMLResponse)
+@api.get("/terms", response_class=HTMLResponse)
+async def master_terms():
+    return HTMLResponse(wl.privacy_html(None, terms=True))
+
+
+@app.get("/delete-account", response_class=HTMLResponse)
+@api.get("/delete-account", response_class=HTMLResponse)
+async def master_delete_account():
+    return HTMLResponse(wl.delete_account_html(None))
+
+
 @api.get("/tenant/{jid}/privacy", response_class=HTMLResponse)
 async def tenant_privacy(jid: str, db: AsyncSession = Depends(get_db)):
     j = (await db.execute(select(Jeweller).where(Jeweller.id == jid))).scalar_one_or_none()
@@ -4517,6 +4625,12 @@ async def tenant_terms(jid: str, db: AsyncSession = Depends(get_db)):
     if not j:
         raise HTTPException(404, "Store not found")
     return HTMLResponse(wl.privacy_html(j, terms=True))
+
+
+@api.get("/tenant/{jid}/delete-account", response_class=HTMLResponse)
+async def tenant_delete_account(jid: str, db: AsyncSession = Depends(get_db)):
+    j = (await db.execute(select(Jeweller).where(Jeweller.id == jid))).scalar_one_or_none()
+    return HTMLResponse(wl.delete_account_html(j))
 
 
 @api.get("/master/v3/audit")

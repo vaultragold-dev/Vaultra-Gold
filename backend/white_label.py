@@ -176,6 +176,14 @@ def make_icon(name, p, logo=None, transparent=False):
     return out.getvalue()
 
 
+def make_icon_512(name, p, logo=None):
+    icon_bytes = make_icon(name, p, logo, transparent=False)
+    img = Image.open(io.BytesIO(icon_bytes)).resize((512, 512), Image.Resampling.LANCZOS)
+    out = io.BytesIO()
+    img.save(out, "PNG")
+    return out.getvalue()
+
+
 def make_splash(name, p, logo=None):
     w, h = 1284, 2778
     img = Image.new("RGB", (w, h), _rgb(p["accentColor"]))
@@ -279,20 +287,439 @@ def make_feature_graphic(name, p, logo=None):
     return out.getvalue()
 
 
-def privacy_html(j, terms=False):
-    name = j.app_name or f"{j.business_name} Gold"
+def privacy_html(j=None, terms=False):
+    app_name = (getattr(j, "app_name", None) or getattr(j, "business_name", None) or "Vaultra Gold") if j else "Vaultra Gold"
+    business = getattr(j, "business_name", "Vaultra Gold Private Limited") if j else "Vaultra Gold Private Limited"
+    support_email = (getattr(j, "support_email", None) or getattr(j, "email", None) or "support@vaultragold.com") if j else "support@vaultragold.com"
+    support_phone = getattr(j, "phone", "+91 98765 43210") if j else "+91 98765 43210"
+    addr = f"{getattr(j, 'address', '')} {getattr(j, 'city', '')} {getattr(j, 'state', '')} {getattr(j, 'pincode', '')}".strip() if j else "Mumbai, Maharashtra, India"
+    if not addr:
+        addr = "Mumbai, Maharashtra, India"
+
+    is_partner = (j is not None and getattr(j, "id", "") not in ("master", "vaultra", ""))
+    partner_note = (
+        f"<div class='partner-badge'><strong>Partner Store:</strong> {business} operates the {app_name} consumer storefront, powered by the core technology and 24K digital bullion infrastructure of <strong>Vaultra Gold Private Limited</strong>.</div>"
+        if is_partner else
+        "<div class='partner-badge'><strong>Official Platform Policy:</strong> Governs Vaultra Gold applications, websites, and digital precious metals vaulting infrastructure operated by <strong>Vaultra Gold Private Limited</strong>.</div>"
+    )
+
     if terms:
-        body = (f"<h1>Terms of Use — {name}</h1><p>{name} is operated by {j.business_name}. Digital gold and silver purchases are made at the live "
-                "rate shown at the time of purchase, including applicable GST. Purchased metal is held on your behalf and can be redeemed "
-                "as coins or jewellery as per the store's redemption policy. Prices change with the market; past rates do not guarantee future rates.</p>"
-                f"<p>Contact: {j.phone} · {j.support_email or j.email}</p>")
+        title = f"Terms & Conditions of Service — {app_name}"
+        effective_date = "November 18, 2026"
+        content = f"""
+        {partner_note}
+        <p class="lead">Please read these Terms and Conditions carefully before accessing or using the <strong>{app_name}</strong> mobile application, website, or services. By downloading, browsing, creating an account, or transacting on the platform, you agree to be bound by these Terms.</p>
+
+        <h2>1. The Platform & Operational Framework</h2>
+        <p>The {app_name} mobile application and associated web interfaces (collectively, the &ldquo;Platform&rdquo;) provide users with access to 24 Karat 999.0 purity digital gold and 999 purity digital silver accumulation, systematic investment plans (SIPs), live spot rate feeds, and in-store bullion redemption services. Technology infrastructure, live market pricing engines, digital ledger vaulting, and transaction settlement are operated by <strong>Vaultra Gold Private Limited</strong> (&ldquo;Vaultra Gold&rdquo;, &ldquo;we&rdquo;, &ldquo;us&rdquo;), alongside authorized partner jewellers.</p>
+
+        <h2>2. Eligibility</h2>
+        <p>You must be at least 18 years of age and legally competent to enter into binding contracts under the Indian Contract Act, 1872. By creating an account, you represent that all information provided (including your phone number, legal name, and KYC identifiers) is accurate and truthful.</p>
+
+        <h2>3. Bullion Purity & 1:1 Physical Custody Backing</h2>
+        <p>Every digital gold transaction purchases <strong>24 Karat Gold of 999.0 fineness (99.9% pure)</strong>, and every digital silver transaction purchases <strong>Silver of 999.0 fineness</strong>. All digital balances recorded in your vault ledger are backed 1:1 by physical bullion bars safely held and insured in accredited institutional vaults on behalf of the customer.</p>
+
+        <h2>4. Live Market Pricing & Spreads</h2>
+        <ul>
+            <li><strong>Live Rate Synchronisation:</strong> Buy and sell prices are streamed in real time based on active commodity market spot rates and commodity exchange benchmarks (MCX/MT5).</li>
+            <li><strong>Applicable Taxes:</strong> In compliance with Government of India regulations, a 3% Goods and Services Tax (GST) is levied on all digital gold and silver purchases and is clearly itemized on every invoice.</li>
+            <li><strong>Price Lock Window:</strong> When you initiate a purchase or sale, the rate is locked for up to 120 seconds to protect you from interim market fluctuations while completing payment.</li>
+            <li><strong>Minimum Investment:</strong> Purchases can be made starting from an accessible minimum order value of ₹500 for both digital gold and silver.</li>
+        </ul>
+
+        <h2>5. Instant Settlement & Non-Refundability</h2>
+        <p>Due to the real-time volatility of precious metal spot commodity markets, once a buy or sell transaction is completed and confirmed via the payment aggregator, <strong>it cannot be cancelled, reversed, or refunded</strong>. Customers may liquidate their accumulated metal at any time by executing a sell order at the prevailing live sell rate.</p>
+
+        <h2>6. Systematic Investment Plan (SIP)</h2>
+        <p>Users may set up automated daily, weekly, or monthly SIPs. SIP purchases execute at the prevailing live buy rate at the scheduled trigger time. Users retain complete freedom to pause, edit, or terminate an active SIP mandate at any time without penalty or exit load.</p>
+
+        <h2>7. In-Store Redemption for Physical Coins & Jewellery</h2>
+        <p>Accumulated digital gold and silver balances can be redeemed as physical certified coins, minted bars, or jewellery across authorized retail showrooms. Counter redemption requires presenting the one-time pickup OTP generated in the mobile app along with matching government-issued photo identification.</p>
+
+        <h2>8. Buyback & Liquidation to Cash</h2>
+        <p>Customers may sell their vaulted gold or silver back through the app at the transparent live sell rate displayed on screen. Sale proceeds are remitted electronically to the customer&rsquo;s verified Indian bank account or UPI VPA within standard banking settlement windows (T+1 business days).</p>
+
+        <h2>9. Know Your Customer (KYC) & Regulatory Compliance</h2>
+        <p>In adherence to the Prevention of Money Laundering Act (PMLA), 2002, and RBI/Income Tax guidelines, KYC verification (PAN, Aadhaar/Government ID) is mandatory for cumulative transactions reaching statutory thresholds (₹2,00,000/-) or physical bullion delivery. Accounts providing fraudulent or forged documentation will be suspended.</p>
+
+        <h2>10. Market Risk Disclosures</h2>
+        <p>Precious metals commodity prices fluctuate according to global macro-economic conditions, currency rates, and market liquidity. Past price trends do not guarantee future performance. Vaultra Gold does not provide financial or speculative trading advice.</p>
+
+        <h2>11. Termination & Account Closure</h2>
+        <p>Users may close their account at any time provided all metal balances have been liquidated or redeemed. Vaultra Gold reserves the right to suspend accounts engaged in fraudulent activity, payment chargebacks, or violations of applicable Indian laws.</p>
+
+        <h2>12. Governing Law & Dispute Resolution</h2>
+        <p>These Terms shall be governed by and construed in accordance with the laws of the Republic of India. Any legal dispute arising under these Terms shall be subject to the exclusive jurisdiction of the competent courts in <strong>Mumbai, Maharashtra, India</strong>.</p>
+
+        <h2>13. Customer Support & Contact</h2>
+        <p>For inquiries, support, or billing concerns:<br>
+        <strong>Vaultra Gold Support:</strong> <a href="mailto:{support_email}">{support_email}</a><br>
+        <strong>Phone:</strong> {support_phone}<br>
+        <strong>Address:</strong> {addr}</p>
+        """
     else:
-        body = (f"<h1>Privacy Policy — {name}</h1><p>{j.business_name} (\"we\") operates the {name} app. We collect your phone number for login, "
-                "your name, PAN and address for KYC as required by law, and your transaction history to show your vault and invoices.</p>"
-                "<p>We do not sell your data. Data is shared only with payment and KYC partners needed to complete your request, and with "
-                "authorities when legally required. Data is encrypted in transit. You may request deletion of your account by contacting us.</p>"
-                f"<p>Contact: {j.phone} · {j.support_email or j.email}<br>{j.address or ''} {j.city or ''} {j.pincode or ''}</p>")
-    return f"<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>{name}</title><style>body{{font-family:system-ui,sans-serif;max-width:720px;margin:40px auto;padding:0 20px;line-height:1.6;color:#222}}</style></head><body>{body}</body></html>"
+        title = f"Privacy Policy — {app_name}"
+        effective_date = "November 18, 2026"
+        content = f"""
+        {partner_note}
+        <p class="lead"><strong>Vaultra Gold Private Limited</strong> (&ldquo;Vaultra Gold&rdquo;, &ldquo;Company&rdquo;, &ldquo;we&rdquo;, &ldquo;us&rdquo;, or &ldquo;our&rdquo;) is committed to safeguarding your personal data and privacy. This Privacy Policy governs your use of the <strong>{app_name}</strong> mobile applications (iOS and Android), web portals, and services.</p>
+
+        <p>This Policy is published in compliance with the <strong>Information Technology Act, 2000</strong>, the Information Technology (Reasonable Security Practices and Procedures and Sensitive Personal Data or Information) Rules, 2011, the Information Technology (Intermediary Guidelines and Digital Media Ethics Code) Rules, 2021, and the <strong>Digital Personal Data Protection (DPDP) Act, 2023</strong>.</p>
+
+        <h2>1. Information We Collect (Google Play & App Store Data Safety)</h2>
+        <p>We collect only the minimum necessary information required to operate a secure digital bullion vault and satisfy statutory Indian financial compliance:</p>
+        <ul>
+            <li><strong>Personal & Contact Data:</strong> Mobile phone number (used as your primary account identifier and for secure OTP sign-in), First and Last Name, Email address, Date of Birth, and Gender.</li>
+            <li><strong>Identity & KYC Documentation:</strong> Permanent Account Number (PAN), Government identity details (Aadhaar, Passport, or Voter ID), and selfie/face photo. <em>Collection is strictly conducted in compliance with PMLA regulations for cumulative transactions exceeding statutory limits (₹2,00,000/-) or physical bullion redemption.</em></li>
+            <li><strong>Financial & Transaction Records:</strong> Purchase history, sell orders, SIP schedules, fractional gram holdings, GST tax invoice records, and bank account / UPI VPA details submitted for receiving sale payouts. <em>Payment Card Security Note: We DO NOT collect, store, or process credit/debit card numbers, CVVs, netbanking passwords, or UPI MPINs. All payment transactions are processed through RBI-authorized payment aggregators (e.g., Razorpay) via 256-bit encrypted checkout.</em></li>
+            <li><strong>Device & Diagnostics Data:</strong> IP address, device model, operating system version, unique device identifiers, app version, network state, and crash diagnostics used strictly for fraud prevention, server load balancing, and stability.</li>
+            <li><strong>OTP Authentication:</strong> One-time password verification via SMS and WhatsApp (via licensed telecom gateways such as Hanu). We <strong>DO NOT</strong> request or access your private SMS inbox.</li>
+        </ul>
+
+        <h2>2. How We Use Your Information</h2>
+        <ul>
+            <li>To create, authenticate, and maintain your 24K 999.0 digital gold and silver vault account.</li>
+            <li>To process instant buy, sell, SIP, and counter redemption transactions at live spot rates.</li>
+            <li>To issue legally valid GST invoices and annual transaction statements.</li>
+            <li>To prevent fraud, identity theft, money laundering, and unauthorized bullion redemptions.</li>
+            <li>To transmit critical transactional confirmations, OTP codes, and rate alerts requested by you.</li>
+            <li>To comply with regulatory obligations under Indian tax laws and the Prevention of Money Laundering Act, 2002.</li>
+        </ul>
+
+        <h2>3. We Never Sell Your Data</h2>
+        <p><strong>Vaultra Gold does not sell, rent, monetize, or trade your personal information</strong> with third-party data brokers, marketers, or advertisers under any circumstances.</p>
+
+        <h2>4. Disclosures & Authorized Third Parties</h2>
+        <p>We share data strictly on a need-to-know basis with trusted partners who are bound by strict non-disclosure and data protection agreements:</p>
+        <ul>
+            <li><strong>Authorized Partner Jeweller:</strong> If you use a partner store branded application, order and pickup verification details are shared with the participating jeweller ({business}) to enable in-store physical gold pickup and customer care.</li>
+            <li><strong>Payment Aggregators:</strong> RBI-licensed payment gateways (Razorpay Software Private Limited) to process UPI, cards, and netbanking.</li>
+            <li><strong>Telecom Gateways:</strong> Licensed SMS and WhatsApp business service providers (Hanu) strictly for sending 6-digit OTP verification codes.</li>
+            <li><strong>Vault Custodians & Insurers:</strong> Independent institutional vaults storing physical bullion backing your digital holdings.</li>
+            <li><strong>Statutory & Regulatory Authorities:</strong> Government bodies, tax authorities, or law enforcement agencies only when legally compelled by a binding court order, summons, or statutory duty under Indian law.</li>
+        </ul>
+
+        <h2>5. Data Security & Storage Standards</h2>
+        <p>We employ enterprise-grade security protocols conforming to ISO/IEC 27001 and RBI cyber security guidelines:</p>
+        <ul>
+            <li><strong>Encryption in Transit:</strong> All data transmitted between your device and our servers is secured using modern TLS 1.3 / SSL 256-bit encryption.</li>
+            <li><strong>Encryption at Rest:</strong> Sensitive credentials, tokens, and KYC data are encrypted using industry-standard AES-256 algorithms.</li>
+            <li><strong>Domestic Data Residency:</strong> All customer vaults, transaction ledgers, and database backups are hosted domestically within the Republic of India (AWS Mumbai Region).</li>
+            <li><strong>Access Controls:</strong> Multi-factor authentication and strict role-based access control (RBAC) restrict internal ledger access to authorized security personnel only.</li>
+        </ul>
+
+        <h2>6. Account Deletion & Statutory Retention Policy</h2>
+        <p>In full compliance with <strong>Google Play Data Safety</strong> and <strong>Apple App Store Guideline 5.1.1(v)</strong>, users have the unconditional right to delete their account and have their personal data scrubbed:</p>
+        <ul>
+            <li><strong>In-App Deletion:</strong> Open the app &rarr; go to <strong>Profile</strong> &rarr; tap <strong>Delete Account</strong> &rarr; confirm deletion.</li>
+            <li><strong>Web Deletion Portal:</strong> You can submit a deletion request anytime via our dedicated portal at <a href="https://master.vaultragold.com/delete-account">https://master.vaultragold.com/delete-account</a> or by emailing <a href="mailto:support@vaultragold.com">support@vaultragold.com</a>.</li>
+            <li><strong>Mandatory Pre-requisite:</strong> To prevent financial loss, your gold, silver, and wallet balance must be zero (liquidated or redeemed) before account deletion can be completed.</li>
+            <li><strong>Data Retention Limitations:</strong> Upon confirmed deletion, your personal identifiers (name, phone number, email, profile photo, authentication tokens) are permanently deleted or anonymized within 30 days. However, as mandated by Section 12 of the <strong>Prevention of Money Laundering Act (PMLA), 2002</strong>, and Section 36 of the <strong>Central Goods and Services Tax (CGST) Act, 2017</strong>, financial transaction ledgers, invoices, and statutory audit logs must be maintained in an encrypted, read-only regulatory archive for a statutory period of <strong>5 (five) years</strong>, after which they are permanently purged.</li>
+        </ul>
+
+        <h2>7. Your Rights under the DPDP Act, 2023</h2>
+        <p>As a data principal, you have the right to:</p>
+        <ul>
+            <li>Access a summary of your personal data and vault transaction history.</li>
+            <li>Request correction or updating of inaccurate personal data.</li>
+            <li>Withdraw consent and request account deletion.</li>
+            <li>Seek redressal of any grievance through our Grievance Officer.</li>
+        </ul>
+
+        <h2>8. Children's Privacy</h2>
+        <p>The Platform is intended strictly for individuals aged 18 and older. We do not knowingly collect personal information from minors.</p>
+
+        <h2>9. Grievance Redressal Officer (IT Rules, 2021)</h2>
+        <p>In accordance with Rule 3(2) of the Information Technology (Intermediary Guidelines and Digital Media Ethics Code) Rules, 2021, and the Digital Personal Data Protection Act, 2023, the contact details of our Grievance Redressal Officer are:</p>
+        <div class="officer-box">
+            <strong>Grievance Redressal Officer</strong><br>
+            Vaultra Gold Private Limited<br>
+            <strong>Email:</strong> <a href="mailto:grievance@vaultragold.com">grievance@vaultragold.com</a> (copy: <a href="mailto:{support_email}">{support_email}</a>)<br>
+            <strong>Phone:</strong> {support_phone}<br>
+            <strong>Registered Office:</strong> {addr}<br>
+            <em>Acknowledgment timeframe: within 24 hours &middot; Resolution timeframe: within 15 business days</em>
+        </div>
+
+        <h2>10. Updates to this Policy</h2>
+        <p>We may update this Privacy Policy from time to time to reflect evolving regulatory requirements or platform features. Significant updates will be notified through the mobile application or our website.</p>
+        """
+
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{title}</title>
+  <style>
+    :root {{
+      --gold-primary: #C59A45;
+      --gold-dark: #8F6A1E;
+      --gold-light: #FBF4E6;
+      --text-main: #1A1A1A;
+      --text-muted: #555555;
+      --bg-page: #F8F9FA;
+      --bg-card: #FFFFFF;
+      --border-color: #E5E7EB;
+    }}
+    * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+    body {{
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Helvetica Neue", sans-serif;
+      background-color: var(--bg-page);
+      color: var(--text-main);
+      line-height: 1.68;
+      padding: 0 16px 60px;
+    }}
+    header {{
+      background: linear-gradient(135deg, #1C1917 0%, #292524 100%);
+      color: #FFFFFF;
+      padding: 36px 20px;
+      margin: -0 -16px 32px -16px;
+      text-align: center;
+      border-bottom: 3px solid var(--gold-primary);
+    }}
+    .brand-title {{
+      font-size: 26px;
+      font-weight: 800;
+      letter-spacing: -0.5px;
+      color: #F6D686;
+      margin-bottom: 6px;
+    }}
+    .doc-subtitle {{
+      font-size: 14px;
+      color: #D6D3D1;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      font-weight: 600;
+    }}
+    .container {{
+      max-width: 820px;
+      margin: 0 auto;
+      background: var(--bg-card);
+      padding: 40px;
+      border-radius: 14px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.06);
+      border: 1px solid var(--border-color);
+    }}
+    .nav-tabs {{
+      display: flex;
+      gap: 12px;
+      margin-bottom: 28px;
+      border-bottom: 2px solid var(--border-color);
+      padding-bottom: 12px;
+    }}
+    .nav-tabs a {{
+      color: var(--text-muted);
+      text-decoration: none;
+      font-size: 14px;
+      font-weight: 600;
+      padding: 6px 12px;
+      border-radius: 6px;
+      transition: all 0.2s;
+    }}
+    .nav-tabs a.active, .nav-tabs a:hover {{
+      background: var(--gold-light);
+      color: var(--gold-dark);
+    }}
+    h1 {{
+      font-size: 24px;
+      font-weight: 800;
+      color: #111827;
+      margin-bottom: 8px;
+      letter-spacing: -0.5px;
+    }}
+    .date-badge {{
+      font-size: 13px;
+      color: var(--text-muted);
+      margin-bottom: 24px;
+    }}
+    .partner-badge {{
+      background: #FFFBEB;
+      border-left: 4px solid var(--gold-primary);
+      padding: 14px 16px;
+      border-radius: 0 8px 8px 0;
+      font-size: 14px;
+      color: #92400E;
+      margin-bottom: 24px;
+    }}
+    .lead {{
+      font-size: 16px;
+      color: #374151;
+      margin-bottom: 24px;
+      font-weight: 500;
+    }}
+    h2 {{
+      font-size: 18px;
+      font-weight: 700;
+      color: #1F2937;
+      margin: 30px 0 12px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid var(--border-color);
+    }}
+    p {{
+      margin-bottom: 16px;
+      font-size: 15px;
+      color: #374151;
+    }}
+    ul {{
+      margin: 12px 0 20px 24px;
+      color: #374151;
+    }}
+    li {{
+      margin-bottom: 8px;
+      font-size: 15px;
+    }}
+    a {{
+      color: var(--gold-dark);
+      text-decoration: underline;
+      font-weight: 600;
+    }}
+    .officer-box {{
+      background: #F9FAFB;
+      border: 1px solid #E5E7EB;
+      border-radius: 8px;
+      padding: 18px;
+      margin: 16px 0;
+      font-size: 14px;
+      line-height: 1.6;
+    }}
+    footer {{
+      text-align: center;
+      margin-top: 40px;
+      font-size: 13px;
+      color: #9CA3AF;
+    }}
+    @media (max-width: 640px) {{
+      .container {{ padding: 22px 18px; }}
+      h1 {{ font-size: 20px; }}
+      h2 {{ font-size: 16px; }}
+    }}
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand-title">VAULTRA GOLD</div>
+    <div class="doc-subtitle">Institutional 24K Digital Gold & Silver Infrastructure</div>
+  </header>
+  <div class="container">
+    <div class="nav-tabs">
+      <a href="privacy" class="{"active" if not terms else ""}">Privacy Policy</a>
+      <a href="terms" class="{"active" if terms else ""}">Terms of Service</a>
+      <a href="/delete-account">Account Deletion</a>
+    </div>
+    <h1>{title}</h1>
+    <div class="date-badge">Effective Date: {effective_date} &middot; Version 2.4</div>
+    {content}
+    <footer>
+      &copy; 2026 Vaultra Gold Private Limited. All Rights Reserved.<br>
+      Licensed Digital Gold & Silver Infrastructure Provider
+    </footer>
+  </div>
+</body>
+</html>"""
+
+
+def delete_account_html(j=None):
+    app_name = (getattr(j, "app_name", None) or getattr(j, "business_name", None) or "Vaultra Gold") if j else "Vaultra Gold"
+    support_email = (getattr(j, "support_email", None) or getattr(j, "email", None) or "support@vaultragold.com") if j else "support@vaultragold.com"
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Delete Account — {app_name}</title>
+  <style>
+    :root {{
+      --gold: #C59A45;
+      --danger: #DC2626;
+      --bg: #F8F9FA;
+      --text: #1F2937;
+    }}
+    * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+    body {{
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      padding: 30px 16px;
+    }}
+    .box {{
+      max-width: 600px;
+      margin: 40px auto;
+      background: #FFF;
+      border-radius: 12px;
+      padding: 32px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.08);
+      border: 1px solid #E5E7EB;
+    }}
+    h1 {{ font-size: 22px; color: #111; margin-bottom: 12px; }}
+    p {{ font-size: 15px; margin-bottom: 16px; color: #4B5563; }}
+    .alert {{
+      background: #FEF2F2;
+      border-left: 4px solid var(--danger);
+      padding: 14px;
+      color: #991B1B;
+      font-size: 14px;
+      border-radius: 0 8px 8px 0;
+      margin-bottom: 24px;
+    }}
+    .steps {{
+      background: #F9FAFB;
+      border-radius: 8px;
+      padding: 18px 22px;
+      margin-bottom: 24px;
+    }}
+    .steps ol {{ margin-left: 18px; }}
+    .steps li {{ margin-bottom: 8px; font-size: 14px; color: #374151; }}
+    .btn {{
+      display: inline-block;
+      background: var(--gold);
+      color: #FFF;
+      text-decoration: none;
+      font-weight: 600;
+      padding: 12px 24px;
+      border-radius: 8px;
+      text-align: center;
+    }}
+    .retention {{
+      font-size: 13px;
+      color: #6B7280;
+      border-top: 1px solid #E5E7EB;
+      padding-top: 18px;
+      margin-top: 24px;
+    }}
+  </style>
+</head>
+<body>
+  <div class="box">
+    <h1>Delete Your {app_name} Account</h1>
+    <p>We respect your privacy and provide two simple methods to permanently delete your account and personal data:</p>
+
+    <div class="steps">
+      <strong>Method 1: Direct In-App Deletion (Instant)</strong>
+      <ol>
+        <li>Open the <strong>{app_name}</strong> mobile app.</li>
+        <li>Go to <strong>Profile / Account</strong> from the bottom menu.</li>
+        <li>Scroll down and tap <strong>Delete Account</strong>.</li>
+        <li>Confirm the deletion prompt. Your session and credentials will be purged immediately.</li>
+      </ol>
+    </div>
+
+    <div class="alert">
+      <strong>Important Requirement:</strong> To protect your financial assets, your gold and silver vault balance must be <strong>0.0000 grams</strong> (sold or redeemed in store) before deletion. If you hold metal, please liquidate or collect it first.
+    </div>
+
+    <div class="steps">
+      <strong>Method 2: Web Deletion Request</strong>
+      <p style="margin-top: 8px; font-size: 14px;">If you no longer have access to the mobile application, you can submit an account closure request directly to our security team:</p>
+      <p style="margin-top: 8px;"><a href="mailto:{support_email}?subject=Account%20Deletion%20Request%20-%20{app_name}&body=Please%20delete%20my%20account.%20Registered%20Mobile%20Number:%20" class="btn">Email Account Deletion Request</a></p>
+    </div>
+
+    <div class="retention">
+      <strong>Statutory Data Retention Notice:</strong> Upon account deletion, all personal identification data (name, phone number, email, address, profile photo, and active credentials) is deleted or scrubbed within 30 days. In compliance with the Prevention of Money Laundering Act (PMLA), 2002, and GST tax laws, historical financial ledger entries and tax invoices must be retained in an encrypted regulatory archive for 5 years.
+    </div>
+  </div>
+</body>
+</html>"""
 
 
 def build_app_kit(j, api_base, rates, logo_bytes=None, splash_bytes=None):
@@ -311,11 +738,13 @@ def build_app_kit(j, api_base, rates, logo_bytes=None, splash_bytes=None):
         for i, kind in enumerate(("home", "rates", "vault"), 1):
             z.writestr(f"store/screenshots/{i}-{kind}.png", make_screenshot(kind, name, p, rates, logo))
         z.writestr("store/feature-graphic.png", make_feature_graphic(name, p, logo))
+        z.writestr("store/icon-512x512.png", make_icon_512(name, p, logo))
         s = cfg["store"]
         z.writestr("store/listing.md", f"# {name}\n\n**Short description:** {s['shortDescription']}\n\n**Keywords:** {s['keywords']}\n\n"
                    f"**Privacy policy:** {s['privacyPolicyUrl']}\n**Terms:** {s['termsUrl']}\n\n## Full description\n\n{s['longDescription']}\n")
         z.writestr("store/privacy-policy.html", privacy_html(j))
         z.writestr("store/terms.html", privacy_html(j, terms=True))
+        z.writestr("store/delete-account.html", delete_account_html(j))
         z.writestr("README.md", KIT_README.format(name=name, bundle=cfg["bundleId"], tenant=j.id))
     return buf.getvalue(), cfg
 

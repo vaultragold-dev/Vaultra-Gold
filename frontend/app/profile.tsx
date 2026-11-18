@@ -1,9 +1,9 @@
 import { Image } from "expo-image";
 import * as ImagePicker from "expo-image-picker";
 import { useRouter } from "expo-router";
-import { ArrowLeft, ArrowRight, BadgeCheck, Camera, HelpCircle, LogOut, Moon, ShieldCheck, Sun, User, Users, Wallet } from "lucide-react-native";
+import { ArrowLeft, ArrowRight, BadgeCheck, Camera, HelpCircle, LogOut, Moon, ShieldCheck, Sun, Trash2, User, Users, Wallet } from "lucide-react-native";
 import React, { useEffect, useState } from "react";
-import { ActivityIndicator, Linking, Pressable, StyleSheet, Switch, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Alert, Linking, Pressable, StyleSheet, Switch, Text, TextInput, View } from "react-native";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -75,6 +75,30 @@ export default function Profile() {
 
   const canSubmit = fullName.trim().length > 1 && aadhaar.length === 12 && /^[A-Z]{5}\d{4}[A-Z]$/.test(pan) && !!photo;
   const kyc = user?.kyc_status ?? "not_submitted";
+
+  const confirmDeleteAccount = () => {
+    Alert.alert(
+      "Delete Account",
+      "Are you sure you want to delete your account? Personal data will be scrubbed. Any active gold or silver balance must be redeemed or sold prior to deletion.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete My Account",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              await api("/me", { method: "DELETE" });
+              await signOut();
+              toast("info", "Your account has been deleted");
+              router.replace("/");
+            } catch (e: any) {
+              Alert.alert("Account Deletion", e.message || "Failed to delete account");
+            }
+          },
+        },
+      ]
+    );
+  };
 
   if (!token) {
     return (
@@ -186,9 +210,19 @@ export default function Profile() {
             <Text style={styles.linkText}>Refer & Earn</Text>
             <ArrowRight size={16} color={colors.muted} />
           </Pressable>
-          <Pressable style={[styles.link, { borderBottomWidth: 0 }]} onPress={() => router.push("/faq")} testID="profile-faq-link">
+          <Pressable style={styles.link} onPress={() => router.push("/faq")} testID="profile-faq-link">
             <HelpCircle size={20} color={colors.onSurfaceTertiary} />
             <Text style={styles.linkText}>FAQ & Help</Text>
+            <ArrowRight size={16} color={colors.muted} />
+          </Pressable>
+          <Pressable style={styles.link} onPress={() => Linking.openURL("https://master.vaultragold.com/privacy")} testID="profile-privacy-link">
+            <ShieldCheck size={20} color={colors.onSurfaceTertiary} />
+            <Text style={styles.linkText}>Privacy Policy & Terms</Text>
+            <ArrowRight size={16} color={colors.muted} />
+          </Pressable>
+          <Pressable style={[styles.link, { borderBottomWidth: 0 }]} onPress={confirmDeleteAccount} testID="profile-delete-account">
+            <Trash2 size={20} color={colors.error} />
+            <Text style={[styles.linkText, { color: colors.error }]}>Delete Account</Text>
             <ArrowRight size={16} color={colors.muted} />
           </Pressable>
         </View>
