@@ -79,7 +79,22 @@ function shell(content) {
 }
 function render() {
   if (!localStorage.getItem('jeweller_token') || !S.me) { $('#root').innerHTML = loginView(); return; }
+  const active = document.activeElement;
+  const activeId = active && active.id ? active.id : null;
+  const start = (active && 'selectionStart' in active) ? active.selectionStart : null;
+  const end = (active && 'selectionEnd' in active) ? active.selectionEnd : null;
+
   $('#root').innerHTML = shell(VIEWS[S.tab]());
+
+  if (activeId) {
+    const el = document.getElementById(activeId);
+    if (el) {
+      el.focus();
+      if (start !== null && end !== null) {
+        try { el.setSelectionRange(start, end); } catch (e) {}
+      }
+    }
+  }
 }
 function go(tab) { S.tab = tab; localStorage.setItem('jp_tab', tab); $('#side')?.classList.remove('open'); render(); LOAD[tab]?.(); }
 const loading = '<div class="grid g4"><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div></div>';
@@ -214,13 +229,28 @@ function refreshLiveRates() {
 }
 
 /* ── orders ───────────────────────────── */
+function renderOrderRows(orders) {
+  if (!orders || !orders.length) return emptyRow(9, 'No orders match these filters');
+  return orders.map((x) => `<tr><td>${dt(x.created_at)}<div class="sub">${esc(x.invoice_no)}</div></td>
+    <td><b>${esc(x.customer_name)}</b><div class="sub">${phoneFmt(x.phone)}</div></td>
+    <td>${x.side === 'buy' ? `<span class="badge green plain">${x.type === 'sip' ? 'SIP buy' : 'Buy'}</span>` : '<span class="badge amber plain">Redeem</span>'}</td>
+    <td>${metalTag(x.metal)}</td><td class="r num">${g4(x.grams)}</td><td class="r num">${inr(x.rate)}</td><td class="r num"><b>${inr(x.total)}</b></td>
+    <td>${statusBadge(x.status)}</td><td class="r"><button class="btn sm" onclick="viewBill('${x.id}')" data-bill="${x.id}">${icon('invoice')} View bill</button></td></tr>`).join('');
+}
 async function loadOrders() {
   const f = S.of;
   try { S.orders = await api(`/jeweller/v3/orders?side=${f.side}&metal=${f.metal}&status=${f.status}&search=${encodeURIComponent(f.search)}`); } catch (e) { toast(e.message, true); }
-  if (S.tab === 'orders') render();
+  if (S.tab === 'orders') {
+    const tb = document.getElementById('orders-tbody');
+    if (tb) {
+      tb.innerHTML = renderOrderRows(S.orders ? S.orders.orders : []);
+      return;
+    }
+    render();
+  }
 }
 let oTimer;
-function setOF(k, v) { S.of[k] = v; clearTimeout(oTimer); oTimer = setTimeout(loadOrders, k === 'search' ? 300 : 0); }
+function setOF(k, v) { S.of[k] = v; clearTimeout(oTimer); oTimer = setTimeout(loadOrders, k === 'search' ? 250 : 0); }
 function vOrders() {
   const o = S.orders, f = S.of;
   const head = `<div class="page-head"><div><h2>Orders</h2><p>Every purchase and redemption made by your customers.</p></div></div>`;
@@ -237,12 +267,8 @@ function vOrders() {
         <select class="select" onchange="setOF('metal',this.value)"><option value="all">All metals</option><option value="gold" ${f.metal === 'gold' ? 'selected' : ''}>Gold</option><option value="silver" ${f.metal === 'silver' ? 'selected' : ''}>Silver</option></select>
         <select class="select" onchange="setOF('status',this.value)"><option value="all">Any status</option>${['completed', 'processing', 'failed'].map((x) => `<option ${f.status === x ? 'selected' : ''} value="${x}">${x[0].toUpperCase() + x.slice(1)}</option>`).join('')}</select>
       </div><input class="input search" placeholder="Name, phone or invoice" value="${esc(f.search)}" oninput="setOF('search',this.value)" id="orders-search"></div>
-      <div class="table-wrap"><table><thead><tr><th>When</th><th>Customer</th><th>Type</th><th>Metal</th><th class="r">Quantity</th><th class="r">Rate</th><th class="r">Total</th><th>Status</th><th></th></tr></thead><tbody>
-      ${o.orders.length ? o.orders.map((x) => `<tr><td>${dt(x.created_at)}<div class="sub">${esc(x.invoice_no)}</div></td>
-        <td><b>${esc(x.customer_name)}</b><div class="sub">${phoneFmt(x.phone)}</div></td>
-        <td>${x.side === 'buy' ? `<span class="badge green plain">${x.type === 'sip' ? 'SIP buy' : 'Buy'}</span>` : '<span class="badge amber plain">Redeem</span>'}</td>
-        <td>${metalTag(x.metal)}</td><td class="r num">${g4(x.grams)}</td><td class="r num">${inr(x.rate)}</td><td class="r num"><b>${inr(x.total)}</b></td>
-        <td>${statusBadge(x.status)}</td><td class="r"><button class="btn sm" onclick="viewBill('${x.id}')" data-bill="${x.id}">${icon('invoice')} View bill</button></td></tr>`).join('') : emptyRow(9, 'No orders match these filters')}
+      <div class="table-wrap"><table><thead><tr><th>When</th><th>Customer</th><th>Type</th><th>Metal</th><th class="r">Quantity</th><th class="r">Rate</th><th class="r">Total</th><th>Status</th><th></th></tr></thead><tbody id="orders-tbody">
+      ${renderOrderRows(o.orders)}
       </tbody></table></div></div>`;
 }
 async function viewBill(id) {
@@ -267,7 +293,22 @@ function printBill() {
 }
 
 /* ── holdings ─────────────────────────── */
-async function loadHold() { try { S.hold = await api('/jeweller/v3/holdings?search=' + encodeURIComponent(S.hsearch)); } catch (e) { toast(e.message, true); } if (S.tab === 'holdings') render(); }
+function renderHoldRows(customers) {
+  if (!customers || !customers.length) return emptyRow(12, 'No customers found');
+  return customers.map((c) => `<tr class="click" onclick="openHolding('${c.id}')" data-holding="${c.id}"><td><div style="display:flex;gap:10px;align-items:center"><div class="avatar">${esc(initials(c.name))}</div><div><b>${esc(c.name)}</b><div class="sub">${phoneFmt(c.phone)}</div></div></div></td>
+    <td><code>${esc(c.wallet_id)}</code></td><td class="r num"><b>${g4(c.gold_g)}</b></td><td class="r num">${inr0(c.gold_value)}</td><td class="r num">${c.avg_gold ? inr(c.avg_gold) + '/g' : '—'}</td><td class="r num">${g4(c.silver_g)}</td><td class="r num">${inr0(c.silver_value)}</td><td class="r num">${c.avg_silver ? inr(c.avg_silver) + '/g' : '—'}</td><td class="r num">${inr0(c.invested)}</td><td class="r num">${g4(c.redeemed_g)}</td><td>${c.last_activity ? dt(c.last_activity) : '<span style="color:var(--mute)">No activity</span>'}</td></tr>`).join('');
+}
+async function loadHold() {
+  try { S.hold = await api('/jeweller/v3/holdings?search=' + encodeURIComponent(S.hsearch)); } catch (e) { toast(e.message, true); }
+  if (S.tab === 'holdings') {
+    const tb = document.getElementById('hold-tbody');
+    if (tb) {
+      tb.innerHTML = renderHoldRows(S.hold ? S.hold.customers : []);
+      return;
+    }
+    render();
+  }
+}
 let hTimer;
 function vHoldings() {
   const h = S.hold;
@@ -281,10 +322,9 @@ function vHoldings() {
       ${kpi('Redeemed so far', g4(t.redeemed_g), 'collected from store', 'redeem', 'blue')}
     </div>
     <div class="card section"><div class="card-h"><div><h3>Customer holdings</h3><p>Sorted by gold held</p></div>
-      <input class="input search" placeholder="Name, phone or wallet ID" value="${esc(S.hsearch)}" id="hold-search" oninput="S.hsearch=this.value;clearTimeout(hTimer);hTimer=setTimeout(loadHold,300)"></div>
-      <div class="table-wrap"><table><thead><tr><th>Customer</th><th>Wallet ID</th><th class="r">Gold</th><th class="r">Gold value</th><th class="r">Avg gold buy</th><th class="r">Silver</th><th class="r">Silver value</th><th class="r">Avg silver buy</th><th class="r">Invested</th><th class="r">Redeemed</th><th>Last activity</th></tr></thead><tbody>
-      ${h.customers.length ? h.customers.map((c) => `<tr class="click" onclick="openHolding('${c.id}')" data-holding="${c.id}"><td><div style="display:flex;gap:10px;align-items:center"><div class="avatar">${esc(initials(c.name))}</div><div><b>${esc(c.name)}</b><div class="sub">${phoneFmt(c.phone)}</div></div></div></td>
-        <td><code>${esc(c.wallet_id)}</code></td><td class="r num"><b>${g4(c.gold_g)}</b></td><td class="r num">${inr0(c.gold_value)}</td><td class="r num">${c.avg_gold ? inr(c.avg_gold) + '/g' : '—'}</td><td class="r num">${g4(c.silver_g)}</td><td class="r num">${inr0(c.silver_value)}</td><td class="r num">${c.avg_silver ? inr(c.avg_silver) + '/g' : '—'}</td><td class="r num">${inr0(c.invested)}</td><td class="r num">${g4(c.redeemed_g)}</td><td>${c.last_activity ? dt(c.last_activity) : '<span style="color:var(--mute)">No activity</span>'}</td></tr>`).join('') : emptyRow(12, 'No customers found')}
+      <input class="input search" placeholder="Name, phone or wallet ID" value="${esc(S.hsearch)}" id="hold-search" oninput="S.hsearch=this.value;clearTimeout(hTimer);hTimer=setTimeout(loadHold,250)"></div>
+      <div class="table-wrap"><table><thead><tr><th>Customer</th><th>Wallet ID</th><th class="r">Gold</th><th class="r">Gold value</th><th class="r">Avg gold buy</th><th class="r">Silver</th><th class="r">Silver value</th><th class="r">Avg silver buy</th><th class="r">Invested</th><th class="r">Redeemed</th><th>Last activity</th></tr></thead><tbody id="hold-tbody">
+      ${renderHoldRows(h.customers)}
       </tbody></table></div></div>`;
 }
 async function openHolding(id) {
@@ -294,16 +334,32 @@ async function openHolding(id) {
   } catch (e) { closeDrawer(); toast(e.message, true); }
 }
 /* ── customers ────────────────────────── */
-async function loadCustomers() { try { S.customers = await api('/jeweller/customers?search=' + encodeURIComponent(S.csearch)); } catch (e) { toast(e.message, true); } if (S.tab === 'customers') render(); }
+function renderCustomerRows(customers) {
+  if (!customers || !customers.length) return emptyRow(7, 'No customers yet');
+  return customers.map((c) => `<tr><td><div style="display:flex;gap:10px;align-items:center"><div class="avatar">${esc(initials(c.name))}</div><div><b>${esc(c.name)}</b><div class="sub">${phoneFmt(c.phone)}${c.email ? ' · ' + esc(c.email) : ''}</div></div></div></td>
+    <td><code>${esc(c.wallet_id)}</code></td><td class="r num">${g4(c.gold_grams)}</td><td class="r num">${g4(c.silver_grams)}</td><td>${statusBadge(c.kyc_status)}</td><td>${dOnly(c.created_at)}</td>
+    <td class="r"><button class="btn sm" onclick="openHolding('${c.id}')">${icon('eye')} View</button></td></tr>`).join('');
+}
+async function loadCustomers() {
+  try { S.customers = await api('/jeweller/customers?search=' + encodeURIComponent(S.csearch)); } catch (e) { toast(e.message, true); }
+  if (S.tab === 'customers') {
+    const tb = document.getElementById('customers-tbody');
+    if (tb) {
+      tb.innerHTML = renderCustomerRows(S.customers || []);
+      const countEl = document.getElementById('customers-count');
+      if (countEl) countEl.textContent = `${(S.customers || []).length} customers`;
+      return;
+    }
+    render();
+  }
+}
 let cTimer;
 function vCustomers() {
   const head = `<div class="page-head"><div><h2>Customers</h2><p>Everyone using your branded app.</p></div></div>`;
   if (!S.customers) return head + loading;
-  return head + `<div class="card"><div class="card-h"><h3>${S.customers.length} customers</h3><input class="input search" placeholder="Name or phone" value="${esc(S.csearch)}" oninput="S.csearch=this.value;clearTimeout(cTimer);cTimer=setTimeout(loadCustomers,300)"></div>
-    <div class="table-wrap"><table><thead><tr><th>Customer</th><th>Wallet ID</th><th class="r">Gold</th><th class="r">Silver</th><th>KYC</th><th>Joined</th><th></th></tr></thead><tbody>
-    ${S.customers.length ? S.customers.map((c) => `<tr><td><div style="display:flex;gap:10px;align-items:center"><div class="avatar">${esc(initials(c.name))}</div><div><b>${esc(c.name)}</b><div class="sub">${phoneFmt(c.phone)}${c.email ? ' · ' + esc(c.email) : ''}</div></div></div></td>
-      <td><code>${esc(c.wallet_id)}</code></td><td class="r num">${g4(c.gold_grams)}</td><td class="r num">${g4(c.silver_grams)}</td><td>${statusBadge(c.kyc_status)}</td><td>${dOnly(c.created_at)}</td>
-      <td class="r"><button class="btn sm" onclick="openHolding('${c.id}')">${icon('eye')} View</button></td></tr>`).join('') : emptyRow(7, 'No customers yet')}
+  return head + `<div class="card"><div class="card-h"><h3 id="customers-count">${S.customers.length} customers</h3><input class="input search" id="customers-search" placeholder="Name or phone" value="${esc(S.csearch)}" oninput="S.csearch=this.value;clearTimeout(cTimer);cTimer=setTimeout(loadCustomers,250)"></div>
+    <div class="table-wrap"><table><thead><tr><th>Customer</th><th>Wallet ID</th><th class="r">Gold</th><th class="r">Silver</th><th>KYC</th><th>Joined</th><th></th></tr></thead><tbody id="customers-tbody">
+    ${renderCustomerRows(S.customers)}
     </tbody></table></div></div>`;
 }
 

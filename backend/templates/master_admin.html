@@ -56,7 +56,25 @@ function shell(c) {
     <div id="feedalert">${feedAlert(S.price)}</div>
     <div class="content">${c}</div></main></div>`;
 }
-function render() { if (!localStorage.getItem('master_token')) { $('#root').innerHTML = loginView(); return; } $('#root').innerHTML = shell(VIEWS[S.tab]()); }
+function render() {
+  if (!localStorage.getItem('master_token')) { $('#root').innerHTML = loginView(); return; }
+  const active = document.activeElement;
+  const activeId = active && active.id ? active.id : null;
+  const start = (active && 'selectionStart' in active) ? active.selectionStart : null;
+  const end = (active && 'selectionEnd' in active) ? active.selectionEnd : null;
+
+  $('#root').innerHTML = shell(VIEWS[S.tab]());
+
+  if (activeId) {
+    const el = document.getElementById(activeId);
+    if (el) {
+      el.focus();
+      if (start !== null && end !== null) {
+        try { el.setSelectionRange(start, end); } catch (e) {}
+      }
+    }
+  }
+}
 function go(t) { S.tab = t; localStorage.setItem('mp_tab', t); $('#side')?.classList.remove('open'); render(); LOAD[t]?.(); }
 async function safe(fn, tab) { try { await fn(); } catch (e) { if (e.status === 401) return logout(); toast(e.message, true); } if (!tab || S.tab === tab) render(); }
 
