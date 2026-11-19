@@ -290,11 +290,11 @@ def make_feature_graphic(name, p, logo=None):
 def privacy_html(j=None, terms=False):
     app_name = (getattr(j, "app_name", None) or getattr(j, "business_name", None) or "Vaultra Gold") if j else "Vaultra Gold"
     business = getattr(j, "business_name", "Vaultra Gold Private Limited") if j else "Vaultra Gold Private Limited"
-    support_email = (getattr(j, "support_email", None) or getattr(j, "email", None) or "support@vaultragold.com") if j else "support@vaultragold.com"
+    support_email = (getattr(j, "support_email", None) or getattr(j, "email", None) or "info@vaultragold.com") if j else "info@vaultragold.com"
     support_phone = getattr(j, "phone", "+91 98765 43210") if j else "+91 98765 43210"
-    addr = f"{getattr(j, 'address', '')} {getattr(j, 'city', '')} {getattr(j, 'state', '')} {getattr(j, 'pincode', '')}".strip() if j else "Mumbai, Maharashtra, India"
+    addr = f"{getattr(j, 'address', '')} {getattr(j, 'city', '')} {getattr(j, 'state', '')} {getattr(j, 'pincode', '')}".strip() if j else "Ahmedabad, Gujarat, India"
     if not addr:
-        addr = "Mumbai, Maharashtra, India"
+        addr = "Ahmedabad, Gujarat, India"
 
     is_partner = (j is not None and getattr(j, "id", "") not in ("master", "vaultra", ""))
     partner_note = (
@@ -349,7 +349,7 @@ def privacy_html(j=None, terms=False):
         <p>Users may close their account at any time provided all metal balances have been liquidated or redeemed. Vaultra Gold reserves the right to suspend accounts engaged in fraudulent activity, payment chargebacks, or violations of applicable Indian laws.</p>
 
         <h2>12. Governing Law & Dispute Resolution</h2>
-        <p>These Terms shall be governed by and construed in accordance with the laws of the Republic of India. Any legal dispute arising under these Terms shall be subject to the exclusive jurisdiction of the competent courts in <strong>Mumbai, Maharashtra, India</strong>.</p>
+        <p>These Terms shall be governed by and construed in accordance with the laws of the Republic of India. Any legal dispute arising under these Terms shall be subject to the exclusive jurisdiction of the competent courts in <strong>Ahmedabad, Gujarat, India</strong>.</p>
 
         <h2>13. Customer Support & Contact</h2>
         <p>For inquiries, support, or billing concerns:<br>
@@ -404,7 +404,7 @@ def privacy_html(j=None, terms=False):
         <ul>
             <li><strong>Encryption in Transit:</strong> All data transmitted between your device and our servers is secured using modern TLS 1.3 / SSL 256-bit encryption.</li>
             <li><strong>Encryption at Rest:</strong> Sensitive credentials, tokens, and KYC data are encrypted using industry-standard AES-256 algorithms.</li>
-            <li><strong>Domestic Data Residency:</strong> All customer vaults, transaction ledgers, and database backups are hosted domestically within the Republic of India (AWS Mumbai Region).</li>
+            <li><strong>Domestic Data Residency:</strong> All customer vaults, transaction ledgers, and database backups are hosted domestically within the Republic of India in secure data centers.</li>
             <li><strong>Access Controls:</strong> Multi-factor authentication and strict role-based access control (RBAC) restrict internal ledger access to authorized security personnel only.</li>
         </ul>
 
@@ -412,7 +412,7 @@ def privacy_html(j=None, terms=False):
         <p>In full compliance with <strong>Google Play Data Safety</strong> and <strong>Apple App Store Guideline 5.1.1(v)</strong>, users have the unconditional right to delete their account and have their personal data scrubbed:</p>
         <ul>
             <li><strong>In-App Deletion:</strong> Open the app &rarr; go to <strong>Profile</strong> &rarr; tap <strong>Delete Account</strong> &rarr; confirm deletion.</li>
-            <li><strong>Web Deletion Portal:</strong> You can submit a deletion request anytime via our dedicated portal at <a href="https://master.vaultragold.com/delete-account">https://master.vaultragold.com/delete-account</a> or by emailing <a href="mailto:support@vaultragold.com">support@vaultragold.com</a>.</li>
+            <li><strong>Web Deletion Portal:</strong> You can submit a deletion request anytime via our dedicated portal at <a href="https://master.vaultragold.com/delete-account">https://master.vaultragold.com/delete-account</a> or by emailing <a href="mailto:info@vaultragold.com">info@vaultragold.com</a>.</li>
             <li><strong>Mandatory Pre-requisite:</strong> To prevent financial loss, your gold, silver, and wallet balance must be zero (liquidated or redeemed) before account deletion can be completed.</li>
             <li><strong>Data Retention Limitations:</strong> Upon confirmed deletion, your personal identifiers (name, phone number, email, profile photo, authentication tokens) are permanently deleted or anonymized within 30 days. However, as mandated by Section 12 of the <strong>Prevention of Money Laundering Act (PMLA), 2002</strong>, and Section 36 of the <strong>Central Goods and Services Tax (CGST) Act, 2017</strong>, financial transaction ledgers, invoices, and statutory audit logs must be maintained in an encrypted, read-only regulatory archive for a statutory period of <strong>5 (five) years</strong>, after which they are permanently purged.</li>
         </ul>
@@ -434,7 +434,7 @@ def privacy_html(j=None, terms=False):
         <div class="officer-box">
             <strong>Grievance Redressal Officer</strong><br>
             Vaultra Gold Private Limited<br>
-            <strong>Email:</strong> <a href="mailto:grievance@vaultragold.com">grievance@vaultragold.com</a> (copy: <a href="mailto:{support_email}">{support_email}</a>)<br>
+            <strong>Email:</strong> <a href="mailto:info@vaultragold.com">info@vaultragold.com</a><br>
             <strong>Phone:</strong> {support_phone}<br>
             <strong>Registered Office:</strong> {addr}<br>
             <em>Acknowledgment timeframe: within 24 hours &middot; Resolution timeframe: within 15 business days</em>
@@ -620,7 +620,7 @@ def privacy_html(j=None, terms=False):
 
 def delete_account_html(j=None):
     app_name = (getattr(j, "app_name", None) or getattr(j, "business_name", None) or "Vaultra Gold") if j else "Vaultra Gold"
-    support_email = (getattr(j, "support_email", None) or getattr(j, "email", None) or "support@vaultragold.com") if j else "support@vaultragold.com"
+    support_email = (getattr(j, "support_email", None) or getattr(j, "email", None) or "info@vaultragold.com") if j else "info@vaultragold.com"
     return f"""<!doctype html>
 <html lang="en">
 <head>
