@@ -7,20 +7,35 @@ import { NativeScrollEvent, NativeSyntheticEvent, Pressable, ScrollView, type Sc
 import { api } from "@/src/api";
 import { BANNERS as DEFAULT_BANNERS, IMAGES } from "@/src/assets";
 import { useApp } from "@/src/store/AppContext";
+import { tenantConfig } from "@/src/tenantConfig";
 import { colors, fonts, radius } from "@/src/theme";
 
 type Banner = { id: string; image?: string; image_url?: string; eyebrow?: string; title?: string; subtitle?: string; link?: string };
 const LINK_ROUTES: Record<string, string> = { buy: "/", sip: "/sip", jewellery: "/jewellery", refer: "/referral" };
-const BASE = process.env.EXPO_PUBLIC_BACKEND_URL || "";
+
+function toAbsUrl(u?: string): string {
+  if (!u) return "";
+  if (u.startsWith("http://") || u.startsWith("https://")) return u;
+  const base = (
+    process.env.EXPO_PUBLIC_BACKEND_URL ||
+    tenantConfig?.apiBaseUrl ||
+    "https://master.vaultragold.com"
+  ).trim().replace(/\/+$/, "").replace(/\/api$/, "");
+  return `${base}${u.startsWith("/") ? "" : "/"}${u}`;
+}
 
 export function BannerCarousel() {
   const { width: winW } = useWindowDimensions();
-  const width = Math.min(winW, 720) - 32;
+  const screenW = Math.min(winW, 720);
+  const cardWidth = screenW - 32; // 16px margin on each side
+  const spacing = 12;
+  const interval = cardWidth + spacing;
   const ref = useRef<ScrollViewInstance>(null);
   const [idx, setIdx] = useState(0);
   const { tenant } = useApp();
   const router = useRouter();
   const [BANNERS, setBanners] = useState<Banner[]>(DEFAULT_BANNERS);
+
   useEffect(() => {
     api<{ banners: Banner[] }>(`/content?jeweller_id=${tenant}`, { auth: "none" })
       .then((r) => setBanners(r.banners?.length ? r.banners : DEFAULT_BANNERS))
@@ -28,18 +43,21 @@ export function BannerCarousel() {
   }, [tenant]);
 
   useEffect(() => {
+    if (BANNERS.length <= 1) return;
     const id = setInterval(() => {
       setIdx((i) => {
-        const n = (i + 1) % BANNERS.length;
-        ref.current?.scrollTo({ x: n * (width + 16), animated: true });
-        return n;
+        const next = (i + 1) % BANNERS.length;
+        ref.current?.scrollTo({ x: next * interval, animated: true });
+        return next;
       });
     }, 4500);
     return () => clearInterval(id);
-  }, [width, BANNERS.length]);
+  }, [interval, BANNERS.length]);
 
   const onEnd = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
-    setIdx(Math.round(e.nativeEvent.contentOffset.x / (width + 16)));
+    const x = e.nativeEvent.contentOffset.x;
+    const newIdx = Math.max(0, Math.min(BANNERS.length - 1, Math.round(x / interval)));
+    setIdx(newIdx);
   };
 
   return (
@@ -48,35 +66,53 @@ export function BannerCarousel() {
         ref={ref}
         horizontal
         pagingEnabled={false}
-        snapToInterval={width + 16}
+        snapToInterval={interval}
+        snapToAlignment="start"
         decelerationRate="fast"
         showsHorizontalScrollIndicator={false}
         onMomentumScrollEnd={onEnd}
-        contentContainerStyle={{ paddingHorizontal: 16, gap: 16 }}
+        contentContainerStyle={{ paddingHorizontal: 16 }}
       >
-        {BANNERS.map((b) => (
-          <Pressable key={b.id} style={[styles.banner, { width }]} testID={`banner-${b.id}`} disabled={!b.link || !LINK_ROUTES[b.link]} onPress={() => b.link && LINK_ROUTES[b.link] && router.push(LINK_ROUTES[b.link] as any)}>
-            {(() => {
-              const src = b.image_url ? { uri: b.image_url.startsWith("/") ? BASE + b.image_url : b.image_url } : IMAGES[b.image || "banner-1"];
-              return (
-                <>
-                  <Image source={src} style={StyleSheet.absoluteFill} contentFit="cover" blurRadius={18} />
-                  <Image source={src} style={StyleSheet.absoluteFill} contentFit="contain" transition={250} />
-                </>
-              );
-            })()}
-            {b.image_url ? null : <LinearGradient colors={["transparent", "rgba(17,24,39,0.88)"]} style={StyleSheet.absoluteFill} start={{ x: 0, y: 0.15 }} end={{ x: 0, y: 1 }} />}
-            <View style={[styles.bannerBody, b.image_url ? { display: "none" } : null]}>
-              {b.eyebrow ? (
-                <View style={styles.eyebrow}>
-                  <Text style={styles.eyebrowText}>{b.eyebrow}</Text>
-                </View>
-              ) : null}
-              {b.title ? <Text style={styles.title}>{b.title}</Text> : null}
-              {b.subtitle ? <Text style={styles.subtitle}>{b.subtitle}</Text> : null}
-            </View>
-          </Pressable>
-        ))}
+        {BANNERS.map((b, i) => {
+          const src = b.image_url ? { uri: toAbsUrl(b.image_url) } : IMAGES[b.image || "banner-1"];
+          return (
+            <Pressable
+              key={b.id}
+              style={[
+                styles.banner,
+                { width: cardWidth },
+                i < BANNERS.length - 1 ? { marginRight: spacing } : null,
+              ]}
+              testID={`banner-${b.id}`}
+              disabled={!b.link || !LINK_ROUTES[b.link]}
+              onPress={() => b.link && LINK_ROUTES[b.link] && router.push(LINK_ROUTES[b.link] as any)}
+            >
+              <Image
+                source={src}
+                style={StyleSheet.absoluteFill}
+                contentFit="cover"
+                transition={200}
+              />
+              {b.image_url ? null : (
+                <LinearGradient
+                  colors={["transparent", "rgba(17,24,39,0.88)"]}
+                  style={StyleSheet.absoluteFill}
+                  start={{ x: 0, y: 0.15 }}
+                  end={{ x: 0, y: 1 }}
+                />
+              )}
+              <View style={[styles.bannerBody, b.image_url ? { display: "none" } : null]}>
+                {b.eyebrow ? (
+                  <View style={styles.eyebrow}>
+                    <Text style={styles.eyebrowText}>{b.eyebrow}</Text>
+                  </View>
+                ) : null}
+                {b.title ? <Text style={styles.title}>{b.title}</Text> : null}
+                {b.subtitle ? <Text style={styles.subtitle}>{b.subtitle}</Text> : null}
+              </View>
+            </Pressable>
+          );
+        })}
       </ScrollView>
       <View style={styles.dots}>
         {BANNERS.map((b, i) => (
@@ -89,8 +125,8 @@ export function BannerCarousel() {
 
 const styles = StyleSheet.create({
   banner: {
-    aspectRatio: 2.2,
-    borderRadius: 18,
+    aspectRatio: 2.0,
+    borderRadius: 16,
     overflow: "hidden",
     borderWidth: 1,
     borderColor: colors.goldHairline,

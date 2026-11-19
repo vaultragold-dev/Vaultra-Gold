@@ -1,4 +1,5 @@
 import { useRouter } from "expo-router";
+import { Image } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
 import { ArrowLeft, Bell, Coins, Menu, User } from "lucide-react-native";
 import React, { useEffect, useState } from "react";
@@ -42,9 +43,53 @@ export function LiveTicker({ testID = "live-gold-ticker" }: { testID?: string })
 }
 
 export function LogoMark({ size = 36 }: { size?: number }) {
+  const { tenantLogo, tenantName } = useApp();
+  const [imgError, setImgError] = useState(false);
+
+  if (tenantLogo && !imgError) {
+    return (
+      <View
+        style={[
+          styles.logoMark,
+          {
+            width: size,
+            height: size,
+            borderRadius: Math.max(8, size * 0.28),
+            overflow: "hidden",
+            backgroundColor: "#FFFFFF",
+            borderWidth: 1,
+            borderColor: colors.goldHairline,
+            shadowColor: "#000",
+            shadowOffset: { width: 0, height: 1 },
+            shadowOpacity: 0.12,
+            shadowRadius: 3,
+            elevation: 2,
+          },
+        ]}
+      >
+        <Image
+          source={{ uri: tenantLogo }}
+          style={{ width: "100%", height: "100%" }}
+          contentFit="cover"
+          transition={200}
+          onError={() => setImgError(true)}
+        />
+      </View>
+    );
+  }
+
+  const initials = (tenantName || "G").split(" ").map((w) => w[0]).join("").slice(0, 2).toUpperCase();
+
   return (
-    <LinearGradient colors={[colors.goldSheen, colors.brandPrimary, colors.brandDeep]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={[styles.logoMark, { width: size, height: size, borderRadius: size * 0.3 }]}>
-      <Coins size={size * 0.52} color={colors.onBrandPrimary} strokeWidth={2.2} />
+    <LinearGradient
+      colors={[colors.goldSheen, colors.brandPrimary, colors.brandDeep]}
+      start={{ x: 0, y: 0 }}
+      end={{ x: 1, y: 1 }}
+      style={[styles.logoMark, { width: size, height: size, borderRadius: Math.max(8, size * 0.28) }]}
+    >
+      <Text style={{ fontFamily: fonts.bold, fontSize: size * 0.42, color: colors.onBrandPrimary }}>
+        {initials}
+      </Text>
     </LinearGradient>
   );
 }

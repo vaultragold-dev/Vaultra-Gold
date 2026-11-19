@@ -64,6 +64,7 @@ type Ctx = {
   tenant: string;
   tenantName: string;
   tenantPhone: string;
+  tenantLogo: string;
   tenantLocked: boolean;
   price: Price | null;
   priceError: boolean;
@@ -78,6 +79,17 @@ type Ctx = {
   refresh: () => Promise<void>;
 };
 
+function toAbsUrl(u?: string): string {
+  if (!u) return "";
+  if (u.startsWith("http://") || u.startsWith("https://")) return u;
+  const base = (
+    process.env.EXPO_PUBLIC_BACKEND_URL ||
+    tenantConfig?.apiBaseUrl ||
+    "https://master.vaultragold.com"
+  ).trim().replace(/\/+$/, "").replace(/\/api$/, "");
+  return `${base}${u.startsWith("/") ? "" : "/"}${u}`;
+}
+
 const AppCtx = createContext<Ctx>(null as any);
 const TOKEN_KEY = "vdg_user_token";
 const TENANT_KEY = "vdg_tenant";
@@ -88,6 +100,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [tenant, setTenantState] = useState(LOCKED_TENANT_ID || DEFAULT_TENANT);
   const [tenantName, setTenantName] = useState("");
+  const [tenantLogo, setTenantLogo] = useState(toAbsUrl(tenantConfig.assets?.logoUrl));
   const [tenantLocked, setTenantLocked] = useState(false);
   const [price, setPrice] = useState<Price | null>(null);
   const [priceError, setPriceError] = useState(false);
@@ -173,6 +186,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setApiTenant(active);
       setTenantState(active);
       setTenantName(TENANT_NAME[active] || "");
+      try {
+        const cfg = await api<{ appName?: string; assets?: { logoUrl?: string } }>(`/tenant/${active}/config`, { auth: "none" });
+        if (cfg.assets?.logoUrl) {
+          setTenantLogo(toAbsUrl(cfg.assets.logoUrl));
+        }
+      } catch {}
       if (t) {
         setToken("user", String(t));
         setTok(String(t));
@@ -287,7 +306,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   };
 
   return (
-    <AppCtx.Provider value={{ booting, token, user, tenant, tenantName, tenantPhone: TENANT_PHONE[tenant] || "", tenantLocked, price, priceError, vault, alerts, unreadNotifs, reloadAlerts, reloadNotifs, setTenant, signIn, signOut, refresh }}>
+    <AppCtx.Provider value={{ booting, token, user, tenant, tenantName, tenantPhone: TENANT_PHONE[tenant] || "", tenantLogo, tenantLocked, price, priceError, vault, alerts, unreadNotifs, reloadAlerts, reloadNotifs, setTenant, signIn, signOut, refresh }}>
       {children}
     </AppCtx.Provider>
   );

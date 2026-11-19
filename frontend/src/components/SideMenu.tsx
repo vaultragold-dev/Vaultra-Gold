@@ -8,6 +8,7 @@ import Animated, { FadeIn, SlideInLeft } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { Glass } from "@/src/components/Glass";
+import { LogoMark } from "@/src/components/Header";
 import { maskPhone, TENANT_NAME } from "@/src/format";
 import { useApp } from "@/src/store/AppContext";
 import { colors, fonts, radius } from "@/src/theme";
@@ -50,6 +51,19 @@ export function SideMenu({ visible, onClose }: { visible: boolean; onClose: () =
           <Pressable onPress={onClose} style={styles.close} hitSlop={8} testID="side-menu-close">
             <X size={20} color={colors.mutedLight} />
           </Pressable>
+
+          {/* Store Brand Header */}
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 16, marginBottom: 16 }}>
+            <LogoMark size={40} />
+            <View style={{ flex: 1 }}>
+              <Text style={{ fontFamily: fonts.bold, fontSize: 16, color: colors.onSurface }} numberOfLines={1}>
+                {tenantName || "Digital Gold"}
+              </Text>
+              <Text style={{ fontFamily: fonts.medium, fontSize: 11, color: colors.brandDeep }}>
+                Official Store App
+              </Text>
+            </View>
+          </View>
 
           {/* Profile block */}
           <Pressable style={styles.profile} onPress={() => go(token ? "/profile" : "/login")} testID="side-menu-profile">
