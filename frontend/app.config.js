@@ -14,11 +14,25 @@ module.exports = ({ config }) => {
 
   const asset = (file, fallback) => (fs.existsSync(path.join(__dirname, "tenant-assets", file)) ? `./tenant-assets/${file}` : fallback);
   const bg = (t.theme && t.theme.accentColor) || "#000000";
-  const plugins = (config.plugins || []).map((p) =>
-    Array.isArray(p) && p[0] === "expo-splash-screen"
-      ? ["expo-splash-screen", { ...p[1], image: asset("splash.png", p[1].image), backgroundColor: bg, imageWidth: 240 }]
-      : p,
-  );
+  const iconBg = (t.theme && (t.theme.adaptiveIconBackground || t.theme.primaryColor)) || bg;
+  const splashBg = (t.theme && (t.theme.splashBackground || t.theme.accentColor)) || bg;
+
+  const plugins = (config.plugins || []).map((p) => {
+    if (Array.isArray(p) && p[0] === "expo-splash-screen") {
+      const splashConfig = {
+        ...p[1],
+        image: asset("splash.png", p[1].image),
+        backgroundColor: splashBg,
+        resizeMode: "cover",
+      };
+      // CRITICAL: When using a full-screen vertical splash image (1080x1920 / 1284x2778),
+      // imageWidth MUST NOT be set! Setting imageWidth: 240 forces the full-screen wallpaper
+      // into a tiny 240px wide thumbnail in the middle of the phone screen!
+      delete splashConfig.imageWidth;
+      return ["expo-splash-screen", splashConfig];
+    }
+    return p;
+  });
 
   return {
     ...config,
@@ -27,12 +41,29 @@ module.exports = ({ config }) => {
     scheme: (t.slug || "").replace(/[^a-z0-9]/g, "") || config.scheme,
     version: t.version || config.version,
     icon: asset("icon.png", config.icon),
-    ios: { ...config.ios, bundleIdentifier: t.bundleId || config.ios?.bundleIdentifier },
+    ios: {
+      ...config.ios,
+      bundleIdentifier: t.bundleId || config.ios?.bundleIdentifier,
+      splash: {
+        image: asset("splash.png", config.ios?.splash?.image),
+        resizeMode: "cover",
+        backgroundColor: splashBg,
+      },
+    },
     android: {
       ...config.android,
       usesCleartextTraffic: true,
       package: t.packageName || t.bundleId || config.android?.package,
-      adaptiveIcon: { ...config.android?.adaptiveIcon, foregroundImage: asset("adaptive-icon.png", config.android?.adaptiveIcon?.foregroundImage), backgroundColor: (t.theme && t.theme.primaryColor) || bg },
+      splash: {
+        image: asset("splash.png", config.android?.splash?.image),
+        resizeMode: "cover",
+        backgroundColor: splashBg,
+      },
+      adaptiveIcon: {
+        ...config.android?.adaptiveIcon,
+        foregroundImage: asset("adaptive-icon.png", config.android?.adaptiveIcon?.foregroundImage),
+        backgroundColor: iconBg,
+      },
     },
     plugins,
     extra: { ...config.extra, tenant: { tenantId: t.tenantId, appName: t.appName } },

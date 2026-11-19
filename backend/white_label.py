@@ -87,11 +87,29 @@ def default_store_text(j):
     return short, long, keywords[:100]
 
 
-def tenant_config(j, api_base):
+def tenant_config(j, api_base, logo_bytes=None, splash_bytes=None):
     p = preset(j.theme_preset)
     short, long, kw = default_store_text(j)
     bundle = j.bundle_id or default_bundle_id(j.business_name)
     name = j.app_name or f"{j.business_name} Gold"
+
+    # Auto-detect icon & splash background colors from uploaded assets
+    adaptive_bg = p["primaryColor"]
+    splash_bg = p["accentColor"]
+    if logo_bytes:
+        try:
+            temp_logo = Image.open(io.BytesIO(logo_bytes))
+            if not _is_transparent(temp_logo):
+                adaptive_bg = _sample_bg_color(temp_logo)
+        except Exception:
+            pass
+    if splash_bytes:
+        try:
+            temp_splash = Image.open(io.BytesIO(splash_bytes))
+            splash_bg = _sample_bg_color(temp_splash)
+        except Exception:
+            pass
+
     return {
         "tenantId": j.id,
         "appName": name,
@@ -102,7 +120,10 @@ def tenant_config(j, api_base):
         "apiBaseUrl": api_base,
         "theme": {"preset": j.theme_preset or DEFAULT_PRESET, "primaryColor": p["primaryColor"],
                   "secondaryColor": p["secondaryColor"], "accentColor": p["accentColor"],
-                  "backgroundColor": p["backgroundColor"], "font": p["font"], "cardRadius": p["cardRadius"]},
+                  "backgroundColor": p["backgroundColor"],
+                  "adaptiveIconBackground": adaptive_bg,
+                  "splashBackground": splash_bg,
+                  "font": p["font"], "cardRadius": p["cardRadius"]},
         "homeLayout": p["homeLayout"],
         "assets": {"logoUrl": abs_url(j.logo_url, api_base), "splashUrl": abs_url(j.splash_url, api_base),
                    "icon": "assets/icon.png", "adaptiveIcon": "assets/adaptive-icon.png", "splash": "assets/splash.png"},
@@ -153,27 +174,109 @@ def _center_text(d, box_w, y, text, font, fill):
     d.text(((box_w - w) / 2, y), text, font=font, fill=fill)
 
 
+def _is_transparent(img):
+    """Returns True if the image has transparent corners (i.e. is an emblem/glyph, not a full-bleed square icon)."""
+    if not img:
+        return False
+    if img.mode not in ("RGBA", "LA") and "transparency" not in img.info:
+        return False
+    rgba = img.convert("RGBA")
+    w, h = rgba.size
+    alpha = rgba.split()[3]
+    test_points = [(0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1),
+                   (w // 2, 0), (w // 2, h - 1), (0, h // 2), (w - 1, h // 2)]
+    transparent_count = sum(1 for pt in test_points if alpha.getpixel(pt) < 50)
+    return transparent_count >= 4
+
+
+def _sample_bg_color(img):
+    """Sample the dominant background color from the edges/corners of the image."""
+    rgb = img.convert("RGB")
+    w, h = rgb.size
+    corners = [rgb.getpixel((0, 0)), rgb.getpixel((w - 1, 0)),
+               rgb.getpixel((0, h - 1)), rgb.getpixel((w - 1, h - 1))]
+    avg_r = sum(c[0] for c in corners) // 4
+    avg_g = sum(c[1] for c in corners) // 4
+    avg_b = sum(c[2] for c in corners) // 4
+    return f"#{avg_r:02x}{avg_g:02x}{avg_b:02x}"
+
+
 def _paste_logo(canvas, logo, size, center):
     lg = logo.convert("RGBA")
-    lg.thumbnail((size, size))
+    lg.thumbnail((size, size), Image.Resampling.LANCZOS)
     canvas.paste(lg, (int(center[0] - lg.width / 2), int(center[1] - lg.height / 2)), lg)
 
 
 def make_icon(name, p, logo=None, transparent=False):
     s = 1024
-    img = Image.new("RGBA", (s, s), (0, 0, 0, 0)) if transparent else _gradient(s, s, p["primaryColor"], p["secondaryColor"]).convert("RGBA")
-    if logo:
-        _paste_logo(img, logo, 560 if not transparent else 480, (s / 2, s / 2))
-    else:
+    if not logo:
+        # Fallback initials monogram
+        img = Image.new("RGBA", (s, s), (0, 0, 0, 0)) if transparent else _gradient(s, s, p["primaryColor"], p["secondaryColor"]).convert("RGBA")
         d = ImageDraw.Draw(img)
         f = _font(420 if not transparent else 340)
         txt = _initials(name)
         w = d.textlength(txt, font=f)
         d.text(((s - w) / 2, s / 2 - 260 if not transparent else s / 2 - 210), txt, font=f,
                fill=(255, 255, 255) if not transparent else _rgb(p["secondaryColor"]))
-    out = io.BytesIO()
-    (img if transparent else img.convert("RGB")).save(out, "PNG")
-    return out.getvalue()
+        out = io.BytesIO()
+        (img if transparent else img.convert("RGB")).save(out, "PNG")
+        return out.getvalue()
+
+    is_trans = _is_transparent(logo)
+
+    if not is_trans:
+        # User uploaded a full-bleed square icon with solid/gradient background (e.g. MVZA, Blinkit, etc.)
+        bg_hex = _sample_bg_color(logo)
+        bg_rgb = _rgb(bg_hex)
+        lg = logo.convert("RGBA")
+        w, h = lg.size
+
+        if not transparent:
+            # Full square icon for iOS, Play Store listing, Web
+            img = Image.new("RGB", (s, s), bg_rgb)
+            if 0.85 <= w / h <= 1.15:
+                # Square: resize directly to 1024x1024
+                lg_resized = lg.resize((s, s), Image.Resampling.LANCZOS)
+                img.paste(lg_resized, (0, 0), lg_resized)
+            else:
+                # Aspect fit inside 1024x1024 centered
+                lg_fit = lg.copy()
+                lg_fit.thumbnail((s, s), Image.Resampling.LANCZOS)
+                img.paste(lg_fit, (int((s - lg_fit.width) / 2), int((s - lg_fit.height) / 2)), lg_fit)
+            out = io.BytesIO()
+            img.save(out, "PNG")
+            return out.getvalue()
+        else:
+            # Android Adaptive Icon foreground (adaptive-icon.png):
+            # Android launchers mask the outer 18% into squircles/circles within the 66% safe zone.
+            # Fill 1024x1024 canvas with background and resize square logo edge-to-edge
+            img = Image.new("RGBA", (s, s), (*bg_rgb, 255))
+            if 0.85 <= w / h <= 1.15:
+                lg_resized = lg.resize((s, s), Image.Resampling.LANCZOS)
+                img.paste(lg_resized, (0, 0), lg_resized)
+            else:
+                lg_fit = lg.copy()
+                lg_fit.thumbnail((720, 720), Image.Resampling.LANCZOS)
+                img.paste(lg_fit, (int((s - lg_fit.width) / 2), int((s - lg_fit.height) / 2)), lg_fit)
+            out = io.BytesIO()
+            img.save(out, "PNG")
+            return out.getvalue()
+    else:
+        # Transparent emblem/glyph logo uploaded
+        if not transparent:
+            # iOS / store icon: draw branded gradient and center logo inside safe zone
+            img = _gradient(s, s, p["primaryColor"], p["secondaryColor"]).convert("RGBA")
+            _paste_logo(img, logo, 660, (s / 2, s / 2))
+            out = io.BytesIO()
+            img.convert("RGB").save(out, "PNG")
+            return out.getvalue()
+        else:
+            # Android Adaptive Icon foreground: transparent canvas with centered emblem
+            img = Image.new("RGBA", (s, s), (0, 0, 0, 0))
+            _paste_logo(img, logo, 660, (s / 2, s / 2))
+            out = io.BytesIO()
+            img.save(out, "PNG")
+            return out.getvalue()
 
 
 def make_icon_512(name, p, logo=None):
@@ -190,7 +293,10 @@ def make_splash(name, p, logo=None):
     d = ImageDraw.Draw(img)
     if logo:
         rgba = img.convert("RGBA")
-        _paste_logo(rgba, logo, 520, (w / 2, h / 2 - 120))
+        if _is_transparent(logo):
+            _paste_logo(rgba, logo, 640, (w / 2, h / 2 - 140))
+        else:
+            _paste_logo(rgba, logo, 560, (w / 2, h / 2 - 140))
         img = rgba.convert("RGB")
         d = ImageDraw.Draw(img)
     else:
@@ -723,16 +829,22 @@ def delete_account_html(j=None):
 
 
 def build_app_kit(j, api_base, rates, logo_bytes=None, splash_bytes=None):
-    cfg = tenant_config(j, api_base)
+    cfg = tenant_config(j, api_base, logo_bytes, splash_bytes)
     p = preset(j.theme_preset)
     name = cfg["appName"]
     logo = Image.open(io.BytesIO(logo_bytes)) if logo_bytes else None
+
+    # Handle splash screen: if full vertical image uploaded, use it; otherwise generate crisp 1284x2778 splash
+    splash_data = splash_bytes
+    if not splash_data:
+        splash_data = make_splash(name, p, logo)
+
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr("config.json", json.dumps(cfg, indent=2, ensure_ascii=False))
         z.writestr("assets/icon.png", make_icon(name, p, logo))
         z.writestr("assets/adaptive-icon.png", make_icon(name, p, logo, transparent=True))
-        z.writestr("assets/splash.png", splash_bytes or make_splash(name, p, logo))
+        z.writestr("assets/splash.png", splash_data)
         if logo_bytes:
             z.writestr("assets/logo-original.png", logo_bytes)
         for i, kind in enumerate(("home", "rates", "vault"), 1):

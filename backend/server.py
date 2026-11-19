@@ -4589,7 +4589,9 @@ async def tenant_public_config(jid: str, request: Request, db: AsyncSession = De
     j = (await db.execute(select(Jeweller).where(Jeweller.id == jid, Jeweller.status == "active"))).scalar_one_or_none()
     if not j:
         raise HTTPException(404, "Store not found")
-    cfg = wl.tenant_config(j, _public_base(request))
+    logo_bytes = await _file_bytes(j.logo_url, db) if j.logo_url else None
+    splash_bytes = await _file_bytes(j.splash_url, db) if j.splash_url else None
+    cfg = wl.tenant_config(j, _public_base(request), logo_bytes, splash_bytes)
     return {k: cfg[k] for k in ("tenantId", "appName", "theme", "homeLayout", "assets", "support")} | {"business_name": j.business_name}
 
 

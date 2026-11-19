@@ -114,11 +114,97 @@ function renderBuildCenter(id) {
 }
 
 const SECTION_LABEL = { prices: 'Live prices', karats: '24K · 22K · 18K', sip: 'Auto SIP', banners: 'Offers', buy: 'Buy gold', categories: 'Categories', trending: 'Trending', promos: 'Gift & refer' };
+S.phonePreviewTab = S.phonePreviewTab || 'home';
+function setPhoneTab(tab) {
+  S.phonePreviewTab = tab;
+  const pv = $('#studio-preview');
+  if (pv) pv.innerHTML = phone();
+  document.querySelectorAll('.pv-tab-btn').forEach(b => {
+    b.className = (b.dataset.tab === tab ? 'btn primary' : 'btn ghost') + ' pv-tab-btn';
+  });
+}
+
 function phone(small) {
   const d = S.draft; const P = S.studio.presets[d.theme_preset]; const cur = S.studio.apps.find((x) => x.id === S.studioSel) || {}; const k = cur.karats || S.studio.karats || {}; const nodata = S.studio.price?.has_live === false;
   const r = P.cardRadius; const name = esc(d.app_name || 'Your app');
   const val = (v) => nodata || !v ? '—' : '₹' + Number(v).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  const logo = d.logo_url ? `<img src="${esc(d.logo_url)}" style="width:100%;height:100%;object-fit:contain">` : esc(initials(d.app_name || 'G'));
+  const logo = d.logo_url ? `<img src="${esc(d.logo_url)}" style="width:100%;height:100%;object-fit:cover">` : esc(initials(d.app_name || 'G'));
+
+  if (!small && S.phonePreviewTab === 'icon') {
+    const iconContent = d.logo_url
+      ? `<img src="${esc(d.logo_url)}" style="width:100%;height:100%;object-fit:cover">`
+      : `<div style="width:100%;height:100%;background:linear-gradient(135deg,${P.primaryColor},${P.secondaryColor});color:#fff;font-size:20px;font-weight:800;display:flex;align-items:center;justify-content:center">${esc(initials(d.app_name || 'G'))}</div>`;
+
+    return `<div class="phone" style="background:linear-gradient(180deg,#4a779d 0%,#28527a 100%);display:flex;flex-direction:column;justify-content:space-between;padding:16px 12px;position:relative;overflow:hidden;box-shadow:0 12px 36px rgba(0,0,0,0.3)">
+      <div style="display:flex;justify-content:space-between;color:rgba(255,255,255,0.9);font-size:9.5px;font-weight:600;padding:0 4px">
+        <span>16:50</span>
+        <span>5G · 97%</span>
+      </div>
+
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px 6px;margin-top:20px;text-align:center">
+        <div style="display:flex;flex-direction:column;align-items:center">
+          <div style="width:44px;height:44px;border-radius:13px;background:#F8CB46;display:flex;align-items:center;justify-content:center;box-shadow:0 3px 8px rgba(0,0,0,0.2)">
+            <span style="font-size:9.5px;font-weight:900;color:#0C831F">blinkit</span>
+          </div>
+          <span style="font-size:9px;color:#fff;margin-top:4px;text-shadow:0 1px 2px rgba(0,0,0,0.6)">Blinkit</span>
+        </div>
+
+        <div style="display:flex;flex-direction:column;align-items:center">
+          <div style="width:44px;height:44px;border-radius:13px;background:#25D366;display:flex;align-items:center;justify-content:center;box-shadow:0 3px 8px rgba(0,0,0,0.2)">
+            <span style="font-size:16px;color:#fff">💬</span>
+          </div>
+          <span style="font-size:9px;color:#fff;margin-top:4px;text-shadow:0 1px 2px rgba(0,0,0,0.6)">WhatsApp</span>
+        </div>
+
+        <div style="display:flex;flex-direction:column;align-items:center">
+          <div style="width:44px;height:44px;border-radius:13px;background:#fff;display:flex;align-items:center;justify-content:center;box-shadow:0 3px 8px rgba(0,0,0,0.2)">
+            <span style="font-size:16px">📁</span>
+          </div>
+          <span style="font-size:9px;color:#fff;margin-top:4px;text-shadow:0 1px 2px rgba(0,0,0,0.6)">Files</span>
+        </div>
+
+        <div style="display:flex;flex-direction:column;align-items:center">
+          <div style="width:44px;height:44px;border-radius:13px;background:#C8A04A;display:flex;align-items:center;justify-content:center;box-shadow:0 3px 8px rgba(0,0,0,0.2);color:#064E3B;font-weight:800;font-size:13px">
+            NG
+          </div>
+          <span style="font-size:9px;color:#fff;margin-top:4px;text-shadow:0 1px 2px rgba(0,0,0,0.6)">Nick Gold</span>
+        </div>
+
+        <!-- CURRENT JEWELLER APP ICON -->
+        <div style="display:flex;flex-direction:column;align-items:center">
+          <div style="width:44px;height:44px;border-radius:13px;overflow:hidden;box-shadow:0 4px 12px rgba(0,0,0,0.35);border:1.5px solid rgba(255,255,255,0.6)">
+            ${iconContent}
+          </div>
+          <span style="font-size:9px;color:#fff;font-weight:700;margin-top:4px;text-shadow:0 1px 3px rgba(0,0,0,0.8);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:48px">${name}</span>
+        </div>
+      </div>
+
+      <div style="margin-top:auto">
+        <div style="background:rgba(255,255,255,0.85);backdrop-filter:blur(8px);border-radius:20px;padding:6px 12px;display:flex;align-items:center;gap:6px;box-shadow:0 2px 6px rgba(0,0,0,0.15)">
+          <span style="color:#64748b;font-size:10px">🔍 Search apps</span>
+        </div>
+        <div style="display:flex;justify-content:space-around;color:rgba(255,255,255,0.7);font-size:11px;margin-top:10px">
+          <span>|||</span><span>○</span><span>&lt;</span>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  if (!small && S.phonePreviewTab === 'splash') {
+    if (d.splash_url) {
+      return `<div class="phone" style="padding:0;overflow:hidden;background:#000;display:flex;align-items:center;justify-content:center;box-shadow:0 12px 36px rgba(0,0,0,0.3)">
+        <img src="${esc(d.splash_url)}" style="width:100%;height:100%;object-fit:cover;display:block">
+      </div>`;
+    }
+    return `<div class="phone" style="background:${P.accentColor};display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;text-align:center;box-shadow:0 12px 36px rgba(0,0,0,0.3);position:relative">
+      <div style="width:68px;height:68px;border-radius:16px;background:linear-gradient(135deg,${P.primaryColor},${P.secondaryColor});display:flex;align-items:center;justify-content:center;color:#fff;font-size:24px;font-weight:800;box-shadow:0 6px 18px rgba(0,0,0,0.25);margin-bottom:14px;overflow:hidden">
+        ${logo}
+      </div>
+      <div style="font-size:17px;font-weight:800;color:#fff;letter-spacing:0.5px">${name}</div>
+      <div style="font-size:10px;font-weight:600;color:${P.primaryColor};margin-top:5px;letter-spacing:1px">24K DIGITAL GOLD</div>
+      <div style="position:absolute;bottom:16px;font-size:8px;color:rgba(255,255,255,0.4);letter-spacing:0.5px">POWERED BY VAULTRA GOLD</div>
+    </div>`;
+  }
   const block = (s) => ({
     prices: `<div style="display:flex;gap:6px"><div style="flex:1;background:${P.accentColor};border-radius:${r * .6}px;padding:8px"><div style="font-size:7px;color:${P.primaryColor};letter-spacing:.5px">LIVE RATE</div><div style="font-size:10px;color:${P.primaryColor};font-weight:700">Gold 24K</div><div style="font-size:11px;color:#fff;font-weight:700">${val(k['24K'])}</div></div><div style="flex:1;background:${P.accentColor};border-radius:${r * .6}px;padding:8px"><div style="font-size:7px;color:#cbd5e1">LIVE RATE</div><div style="font-size:10px;color:#e5e7eb;font-weight:700">Silver</div><div style="font-size:11px;color:#fff;font-weight:700">${val(cur.silver_buy || S.studio.price?.silver?.buy)}</div></div></div>`,
     karats: `<div style="background:#fff;border:1px solid ${P.primaryColor}55;border-radius:${r * .6}px;padding:7px 9px;font-size:9px">${['24K', '22K', '18K'].map((x) => `<div style="display:flex;justify-content:space-between;padding:2px 0"><span style="color:${P.secondaryColor}">${x}</span><b style="color:${P.accentColor}">${val(k[x])}</b></div>`).join('')}</div>`,
@@ -209,12 +295,68 @@ function vStudio() {
       <div class="field"><label>App Name (shown under app icon on customer phone) *</label><input class="input" id="st_name" maxlength="30" value="${esc(d.app_name)}" oninput="dset('app_name',this.value)"></div>
       <div class="field"><label>App ID / Package Name *</label><input class="input" id="st_bundle" value="${esc(d.bundle_id)}" oninput="dset('bundle_id',this.value.toLowerCase())"><div class="hint">e.g. in.vaultra.${esc(a.business_name.split(' ')[0].toLowerCase())} • Used for Play Store and App Store publishing • cannot change after publish</div></div>
       
-      <div class="grid g2">
-        <div class="field"><label>App Icon Logo (Square PNG, 1024x1024 best)</label><input type="file" accept="image/png,image/jpeg,image/webp" onchange="studioUpload(this,'logo_url')" id="st_logo">
-          ${d.logo_url ? `<div style="margin-top:6px;display:flex;align-items:center;gap:8px"><img src="${esc(d.logo_url)}" style="width:36px;height:36px;border-radius:6px;object-fit:contain;border:1px solid #cbd5e1"><span class="badge green">✓ Logo Uploaded</span></div>` : '<div class="hint">Fallback: Branded initial badge</div>'}
-        </div>
-        <div class="field"><label>Splash Screen Image (Optional PNG, 1242x2688)</label><input type="file" accept="image/png,image/jpeg" onchange="studioUpload(this,'splash_url')" id="st_splash">
-          ${d.splash_url ? `<div style="margin-top:6px;display:flex;align-items:center;gap:8px"><img src="${esc(d.splash_url)}" style="width:24px;height:48px;border-radius:4px;object-fit:cover;border:1px solid #cbd5e1"><span class="badge green">✓ Splash Uploaded</span></div>` : '<div class="hint">Fallback: Gradient splash screen</div>'}
+      <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:14px;margin-bottom:16px">
+        <h4 style="margin:0 0 10px 0;font-size:13px;color:#0f172a;display:flex;align-items:center;gap:6px">
+          <span>🎨 App Icon & Splash Screen Dimensions</span>
+          <span class="badge blue">Store & Launcher Compliant</span>
+        </h4>
+        
+        <div class="grid g2">
+          <!-- App Icon Box -->
+          <div style="background:#fff;border:1px solid #cbd5e1;border-radius:8px;padding:12px;display:flex;flex-direction:column;justify-content:space-between">
+            <div>
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+                <label style="font-weight:700;font-size:12px;color:#0f172a">App Icon (Adaptive Icon)</label>
+                <span class="badge gold" style="font-size:10px">1024 x 1024 px</span>
+              </div>
+              <div style="font-size:11px;color:#64748b;line-height:1.45;margin-bottom:10px">
+                • <b>Exact Size:</b> 1024×1024 px (Square 1:1 PNG)<br>
+                • <b>Safe Zone:</b> Keep main logo & text inside central <b>66% circle (~676px)</b> so squircle masks don't clip it.<br>
+                • <b>Style:</b> Full-bleed brand background (like Blinkit / Nick Gold) or transparent emblem.
+              </div>
+            </div>
+            <div>
+              <input type="file" accept="image/png,image/jpeg,image/webp" onchange="studioUpload(this,'logo_url')" id="st_logo">
+              ${d.logo_url ? `
+                <div style="margin-top:10px;display:flex;align-items:center;gap:10px;background:#f1f5f9;padding:8px;border-radius:8px">
+                  <div style="width:42px;height:42px;border-radius:11px;background:#1e293b;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 6px rgba(0,0,0,0.18);overflow:hidden">
+                    <img src="${esc(d.logo_url)}" style="width:100%;height:100%;object-fit:cover">
+                  </div>
+                  <div>
+                    <span class="badge green" style="font-size:10.5px">✓ 1024×1024 Icon Configured</span>
+                    <div style="font-size:10px;color:#475569;margin-top:2px">Fills Android Squircle edge-to-edge</div>
+                  </div>
+                </div>` : '<div class="hint" style="margin-top:6px">Fallback: Branded initial badge with luxury gradient</div>'}
+            </div>
+          </div>
+
+          <!-- Splash Screen Box -->
+          <div style="background:#fff;border:1px solid #cbd5e1;border-radius:8px;padding:12px;display:flex;flex-direction:column;justify-content:space-between">
+            <div>
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+                <label style="font-weight:700;font-size:12px;color:#0f172a">Launch Splash Screen</label>
+                <span class="badge gold" style="font-size:10px">1284 x 2778 px</span>
+              </div>
+              <div style="font-size:11px;color:#64748b;line-height:1.45;margin-bottom:10px">
+                • <b>Exact Size:</b> 1284×2778 px (or 1080×1920 px, Vertical 9:19.5 or 9:16)<br>
+                • <b>Display:</b> Full-bleed edge-to-edge mobile launch screen.<br>
+                • <b>Center Safe Area:</b> Keep logo & branding centered in middle 40% area.
+              </div>
+            </div>
+            <div>
+              <input type="file" accept="image/png,image/jpeg" onchange="studioUpload(this,'splash_url')" id="st_splash">
+              ${d.splash_url ? `
+                <div style="margin-top:10px;display:flex;align-items:center;gap:10px;background:#f1f5f9;padding:8px;border-radius:8px">
+                  <div style="width:26px;height:48px;border-radius:5px;background:#1e293b;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 6px rgba(0,0,0,0.18);overflow:hidden">
+                    <img src="${esc(d.splash_url)}" style="width:100%;height:100%;object-fit:cover">
+                  </div>
+                  <div>
+                    <span class="badge green" style="font-size:10.5px">✓ Full Splash Configured</span>
+                    <div style="font-size:10px;color:#475569;margin-top:2px">Edge-to-edge cover (No black void)</div>
+                  </div>
+                </div>` : '<div class="hint" style="margin-top:6px">Fallback: Auto-generated 1284×2778 luxury splash</div>'}
+            </div>
+          </div>
         </div>
       </div>
       
@@ -445,7 +587,14 @@ function vStudio() {
       <div class="studio-grid">
         <div style="min-width:0">${stepContent}</div>
         <div class="studio-preview-col">
-          <div class="sub" style="margin-bottom:8px;font-weight:700">📱 Live Real-Time Phone Preview</div>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+            <div class="sub" style="font-weight:700;margin:0">📱 Live Preview</div>
+            <div style="display:flex;gap:3px">
+              <button class="btn ${(S.phonePreviewTab || 'home') === 'home' ? 'primary' : 'ghost'} pv-tab-btn" data-tab="home" onclick="setPhoneTab('home')" style="font-size:10.5px;padding:3px 8px">Home</button>
+              <button class="btn ${S.phonePreviewTab === 'icon' ? 'primary' : 'ghost'} pv-tab-btn" data-tab="icon" onclick="setPhoneTab('icon')" style="font-size:10.5px;padding:3px 8px">App Icon</button>
+              <button class="btn ${S.phonePreviewTab === 'splash' ? 'primary' : 'ghost'} pv-tab-btn" data-tab="splash" onclick="setPhoneTab('splash')" style="font-size:10.5px;padding:3px 8px">Splash</button>
+            </div>
+          </div>
           <div id="studio-preview">${phone()}</div>
           <div class="sub" style="margin-top:10px">Connected to <code>https://master.vaultragold.com</code></div>
         </div>
@@ -507,7 +656,14 @@ async function checkDomainDNS(id) {
 
 async function studioUpload(inp, key) {
   const f = inp.files[0]; if (!f) return;
-  try { const url = await uploadImage(f, 'master_token', '/master/v3/upload'); S.draft[key] = url; toast(key === 'logo_url' ? 'Logo uploaded · save to keep it' : 'Splash uploaded · save to keep it'); render(); } catch (e) { toast(e.message, true); }
+  try {
+    const url = await uploadImage(f, 'master_token', '/master/v3/upload');
+    S.draft[key] = url;
+    if (key === 'logo_url') S.phonePreviewTab = 'icon';
+    else if (key === 'splash_url') S.phonePreviewTab = 'splash';
+    toast(key === 'logo_url' ? 'App Icon uploaded (1024x1024) · save to keep it' : 'Splash Screen uploaded (1284x2778) · save to keep it');
+    render();
+  } catch (e) { toast(e.message, true); }
 }
 
 async function studioSave() {
