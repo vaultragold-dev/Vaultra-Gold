@@ -16,7 +16,7 @@ const QUICK = [500, 1000, 2000, 5000];
 export function BuyWidget() {
   const router = useRouter();
   const toast = useToast();
-  const { price, token, tenant, refresh } = useApp();
+  const { price, token, user, tenant, refresh } = useApp();
   const [mode, setMode] = useState<"rupees" | "grams">("rupees");
   const [metal, setMetal] = useState<"gold" | "silver">("gold");
   const [val, setVal] = useState("2000");
@@ -40,6 +40,11 @@ export function BuyWidget() {
 
   const proceedToBuy = async () => {
     if (!token) { router.push("/login"); return; }
+    if (user?.kyc_status !== "approved") {
+      toast("info", "KYC Required", "Please complete and submit your KYC in Profile before buying Gold or Silver");
+      router.push("/profile");
+      return;
+    }
     if (n <= 0 || !liveRate) { toast("info", "Enter an amount first"); return; }
     if (total < minInv) { toast("info", `Minimum investment is ₹${minInv.toLocaleString("en-IN")}`); return; }
     // Freeze a fresh price at the moment the customer taps Proceed (2 minutes)

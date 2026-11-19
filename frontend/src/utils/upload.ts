@@ -1,10 +1,22 @@
 import { Platform } from "react-native";
-import { fetch as expoFetch } from "expo/fetch";
 
 /** Multipart form for a local file (image/audio/document) that works on web and on real phones. */
 export async function uploadForm(uri: string, field = "file", name = "upload.jpg") {
   const form = new FormData();
-  const blob = Platform.OS === "web" ? await (await fetch(uri)).blob() : await (await expoFetch(uri)).blob();
-  form.append(field, blob as any, name);
+  if (Platform.OS === "web") {
+    try {
+      const res = await fetch(uri);
+      const blob = await res.blob();
+      form.append(field, blob, name);
+    } catch {
+      form.append(field, { uri, type: "image/jpeg", name } as any);
+    }
+  } else {
+    form.append(field, {
+      uri,
+      type: "image/jpeg",
+      name: name || "upload.jpg",
+    } as any);
+  }
   return form;
 }

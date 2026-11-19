@@ -58,8 +58,8 @@ export function PriceAlertCard() {
         await api("/alerts/book", { method: "POST", body: { target: t, metal, buy_amount: b, tenant } });
         toast("success", "Book Alert created!", `Will auto-buy ₹${b} of ${metal} when rate ≤ ₹${t}/g`);
       } else {
-        await api("/alerts", { method: "POST", body: { target: t } });
-        toast("success", "Alert created!", `We'll notify you when 24K ≤ ₹${t}/g`);
+        await api("/alerts", { method: "POST", body: { target: t, metal } });
+        toast("success", "Alert created!", `We'll notify you when ${metal === "silver" ? "Silver" : "24K Gold"} ≤ ₹${t}/g`);
       }
       await reloadAlerts();
       setOpen(false);
@@ -114,29 +114,39 @@ export function PriceAlertCard() {
         </View>
 
         {alertTab === "only" ? (
-          <Text style={styles.tabDesc}>Get notified when gold price reaches your target. No auto-purchase.</Text>
+          <Text style={styles.tabDesc}>Get notified when {metal === "silver" ? "silver" : "gold"} price reaches your target. No auto-purchase.</Text>
         ) : (
-          <Text style={styles.tabDesc}>Automatically buy when price reaches your target. Uses wallet balance.</Text>
+          <Text style={styles.tabDesc}>Automatically buy when {metal === "silver" ? "silver" : "gold"} price reaches your target. Uses wallet balance.</Text>
         )}
 
-        {/* Metal selection for book alert */}
-        {alertTab === "book" ? (
-          <View style={styles.metalRow}>
-            <Pressable style={[styles.metalBtn, metal === "gold" && styles.metalActive]} onPress={() => setMetal("gold")} testID="alert-metal-gold">
-              <Coins size={14} color={metal === "gold" ? colors.onBrandPrimary : colors.muted} />
-              <Text style={[styles.metalText, metal === "gold" && styles.metalActiveText]}>Gold</Text>
-            </Pressable>
-            <Pressable style={[styles.metalBtn, metal === "silver" && styles.metalSilverActive]} onPress={() => setMetal("silver")} testID="alert-metal-silver">
-              <Coins size={14} color={metal === "silver" ? "#374151" : colors.muted} />
-              <Text style={[styles.metalText, metal === "silver" && { color: "#374151", fontFamily: fonts.bold }]}>Silver</Text>
-            </Pressable>
-          </View>
-        ) : null}
+        {/* Metal selection for BOTH alerts */}
+        <View style={styles.metalRow}>
+          <Pressable style={[styles.metalBtn, metal === "gold" && styles.metalActive]} onPress={() => setMetal("gold")} testID="alert-metal-gold">
+            <Coins size={14} color={metal === "gold" ? colors.onBrandPrimary : colors.muted} />
+            <Text style={[styles.metalText, metal === "gold" && styles.metalActiveText]}>Gold 24K</Text>
+          </Pressable>
+          <Pressable style={[styles.metalBtn, metal === "silver" && styles.metalSilverActive]} onPress={() => setMetal("silver")} testID="alert-metal-silver">
+            <Coins size={14} color={metal === "silver" ? "#374151" : colors.muted} />
+            <Text style={[styles.metalText, metal === "silver" && { color: "#374151", fontFamily: fonts.bold }]}>Silver</Text>
+          </Pressable>
+        </View>
 
         <Text style={styles.fieldLabel}>Target price (₹/g)</Text>
         <View style={styles.inpRow}>
           <Target size={16} color={colors.brandSecondary} />
-          <TextInput testID="alert-target-input" value={target} onChangeText={(t) => setTarget(t.replace(/[^0-9.]/g, ""))} keyboardType="decimal-pad" placeholder={price ? `e.g. ${Math.round(price.buy - 50)}` : "7200"} placeholderTextColor={colors.mutedLight} style={styles.inp} />
+          <TextInput
+            testID="alert-target-input"
+            value={target}
+            onChangeText={(t) => setTarget(t.replace(/[^0-9.]/g, ""))}
+            keyboardType="decimal-pad"
+            placeholder={
+              metal === "silver"
+                ? (price?.silver?.buy ? `e.g. ${Math.round(price.silver.buy - 2)}` : "150")
+                : (price?.buy ? `e.g. ${Math.round(price.buy - 50)}` : "13000")
+            }
+            placeholderTextColor={colors.mutedLight}
+            style={styles.inp}
+          />
         </View>
 
         {/* Buy amount for book alert */}
@@ -158,7 +168,12 @@ export function PriceAlertCard() {
             {activeAlerts.map((a) => (
               <View key={a.id} style={styles.alertRow} testID={`alert-row-${a.id}`}>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.alertTarget}>{inr(a.target)}/g</Text>
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                    <Text style={styles.alertTarget}>{inr(a.target)}/g</Text>
+                    <Text style={{ fontSize: 10, fontFamily: fonts.bold, color: (a as any).metal === "silver" ? "#64748B" : colors.brandDeep, backgroundColor: (a as any).metal === "silver" ? "#E2E8F0" : colors.brandTertiary, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 }}>
+                      {((a as any).metal || "gold").toUpperCase()}
+                    </Text>
+                  </View>
                   <Text style={styles.alertMeta}>{(a as any).alert_type === "book" ? "Book Alert · Auto-buy" : "Only Alert · Notify"}</Text>
                 </View>
                 <Pressable onPress={() => remove(a.id)} hitSlop={12} testID={`remove-alert-${a.id}`}>

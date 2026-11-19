@@ -173,7 +173,10 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     AsyncStorage.getItem("theme_preference").then((v) => {
-      if (v === "dark" || v === "light") setScheme(v);
+      if (v === "dark" || v === "light") {
+        setScheme(v);
+        Object.assign(colors, v === "dark" ? dark : light);
+      }
     });
   }, []);
 
@@ -181,6 +184,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     setScheme((prev) => {
       const next = prev === "light" ? "dark" : "light";
       AsyncStorage.setItem("theme_preference", next);
+      Object.assign(colors, next === "dark" ? dark : light);
       return next;
     });
   }, []);

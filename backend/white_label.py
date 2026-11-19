@@ -88,7 +88,11 @@ def default_store_text(j):
 
 
 def tenant_config(j, api_base, logo_bytes=None, splash_bytes=None):
-    p = preset(j.theme_preset)
+    p = dict(preset(j.theme_preset))
+    if getattr(j, "primary_color", None):
+        p["primaryColor"] = j.primary_color
+    if getattr(j, "secondary_color", None):
+        p["secondaryColor"] = j.secondary_color
     short, long, kw = default_store_text(j)
     bundle = j.bundle_id or default_bundle_id(j.business_name)
     name = j.app_name or f"{j.business_name} Gold"
@@ -269,16 +273,16 @@ def make_icon(name, p, logo=None, transparent=False):
         else:
             # Android Adaptive Icon foreground (adaptive-icon.png):
             # Android launchers mask the outer 18-20% into squircles/circles within the 66% safe zone (~676px).
-            # By scaling the emblem inside a 720px box with feathered edges onto bg_rgb canvas,
-            # brand text & emblems will never touch the edges of Samsung squircles, Pixel circles, or OnePlus icons!
+            # By scaling the emblem inside a 620px safe box with feathered edges onto bg_rgb canvas,
+            # brand text & emblems will never touch or get clipped by Samsung squircles, Pixel circles, or OnePlus icons!
             img = Image.new("RGBA", (s, s), (*bg_rgb, 255))
             if 0.85 <= w / h <= 1.15:
-                scaled = _feather_square(lg, 720, 45)
-                pos = ((s - 720) // 2, (s - 720) // 2)
+                scaled = _feather_square(lg, 620, 45)
+                pos = ((s - 620) // 2, (s - 620) // 2)
                 img.paste(scaled, pos, scaled)
             else:
                 lg_fit = lg.copy()
-                lg_fit.thumbnail((700, 700), Image.Resampling.LANCZOS)
+                lg_fit.thumbnail((620, 620), Image.Resampling.LANCZOS)
                 img.paste(lg_fit, (int((s - lg_fit.width) / 2), int((s - lg_fit.height) / 2)), lg_fit)
             out = io.BytesIO()
             img.save(out, "PNG")
@@ -317,7 +321,13 @@ def make_splash(name, p, logo=None, splash_img=None):
     This produces a seamless, luxury full-screen splash without miniature floating boxes.
     """
     s = 1024
-    if splash_img:
+
+    # If logo is provided, and splash_img is either omitted or a vertical poster,
+    # the crisp Brand Logo centered on the luxury brand background produces a 100x cleaner splash
+    # (matching WhatsApp, Blinkit, Swiggy) rather than a miniature squished card.
+    prefer_logo = logo is not None and (splash_img is None or splash_img.height > 1.2 * splash_img.width)
+
+    if splash_img and not prefer_logo:
         w, h = splash_img.size
         # Center-crop square from vertical or horizontal image
         if h > w:
@@ -332,9 +342,9 @@ def make_splash(name, p, logo=None, splash_img=None):
         sp_bg = _sample_bg_color(crop)
         sp_rgb = _rgb(sp_bg)
         img = Image.new("RGBA", (s, s), (*sp_rgb, 255))
-        # Center crop contains the centered logo: scale to 740px with feathered edge for seamless blending
-        scaled = _feather_square(crop, 740, 45)
-        pos = ((s - 740) // 2, (s - 740) // 2)
+        # Center crop contains the centered logo: scale to 600px with feathered edge for seamless blending
+        scaled = _feather_square(crop, 600, 40)
+        pos = ((s - 600) // 2, (s - 600) // 2)
         img.paste(scaled, pos, scaled)
         out = io.BytesIO()
         img.convert("RGB").save(out, "PNG")
@@ -344,7 +354,7 @@ def make_splash(name, p, logo=None, splash_img=None):
         if _is_transparent(logo):
             sp_rgb = _rgb(p["accentColor"])
             img = Image.new("RGBA", (s, s), (*sp_rgb, 255))
-            _paste_logo(img, logo, 520, (s / 2, s / 2))
+            _paste_logo(img, logo, 540, (s / 2, s / 2))
             out = io.BytesIO()
             img.convert("RGB").save(out, "PNG")
             return out.getvalue()
@@ -352,8 +362,8 @@ def make_splash(name, p, logo=None, splash_img=None):
             sp_bg = _sample_bg_color(logo)
             sp_rgb = _rgb(sp_bg)
             img = Image.new("RGBA", (s, s), (*sp_rgb, 255))
-            scaled = _feather_square(logo, 720, 45)
-            pos = ((s - 720) // 2, (s - 720) // 2)
+            scaled = _feather_square(logo, 580, 40)
+            pos = ((s - 580) // 2, (s - 580) // 2)
             img.paste(scaled, pos, scaled)
             out = io.BytesIO()
             img.convert("RGB").save(out, "PNG")

@@ -61,9 +61,36 @@ export default function Profile() {
   }, [user, fullName]);
 
   const submitKyc = async () => {
+    if (!fullName.trim() || fullName.trim().length < 2) {
+      toast("info", "Name Required", "Please enter your full name as per official ID");
+      return;
+    }
+    const cleanPan = pan.trim().toUpperCase();
+    const cleanAadhaar = aadhaar.trim().replace(/\D/g, "");
+    if (!cleanPan && !cleanAadhaar) {
+      toast("info", "ID Required", "Please enter either your 10-digit PAN or 12-digit Aadhaar number");
+      return;
+    }
+    if (cleanPan && !/^[A-Z]{5}\d{4}[A-Z]$/.test(cleanPan)) {
+      toast("info", "Invalid PAN", "PAN format should be ABCDE1234F (10 characters)");
+      return;
+    }
+    if (cleanAadhaar && cleanAadhaar.length !== 12) {
+      toast("info", "Invalid Aadhaar", "Aadhaar number must be exactly 12 digits");
+      return;
+    }
     setBusy(true);
     try {
-      await api("/kyc/submit", { method: "POST", body: { full_name: fullName.trim(), aadhaar, pan, dob, photo_id: photo?.id ?? "" } });
+      await api("/kyc/submit", {
+        method: "POST",
+        body: {
+          full_name: fullName.trim(),
+          aadhaar: cleanAadhaar,
+          pan: cleanPan,
+          dob: dob.trim(),
+          photo_id: photo?.id ?? "",
+        },
+      });
       await refresh();
       toast("success", "KYC submitted", "A store officer will review it shortly");
     } catch (e: any) {
@@ -73,7 +100,6 @@ export default function Profile() {
     }
   };
 
-  const canSubmit = fullName.trim().length > 1 && aadhaar.length === 12 && /^[A-Z]{5}\d{4}[A-Z]$/.test(pan) && !!photo;
   const kyc = user?.kyc_status ?? "not_submitted";
 
   const confirmDeleteAccount = () => {
@@ -141,11 +167,17 @@ export default function Profile() {
             <View style={{ flex: 1 }}>
               <Text style={styles.name} testID="profile-name">{user?.name}</Text>
               <Text style={styles.meta}>{maskPhone(user?.phone)}</Text>
+              {user?.wallet_id ? (
+                <Text style={[styles.meta, { color: colors.brandPrimary, fontFamily: fonts.bold, marginTop: 2 }]}>
+                  Wallet ID: {user.wallet_id}
+                </Text>
+              ) : null}
               {user?.email ? <Text style={styles.meta}>{user.email}</Text> : null}
             </View>
             <StatusBadge status={kyc} testID="profile-kyc-status" />
           </View>
           <View style={{ marginTop: 12 }}>
+            {user?.wallet_id ? <Row label="Wallet ID" value={user.wallet_id} bold /> : null}
             <Row label="Gold balance" value={grams(user?.gold_grams)} />
             {(user?.silver_grams ?? 0) > 0 ? <Row label="Silver balance" value={grams(user?.silver_grams)} /> : null}
             <Row label="Member since" value={shortDate(user?.created_at)} />
@@ -199,7 +231,7 @@ export default function Profile() {
                   {photoBlocked ? <Button title="Open Settings" size="sm" variant="gold" onPress={() => Linking.openSettings()} testID="kyc-photo-settings" /> : null}
                 </View>
               </View>
-              <Button title="Submit KYC" loading={busy} disabled={!canSubmit} onPress={submitKyc} style={{ marginTop: 16 }} testID="kyc-submit-button" icon={<ShieldCheck size={18} color={colors.onBrandPrimary} />} />
+              <Button title="Submit KYC" loading={busy} disabled={busy} onPress={submitKyc} style={{ marginTop: 16 }} testID="kyc-submit-button" icon={<ShieldCheck size={18} color={colors.onBrandPrimary} />} />
             </>
           )}
         </Card>

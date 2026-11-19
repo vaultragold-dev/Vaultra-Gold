@@ -1,6 +1,6 @@
 import { useRouter } from "expo-router";
 import {
-  BadgeCheck, Bell, ChevronRight, Gem, HelpCircle, LogIn, Phone, Power, RefreshCw, Users, Vault, X,
+  BadgeCheck, Bell, ChevronRight, Gem, HelpCircle, LogIn, Moon, Phone, Power, RefreshCw, Sun, Users, Vault, X,
 } from "lucide-react-native";
 import React from "react";
 import { Linking, Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
@@ -11,7 +11,7 @@ import { Glass } from "@/src/components/Glass";
 import { LogoMark } from "@/src/components/Header";
 import { maskPhone, TENANT_NAME } from "@/src/format";
 import { useApp } from "@/src/store/AppContext";
-import { colors, fonts, radius } from "@/src/theme";
+import { colors, fonts, radius, useTheme } from "@/src/theme";
 
 type Item = { key: string; label: string; icon: any; to?: string; auth?: boolean; hint?: string };
 
@@ -19,6 +19,7 @@ export function SideMenu({ visible, onClose }: { visible: boolean; onClose: () =
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { token, user, vault, tenant, tenantName, tenantPhone, tenantLocked, setTenant, signOut } = useApp();
+  const { scheme, toggle: toggleTheme } = useTheme();
   const [pickOpen, setPickOpen] = React.useState(false);
   const stores = Object.entries(TENANT_NAME).filter(([id]) => id !== "all");
   const kyc = vault?.user.kyc_status;
@@ -73,6 +74,11 @@ export function SideMenu({ visible, onClose }: { visible: boolean; onClose: () =
             <View style={{ flex: 1 }}>
               <Text style={styles.name} numberOfLines={1}>{token ? name : "Welcome"}</Text>
               <Text style={styles.phone} numberOfLines={1}>{token ? maskPhone(user?.phone) : "Sign in to view your vault"}</Text>
+              {token && user?.wallet_id ? (
+                <Text style={{ fontFamily: fonts.bold, fontSize: 11, color: colors.brandPrimary, marginTop: 2 }}>
+                  ID: {user.wallet_id}
+                </Text>
+              ) : null}
             </View>
             <ChevronRight size={20} color={colors.brandPrimary} />
           </Pressable>
@@ -122,6 +128,14 @@ export function SideMenu({ visible, onClose }: { visible: boolean; onClose: () =
                 </Pressable>
               );
             })}
+            <Pressable onPress={toggleTheme} style={styles.item} testID="side-menu-theme-toggle">
+              <View style={[styles.itemIcon, { backgroundColor: scheme === "dark" ? "#1E293B" : colors.brandTertiary }]}>
+                {scheme === "dark" ? <Sun size={18} color="#FBBF24" strokeWidth={1.9} /> : <Moon size={18} color={colors.brandDeep} strokeWidth={1.9} />}
+              </View>
+              <Text style={styles.itemLabel}>{scheme === "dark" ? "Light Mode" : "Dark Mode"}</Text>
+              <Text style={styles.hint}>{scheme === "dark" ? "ON" : "OFF"}</Text>
+            </Pressable>
+
             {token ? (
               <Pressable onPress={() => { onClose(); signOut(); }} style={styles.item} testID="side-menu-logout">
                 <View style={[styles.itemIcon, { backgroundColor: colors.errorTint }]}>

@@ -470,6 +470,14 @@ function vSettings() {
   const key = S.revealKey ? s.app_key : '•'.repeat(18) + s.app_key.slice(-4);
   return head + `<div class="grid g2">
     <div class="card"><div class="card-h"><h3>Shop details</h3>${statusBadge(s.status)}</div><div style="padding:8px 20px 16px">
+      <div class="kv" style="align-items:center"><span>Brand Logo</span>
+        <div style="display:flex;align-items:center;gap:12px">
+          <div style="width:40px;height:40px;border-radius:10px;background:var(--gold2);overflow:hidden;display:grid;place-items:center;border:1px solid var(--border)">
+            ${s.logo_url || S.me?.logo_url ? `<img src="${esc(s.logo_url || S.me.logo_url)}" style="width:100%;height:100%;object-fit:cover">` : `<span style="color:#fff;font-weight:700">${esc(initials(s.business_name).slice(0,1))}</span>`}
+          </div>
+          <label class="btn sm" style="cursor:pointer">Upload Logo<input type="file" accept="image/png,image/jpeg,image/webp" style="display:none" onchange="uploadShopLogo(this)"></label>
+        </div>
+      </div>
       <div class="kv"><span>Business name</span><b>${esc(s.business_name)}</b></div><div class="kv"><span>Owner</span><b>${esc(s.owner_name)}</b></div>
       <div class="kv"><span>Phone</span><b>${phoneFmt(s.phone)}</b></div><div class="kv"><span>Email</span><b>${esc(s.email || '—')}</b></div>
       <div class="kv"><span>Address</span><b>${esc([s.address, s.city, s.state, s.pincode].filter(Boolean).join(', ') || '—')}</b></div>
@@ -486,6 +494,23 @@ function vSettings() {
   </div>`;
 }
 async function saveMin() { try { await api('/jeweller/settings/min-redemption', { method: 'PUT', body: { min_grams: Number($('#minr').value) } }); toast('Saved'); S.me.min_redemption_grams = Number($('#minr').value); loadSettings(); } catch (e) { toast(e.message, true); } }
+async function uploadShopLogo(inp) {
+  const f = inp.files?.[0]; if (!f) return;
+  const fd = new FormData(); fd.append('file', f);
+  try {
+    const res = await fetch(API + '/jeweller/settings/logo', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + localStorage.getItem('jeweller_token') },
+      body: fd,
+    });
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.detail || 'Upload failed');
+    toast('Logo updated successfully');
+    if (S.me) S.me.logo_url = d.logo_url;
+    if (S.settings) S.settings.logo_url = d.logo_url;
+    render();
+  } catch (e) { toast(e.message, true); }
+}
 
 /* ── Payments & API (Razorpay) ───────────────────────────────── */
 S.pay = null;

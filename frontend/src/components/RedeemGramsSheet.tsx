@@ -12,18 +12,20 @@ import { colors, fonts } from "@/src/theme";
 export function RedeemGramsSheet({ visible, onClose }: { visible: boolean; onClose: () => void }) {
   const { vault, refresh } = useApp();
   const toast = useToast();
+  const [metal, setMetal] = useState<"gold" | "silver">("gold");
   const [val, setVal] = useState("1");
   const [form, setForm] = useState<"coin" | "bar">("coin");
   const [busy, setBusy] = useState(false);
-  const bal = vault?.user.gold_grams ?? 0;
+  const bal = metal === "gold" ? (vault?.user.gold_grams ?? 0) : (vault?.user.silver_grams ?? 0);
+  const minG = metal === "gold" ? 1 : 10;
   const g = parseFloat(val) || 0;
-  const err = g < 1 ? "Minimum 1 gram" : g > bal ? `You have only ${fmtGrams(bal)}` : "";
+  const err = g < minG ? `Minimum ${minG} gram` : g > bal ? `You have only ${fmtGrams(bal)}` : "";
 
   const submit = async () => {
     if (err) return;
     setBusy(true);
     try {
-      await api("/redeem-requests", { method: "POST", body: { grams: g, form } });
+      await api("/redeem-requests", { method: "POST", body: { grams: g, form, metal } });
       toast("success", "Request sent to the store. You'll be notified once they accept.");
       refresh();
       onClose();
@@ -34,12 +36,31 @@ export function RedeemGramsSheet({ visible, onClose }: { visible: boolean; onClo
   };
 
   return (
-    <Sheet visible={visible} onClose={onClose} title="Redeem gold from vault" testID="redeem-grams-sheet">
-      <Text style={styles.sub}>Available: {fmtGrams(bal)} · Minimum 1 gram</Text>
+    <Sheet visible={visible} onClose={onClose} title={`Redeem ${metal === "gold" ? "Gold" : "Silver"} from vault`} testID="redeem-grams-sheet">
+      <View style={{ flexDirection: "row", gap: 8, marginBottom: 12 }}>
+        <Pressable
+          onPress={() => { setMetal("gold"); setVal("1"); }}
+          style={[styles.metalTab, metal === "gold" && styles.metalTabOn]}
+          testID="redeem-metal-gold"
+        >
+          <Text style={[styles.metalTabText, metal === "gold" && styles.metalTabTextOn]}>24K Gold</Text>
+        </Pressable>
+        <Pressable
+          onPress={() => { setMetal("silver"); setVal("10"); }}
+          style={[styles.metalTab, metal === "silver" && styles.metalTabSilverOn]}
+          testID="redeem-metal-silver"
+        >
+          <Text style={[styles.metalTabText, metal === "silver" && { color: "#1F2937", fontFamily: fonts.bold }]}>999 Silver</Text>
+        </Pressable>
+      </View>
+
+      <Text style={styles.sub}>Available: {fmtGrams(bal)} · Minimum {minG} gram</Text>
       <View style={styles.forms}>
         {(["coin", "bar"] as const).map((f) => (
           <Pressable key={f} onPress={() => setForm(f)} style={[styles.form, form === f && styles.formOn]} testID={`redeem-form-${f}`}>
-            <Text style={[styles.formText, form === f && styles.formTextOn]}>{f === "coin" ? "Gold Coin" : "Gold Bar"}</Text>
+            <Text style={[styles.formText, form === f && styles.formTextOn]}>
+              {f === "coin" ? (metal === "gold" ? "Gold Coin" : "Silver Coin") : (metal === "gold" ? "Gold Bar" : "Silver Bar")}
+            </Text>
           </Pressable>
         ))}
       </View>
@@ -49,13 +70,18 @@ export function RedeemGramsSheet({ visible, onClose }: { visible: boolean; onClo
       </View>
       {err ? <Text style={styles.err} testID="redeem-grams-error">{err}</Text> : null}
       <Button title="Send redeem request" onPress={submit} loading={busy} disabled={!!err} size="lg" style={{ marginTop: 16 }} testID="redeem-grams-submit" />
-      <Text style={styles.note}>The store will confirm your request. Collect your gold at the store with your Wallet ID.</Text>
+      <Text style={styles.note}>The store will confirm your request. Collect your metal at the store with your Wallet ID.</Text>
     </Sheet>
   );
 }
 
 const styles = StyleSheet.create({
   sub: { fontFamily: fonts.regular, fontSize: 13, color: colors.muted },
+  metalTab: { flex: 1, minHeight: 40, borderRadius: 10, borderWidth: 1, borderColor: colors.border, alignItems: "center", justifyContent: "center", backgroundColor: colors.surfaceSecondary },
+  metalTabOn: { backgroundColor: colors.brandPrimary, borderColor: colors.brandPrimary },
+  metalTabSilverOn: { backgroundColor: "#E2E8F0", borderColor: "#94A3B8" },
+  metalTabText: { fontFamily: fonts.medium, fontSize: 13, color: colors.muted },
+  metalTabTextOn: { color: colors.onBrandPrimary, fontFamily: fonts.bold },
   forms: { flexDirection: "row", gap: 8, marginTop: 14 },
   form: { flex: 1, minHeight: 48, borderRadius: 14, borderWidth: 1, borderColor: colors.goldHairline, alignItems: "center", justifyContent: "center" },
   formOn: { backgroundColor: colors.brandPrimary, borderColor: colors.brandPrimary },

@@ -19,10 +19,13 @@ const loadStudio = () => safe(async () => {
 
 function pickDraft() {
   const a = (S.studio?.apps || []).find((x) => x.id === S.studioSel);
+  const p = a ? (S.studio?.presets?.[a.theme_preset || 'royal_gold'] || {}) : {};
   S.draft = a ? {
     app_name: a.app_name || `${a.business_name.split(' ')[0]} Gold`,
     bundle_id: a.bundle_id || a.suggested_bundle_id,
     theme_preset: a.theme_preset || 'royal_gold',
+    primary_color: a.primary_color || p.primaryColor || '#D4AF37',
+    secondary_color: a.secondary_color || p.secondaryColor || '#C5A028',
     logo_url: a.logo_url,
     splash_url: a.splash_url,
     app_version: a.app_version,
@@ -125,7 +128,11 @@ function setPhoneTab(tab) {
 }
 
 function phone(small) {
-  const d = S.draft; const P = S.studio.presets[d.theme_preset]; const cur = S.studio.apps.find((x) => x.id === S.studioSel) || {}; const k = cur.karats || S.studio.karats || {}; const nodata = S.studio.price?.has_live === false;
+  const d = S.draft;
+  const P = Object.assign({}, S.studio.presets[d.theme_preset]);
+  if (d.primary_color) P.primaryColor = d.primary_color;
+  if (d.secondary_color) P.secondaryColor = d.secondary_color;
+  const cur = S.studio.apps.find((x) => x.id === S.studioSel) || {}; const k = cur.karats || S.studio.karats || {}; const nodata = S.studio.price?.has_live === false;
   const r = P.cardRadius; const name = esc(d.app_name || 'Your app');
   const val = (v) => nodata || !v ? '—' : '₹' + Number(v).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const logo = d.logo_url ? `<img src="${esc(d.logo_url)}" style="width:100%;height:100%;object-fit:cover">` : esc(initials(d.app_name || 'G'));
@@ -311,7 +318,7 @@ function vStudio() {
               </div>
               <div style="font-size:11px;color:#64748b;line-height:1.45;margin-bottom:10px">
                 • <b>Exact Size:</b> 1024×1024 px (Square 1:1 PNG)<br>
-                • <b>Safe Zone:</b> Keep main emblem & text inside central <b>60% (~600-650px)</b> so Samsung squircle & Pixel circle launchers don't touch edges.<br>
+                • <b>Safe Zone:</b> Keep main emblem & text inside central <b>60% (~620px circle)</b> so Samsung squircle, Pixel circle & iOS rounded corners never touch or clip the logo edges.<br>
                 • <b>Style:</b> Full-bleed brand background or transparent emblem.
               </div>
             </div>
@@ -324,7 +331,7 @@ function vStudio() {
                   </div>
                   <div>
                     <span class="badge green" style="font-size:10.5px">✓ 1024×1024 Icon Configured</span>
-                    <div style="font-size:10px;color:#475569;margin-top:2px">Auto-scaled with adaptive safe-zone breathing room</div>
+                    <div style="font-size:10px;color:#475569;margin-top:2px">Adaptive safe zone auto-scaled (never clipped)</div>
                   </div>
                 </div>` : '<div class="hint" style="margin-top:6px">Fallback: Branded initial badge with luxury gradient</div>'}
             </div>
@@ -334,13 +341,14 @@ function vStudio() {
           <div style="background:#fff;border:1px solid #cbd5e1;border-radius:8px;padding:12px;display:flex;flex-direction:column;justify-content:space-between">
             <div>
               <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
-                <label style="font-weight:700;font-size:12px;color:#0f172a">Launch Splash Screen</label>
-                <span class="badge gold" style="font-size:10px">1024 x 1024 px (or 1080x1920)</span>
+                <label style="font-weight:700;font-size:12px;color:#0f172a">Launch Splash Screen Icon</label>
+                <span class="badge gold" style="font-size:10px">1024 x 1024 px</span>
               </div>
               <div style="font-size:11px;color:#64748b;line-height:1.45;margin-bottom:10px">
-                • <b>Recommended:</b> 1024×1024 px Square Splash Icon (or 1080×1920 px Vertical)<br>
-                • <b>Android 12+ & iOS Splash API:</b> Centered seamlessly on full-screen brand background without floating card effect.<br>
-                • <b>Auto-Fallback:</b> If omitted, automatically uses your App Icon on luxury theme background.
+                • <b>Recommended:</b> 1024×1024 px Square Splash Icon (PNG).<br>
+                • <b>Modern Android 12+ & iOS:</b> Renders centered splash emblem over the full-screen brand background color.<br>
+                • <b>Important:</b> Keep logo within central <b>540px safe circle</b>. Do not upload full vertical poster cards with edge text (Android 12+ shrinks posters into tiny central icons).<br>
+                • <b>Auto-Fallback:</b> If omitted, your App Icon is automatically used on luxury theme background.
               </div>
             </div>
             <div>
@@ -377,8 +385,21 @@ function vStudio() {
       </div>
     </div>`;
   } else if (S.studioStep === 2) {
-    const themes = Object.entries(s.presets).map(([key, P]) => `<button class="theme-opt ${d.theme_preset === key ? 'on' : ''}" onclick="dset('theme_preset','${key}',true)" data-testid="theme-${key}">
+    const setPreset = (key) => {
+      d.theme_preset = key;
+      const curP = s.presets[key];
+      if (curP) {
+        d.primary_color = curP.primaryColor;
+        d.secondary_color = curP.secondaryColor;
+      }
+      render();
+    };
+
+    const themes = Object.entries(s.presets).map(([key, P]) => `<button class="theme-opt ${d.theme_preset === key ? 'on' : ''}" onclick="dset('theme_preset','${key}',false);dset('primary_color','${P.primaryColor}',false);dset('secondary_color','${P.secondaryColor}',true)" data-testid="theme-${key}">
       <div class="sw">${[P.primaryColor, P.secondaryColor, P.accentColor, P.backgroundColor].map((c) => `<i style="background:${c}"></i>`).join('')}</div><b>${P.label}</b><span>Radius ${P.cardRadius} · ${P.homeLayout.slice(0, 3).map((x) => SECTION_LABEL[x]).join(' → ')}</span></button>`).join('');
+
+    const activePrimary = d.primary_color || s.presets[d.theme_preset].primaryColor;
+    const activeSecondary = d.secondary_color || s.presets[d.theme_preset].secondaryColor;
 
     stepContent = `<div class="card pad">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
@@ -396,14 +417,14 @@ function vStudio() {
         <div class="grid g2">
           <div class="field"><label>Primary Gold Brand Color</label>
             <div style="display:flex;gap:8px;align-items:center">
-              <input type="color" value="${esc(s.presets[d.theme_preset].primaryColor)}" onchange="dset('primary_color',this.value,true)" style="width:40px;height:38px;padding:2px;border-radius:6px;cursor:pointer">
-              <input class="input" value="${esc(s.presets[d.theme_preset].primaryColor)}" readonly style="flex:1">
+              <input type="color" value="${esc(activePrimary)}" onchange="dset('primary_color',this.value,true)" style="width:40px;height:38px;padding:2px;border-radius:6px;cursor:pointer">
+              <input class="input" value="${esc(activePrimary)}" oninput="dset('primary_color',this.value,true)" style="flex:1">
             </div>
           </div>
           <div class="field"><label>Secondary Accent Tone</label>
             <div style="display:flex;gap:8px;align-items:center">
-              <input type="color" value="${esc(s.presets[d.theme_preset].secondaryColor)}" onchange="dset('secondary_color',this.value,true)" style="width:40px;height:38px;padding:2px;border-radius:6px;cursor:pointer">
-              <input class="input" value="${esc(s.presets[d.theme_preset].secondaryColor)}" readonly style="flex:1">
+              <input type="color" value="${esc(activeSecondary)}" onchange="dset('secondary_color',this.value,true)" style="width:40px;height:38px;padding:2px;border-radius:6px;cursor:pointer">
+              <input class="input" value="${esc(activeSecondary)}" oninput="dset('secondary_color',this.value,true)" style="flex:1">
             </div>
           </div>
         </div>

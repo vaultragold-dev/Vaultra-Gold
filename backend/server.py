@@ -733,6 +733,7 @@ class RedemptionApprove(BaseModel):
     wallet_id: str
     grams: float = Field(gt=0)
     item: str = "Physical Gold"
+    metal: str = "gold"
     note: str = ""
 
 
@@ -1517,6 +1518,8 @@ async def order_status(order_id: str, customer: Customer = Depends(get_current_c
 
 @api.post("/orders/buy")
 async def buy(body: BuyRequest, request: Request, customer: Customer = Depends(get_current_customer), db: AsyncSession = Depends(get_db)):
+    if customer.kyc_status != "approved":
+        raise HTTPException(403, "KYC verification is required before purchasing gold or silver. Please submit your KYC in your profile.")
     result = await db.execute(select(Quote).where(Quote.id == body.quote_id))
     q = result.scalar_one_or_none()
     if not q:
@@ -2547,23 +2550,31 @@ async def jeweller_approve_redemption(body: RedemptionApprove, jeweller: Jewelle
     customer = result.scalar_one_or_none()
     if not customer:
         raise HTTPException(404, "Customer not found with this Wallet ID")
-    if body.grams > (customer.gold_grams or 0):
-        raise HTTPException(400, f"Customer has only {r4(customer.gold_grams)}g available")
-    if body.grams < jeweller.min_redemption_grams:
-        raise HTTPException(400, f"Minimum redemption is {jeweller.min_redemption_grams}g")
+    is_silver = body.metal == "silver"
+    user_bal = (customer.silver_grams or 0) if is_silver else (customer.gold_grams or 0)
+    min_g = 10.0 if is_silver else jeweller.min_redemption_grams
+    if body.grams > user_bal:
+        raise HTTPException(400, f"Customer has only {r4(user_bal)}g {'silver' if is_silver else 'gold'} available")
+    if body.grams < min_g:
+        raise HTTPException(400, f"Minimum redemption is {min_g}g")
 
-    avg = (customer.invested / customer.gold_grams) if customer.gold_grams > 0 else 0
-    customer.gold_grams = r4(customer.gold_grams - body.grams)
-    customer.invested = r2(customer.invested - avg * body.grams)
-    buy_rate, _ = gold_rate(jeweller.id)
+    if is_silver:
+        customer.silver_grams = r4(customer.silver_grams - body.grams)
+        buy_rate, _ = silver_rate(jeweller.id)
+    else:
+        avg = (customer.invested / customer.gold_grams) if customer.gold_grams > 0 else 0
+        customer.gold_grams = r4(customer.gold_grams - body.grams)
+        customer.invested = r2(customer.invested - avg * body.grams)
+        buy_rate, _ = gold_rate(jeweller.id)
     amount = r2(body.grams * buy_rate)
 
     txn = Transaction(
         id=str(uuid.uuid4()), invoice_no=invoice_no(), customer_id=customer.id,
-        jeweller_id=jeweller.id, type="redemption", grams=body.grams, rate=buy_rate,
+        jeweller_id=jeweller.id, type="redemption", metal="silver" if is_silver else "gold",
+        grams=body.grams, rate=buy_rate,
         amount=amount, total=amount, method="in_store", status="completed",
         note=f"{body.item} - Redeemed at store. {body.note}".strip(),
-        extra={"item": body.item, "approved_by": jeweller.owner_name}
+        extra={"item": body.item, "approved_by": jeweller.owner_name, "metal": "silver" if is_silver else "gold"}
     )
     db.add(txn)
     await db.commit()
@@ -2649,6 +2660,15 @@ async def jeweller_kyc_decide(customer_id: str, approve: bool = True, note: str 
     c.kyc_data = kyc
     await db.commit()
     return customer_dict(c)
+
+
+@api.post("/jeweller/settings/logo")
+async def jeweller_upload_logo(file: UploadFile = File(...), jeweller: Jeweller = Depends(get_current_jeweller), db: AsyncSession = Depends(get_db)):
+    res = await _image_upload(file, jeweller.id, db)
+    jeweller.logo_url = res["url"]
+    await db.commit()
+    await db.refresh(jeweller)
+    return {"ok": True, "logo_url": jeweller.logo_url}
 
 
 @api.put("/jeweller/settings/min-redemption")
@@ -3875,24 +3895,29 @@ async def jr_public(request: Request, tenant: str = ""):
 class RedeemGrams(BaseModel):
     grams: float = Field(ge=1)
     form: str = Field("coin", pattern="^(coin|bar)$")
+    metal: str = "gold"
 
 
 @api.post("/redeem-requests")
 async def rr_create(body: RedeemGrams, customer: Customer = Depends(get_current_customer), db: AsyncSession = Depends(get_db)):
     grams = r4(body.grams)
     j = (await db.execute(select(Jeweller).where(Jeweller.id == customer.jeweller_id))).scalar_one_or_none()
-    min_g = max(1.0, (j.min_redemption_grams if j else 1.0) or 1.0)
+    is_silver = body.metal == "silver"
+    user_bal = (customer.silver_grams or 0) if is_silver else (customer.gold_grams or 0)
+    min_g = 10.0 if is_silver else max(1.0, (j.min_redemption_grams if j else 1.0) or 1.0)
     if grams < min_g:
         raise HTTPException(400, f"Minimum redemption is {min_g:g}g")
     if customer.kyc_status != "approved":
-        raise HTTPException(403, "Complete KYC to redeem gold")
-    if grams > (customer.gold_grams or 0):
-        raise HTTPException(400, f"You have only {r4(customer.gold_grams or 0)}g in your vault")
+        raise HTTPException(403, "Complete KYC to redeem gold or silver")
+    if grams > user_bal:
+        raise HTTPException(400, f"You have only {r4(user_bal)}g in your vault")
     open_req = (await db.execute(select(Pickup.id).where(Pickup.customer_id == customer.id, Pickup.status == "requested"))).first()
     if open_req:
         raise HTTPException(409, "You already have a redemption request waiting for the store")
+    metal_name = "999 Pure Silver" if is_silver else "24K Gold"
+    form_name = "Bar" if body.form == "bar" else "Coin"
     p = Pickup(id=str(uuid.uuid4()), customer_id=customer.id, jeweller_id=customer.jeweller_id, transaction_id=None,
-               item=f"{grams:g}g 24K Gold {'Bar' if body.form == 'bar' else 'Coin'}", grams=grams, otp=f"{secrets.randbelow(1_000_000):06d}", status="requested")
+               item=f"{grams:g}g {metal_name} {form_name}", grams=grams, otp=f"{secrets.randbelow(1_000_000):06d}", status="requested")
     db.add(p)
     await db.commit()
     return {"id": p.id, "grams": grams, "status": "requested", "item": p.item}
@@ -3918,15 +3943,26 @@ async def rr_act(rid: str, action: str, jeweller: Jeweller = Depends(get_current
     if action != "accept":
         raise HTTPException(400, "Unknown action")
     c = (await db.execute(select(Customer).where(Customer.id == p.customer_id))).scalar_one()
-    if p.grams > (c.gold_grams or 0):
-        raise HTTPException(400, f"Customer now has only {r4(c.gold_grams or 0)}g")
-    avg = (c.invested / c.gold_grams) if c.gold_grams else 0
-    c.gold_grams = r4(c.gold_grams - p.grams)
-    c.invested = r2((c.invested or 0) - avg * p.grams)
-    rate = gold_rate(jeweller.id)[0]
+    is_silver = "Silver" in (p.item or "")
+    if is_silver:
+        if p.grams > (c.silver_grams or 0):
+            raise HTTPException(400, f"Customer now has only {r4(c.silver_grams or 0)}g silver")
+        c.silver_grams = r4(c.silver_grams - p.grams)
+        rate = silver_rate(jeweller.id)[0]
+        method = "vault_silver"
+    else:
+        if p.grams > (c.gold_grams or 0):
+            raise HTTPException(400, f"Customer now has only {r4(c.gold_grams or 0)}g gold")
+        avg = (c.invested / c.gold_grams) if c.gold_grams else 0
+        c.gold_grams = r4(c.gold_grams - p.grams)
+        c.invested = r2((c.invested or 0) - avg * p.grams)
+        rate = gold_rate(jeweller.id)[0]
+        method = "vault_gold"
+
     txn = Transaction(id=str(uuid.uuid4()), invoice_no=invoice_no(), customer_id=c.id, jeweller_id=jeweller.id, type="redemption",
-                      grams=p.grams, rate=rate, amount=r2(p.grams * rate), gst=0, total=0, method="vault_gold", status="processing",
-                      note=f"{p.item} · Accepted by store", extra={"item": p.item})
+                      metal="silver" if is_silver else "gold",
+                      grams=p.grams, rate=rate, amount=r2(p.grams * rate), gst=0, total=0, method=method, status="processing",
+                      note=f"{p.item} · Accepted by store", extra={"item": p.item, "metal": "silver" if is_silver else "gold"})
     db.add(txn)
     await db.flush()
     p.transaction_id, p.status = txn.id, "pending"
@@ -4221,6 +4257,7 @@ def app_studio_row(j, base):
     cfg = wl.tenant_config(j, base)
     return {"id": j.id, "business_name": j.business_name, "city": j.city, "status": j.status, "phone": j.phone, "email": j.email,
             "app_name": j.app_name or "", "bundle_id": j.bundle_id or "", "theme_preset": j.theme_preset or "",
+            "primary_color": j.primary_color or "", "secondary_color": j.secondary_color or "",
             "logo_url": j.logo_url or "", "splash_url": j.splash_url or "", "app_version": j.app_version or "1.0.0",
             "app_status": j.app_status or "details_pending", "support_email": j.support_email or "",
             "store_short": j.store_short or "", "store_long": j.store_long or "", "store_keywords": j.store_keywords or "",
@@ -4259,6 +4296,8 @@ class AppStudioUpdate(BaseModel):
     app_name: str = Field(min_length=2, max_length=30)
     bundle_id: str = ""
     theme_preset: str
+    primary_color: str = ""
+    secondary_color: str = ""
     logo_url: str = ""
     splash_url: str = ""
     app_version: str = Field(default="1.0.0", pattern=r"^\d+\.\d+\.\d+$")
@@ -4284,6 +4323,10 @@ async def ms_update(jid: str, body: AppStudioUpdate, request: Request, admin: Ma
     if clash:
         raise HTTPException(409, "This App ID is already used by another shop")
     j.app_name, j.bundle_id, j.theme_preset = body.app_name.strip(), bundle, body.theme_preset
+    if body.primary_color:
+        j.primary_color = body.primary_color.strip()
+    if body.secondary_color:
+        j.secondary_color = body.secondary_color.strip()
     j.logo_url, j.splash_url, j.app_version = body.logo_url, body.splash_url, body.app_version
     j.support_email, j.store_short, j.store_long, j.store_keywords = body.support_email.strip(), body.store_short.strip(), body.store_long.strip(), body.store_keywords.strip()
     if body.domain is not None:

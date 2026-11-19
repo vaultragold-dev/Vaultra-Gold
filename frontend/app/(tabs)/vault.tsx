@@ -19,9 +19,11 @@ import { cardShadow, colors, fonts, radius } from "@/src/theme";
 
 const FILTERS = [
   { id: "all", label: "All" },
+  { id: "gold", label: "Gold 24K" },
+  { id: "silver", label: "Silver" },
   { id: "buy", label: "Buy" },
   { id: "sip", label: "SIP" },
-  { id: "redemption", label: "Redemption" },
+  { id: "redemption", label: "Redeem" },
 ];
 
 export default function VaultScreen() {
@@ -41,7 +43,15 @@ export default function VaultScreen() {
   const loadTxns = useCallback(async () => {
     if (!token) return;
     try {
-      setTxns(await api(`/transactions?type=${filter}`));
+      const typeParam = ["gold", "silver"].includes(filter) ? "all" : filter;
+      const res = await api(`/transactions?type=${typeParam}`);
+      if (filter === "gold") {
+        setTxns(res.filter((x: any) => x.metal === "gold" || (!x.metal && !x.type?.includes("silver"))));
+      } else if (filter === "silver") {
+        setTxns(res.filter((x: any) => x.metal === "silver" || x.type?.includes("silver")));
+      } else {
+        setTxns(res);
+      }
     } catch {
       setTxns([]);
     }
@@ -100,7 +110,12 @@ export default function VaultScreen() {
         <View style={styles.portfolio} testID="portfolio-card">
           <View style={styles.pHead}>
             <VaultIcon size={16} color={colors.brandPrimary} />
-            <Text style={styles.pLabel}>24K GOLD IN VAULT</Text>
+            <Text style={styles.pLabel}>VAULT HOLDINGS</Text>
+            {u?.wallet_id ? (
+              <View style={{ marginLeft: "auto", backgroundColor: "rgba(255,255,255,0.12)", paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6 }}>
+                <Text style={{ fontFamily: fonts.bold, fontSize: 11, color: colors.brandPrimary }}>ID: {u.wallet_id}</Text>
+              </View>
+            ) : null}
           </View>
           <Text style={styles.pGrams} testID="portfolio-grams">
             {grams(u?.gold_grams)}
@@ -109,7 +124,7 @@ export default function VaultScreen() {
             {noRate ? "Rates paused" : inr(vault?.current_value)} <Text style={styles.pValueSub}>{noRate ? "value shown when live rates return" : "current value"}</Text>
           </Text>
           {(u?.silver_grams ?? 0) > 0 ? (
-            <Text style={styles.pValueSub} testID="portfolio-silver">Silver in vault: {grams(u?.silver_grams)}</Text>
+            <Text style={[styles.pValueSub, { color: colors.silverTone, marginTop: 4 }]} testID="portfolio-silver">Silver in vault: {grams(u?.silver_grams)}</Text>
           ) : null}
           <View style={styles.pStats}>
             <View style={{ flex: 1 }}>
@@ -131,7 +146,7 @@ export default function VaultScreen() {
 
         <View style={styles.actions}>
           {[
-            { id: "redeem-grams", label: "Redeem Gold (grams)", Icon: Coins, onPress: () => setGramsOpen(true) },
+            { id: "redeem-grams", label: "Redeem Vault (Gold/Silver)", Icon: Coins, onPress: () => setGramsOpen(true) },
             { id: "redeem", label: "Redeem Physical Coins", Icon: Coins, onPress: () => setCoinOpen(true) },
             { id: "buy", label: "Buy More Gold", Icon: TrendingUp, onPress: () => router.push("/") },
             { id: "invoice", label: "Download Invoice", Icon: Download, onPress: openInvoice },
