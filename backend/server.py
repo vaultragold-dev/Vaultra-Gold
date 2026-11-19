@@ -1,7 +1,7 @@
 """Vaultra DigiGold — Multi-tenant Digital Gold Platform Backend
 FastAPI + PostgreSQL (SQLAlchemy async)
 """
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Query, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Query, WebSocket, WebSocketDisconnect, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from dotenv import load_dotenv
