@@ -306,13 +306,13 @@ function vStudio() {
           <div style="background:#fff;border:1px solid #cbd5e1;border-radius:8px;padding:12px;display:flex;flex-direction:column;justify-content:space-between">
             <div>
               <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
-                <label style="font-weight:700;font-size:12px;color:#0f172a">App Icon (Adaptive Icon)</label>
+                <label style="font-weight:700;font-size:12px;color:#0f172a">App Icon (Adaptive Squircle & iOS)</label>
                 <span class="badge gold" style="font-size:10px">1024 x 1024 px</span>
               </div>
               <div style="font-size:11px;color:#64748b;line-height:1.45;margin-bottom:10px">
                 • <b>Exact Size:</b> 1024×1024 px (Square 1:1 PNG)<br>
-                • <b>Safe Zone:</b> Keep main logo & text inside central <b>66% circle (~676px)</b> so squircle masks don't clip it.<br>
-                • <b>Style:</b> Full-bleed brand background (like Blinkit / Nick Gold) or transparent emblem.
+                • <b>Safe Zone:</b> Keep main emblem & text inside central <b>60% (~600-650px)</b> so Samsung squircle & Pixel circle launchers don't touch edges.<br>
+                • <b>Style:</b> Full-bleed brand background or transparent emblem.
               </div>
             </div>
             <div>
@@ -324,7 +324,7 @@ function vStudio() {
                   </div>
                   <div>
                     <span class="badge green" style="font-size:10.5px">✓ 1024×1024 Icon Configured</span>
-                    <div style="font-size:10px;color:#475569;margin-top:2px">Fills Android Squircle edge-to-edge</div>
+                    <div style="font-size:10px;color:#475569;margin-top:2px">Auto-scaled with adaptive safe-zone breathing room</div>
                   </div>
                 </div>` : '<div class="hint" style="margin-top:6px">Fallback: Branded initial badge with luxury gradient</div>'}
             </div>
@@ -335,26 +335,26 @@ function vStudio() {
             <div>
               <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
                 <label style="font-weight:700;font-size:12px;color:#0f172a">Launch Splash Screen</label>
-                <span class="badge gold" style="font-size:10px">1284 x 2778 px</span>
+                <span class="badge gold" style="font-size:10px">1024 x 1024 px (or 1080x1920)</span>
               </div>
               <div style="font-size:11px;color:#64748b;line-height:1.45;margin-bottom:10px">
-                • <b>Exact Size:</b> 1284×2778 px (or 1080×1920 px, Vertical 9:19.5 or 9:16)<br>
-                • <b>Display:</b> Full-bleed edge-to-edge mobile launch screen.<br>
-                • <b>Center Safe Area:</b> Keep logo & branding centered in middle 40% area.
+                • <b>Recommended:</b> 1024×1024 px Square Splash Icon (or 1080×1920 px Vertical)<br>
+                • <b>Android 12+ & iOS Splash API:</b> Centered seamlessly on full-screen brand background without floating card effect.<br>
+                • <b>Auto-Fallback:</b> If omitted, automatically uses your App Icon on luxury theme background.
               </div>
             </div>
             <div>
               <input type="file" accept="image/png,image/jpeg" onchange="studioUpload(this,'splash_url')" id="st_splash">
               ${d.splash_url ? `
                 <div style="margin-top:10px;display:flex;align-items:center;gap:10px;background:#f1f5f9;padding:8px;border-radius:8px">
-                  <div style="width:26px;height:48px;border-radius:5px;background:#1e293b;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 6px rgba(0,0,0,0.18);overflow:hidden">
+                  <div style="width:36px;height:36px;border-radius:9px;background:#1e293b;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 6px rgba(0,0,0,0.18);overflow:hidden">
                     <img src="${esc(d.splash_url)}" style="width:100%;height:100%;object-fit:cover">
                   </div>
                   <div>
-                    <span class="badge green" style="font-size:10.5px">✓ Full Splash Configured</span>
-                    <div style="font-size:10px;color:#475569;margin-top:2px">Edge-to-edge cover (No black void)</div>
+                    <span class="badge green" style="font-size:10.5px">✓ Splash Screen Configured</span>
+                    <div style="font-size:10px;color:#475569;margin-top:2px">Seamless full-bleed launch display</div>
                   </div>
-                </div>` : '<div class="hint" style="margin-top:6px">Fallback: Auto-generated 1284×2778 luxury splash</div>'}
+                </div>` : '<div class="hint" style="margin-top:6px">Fallback: Auto-generated luxury splash screen</div>'}
             </div>
           </div>
         </div>

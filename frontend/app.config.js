@@ -19,17 +19,16 @@ module.exports = ({ config }) => {
 
   const plugins = (config.plugins || []).map((p) => {
     if (Array.isArray(p) && p[0] === "expo-splash-screen") {
-      const splashConfig = {
-        ...p[1],
-        image: asset("splash.png", p[1].image),
-        backgroundColor: splashBg,
-        resizeMode: "cover",
-      };
-      // CRITICAL: When using a full-screen vertical splash image (1080x1920 / 1284x2778),
-      // imageWidth MUST NOT be set! Setting imageWidth: 240 forces the full-screen wallpaper
-      // into a tiny 240px wide thumbnail in the middle of the phone screen!
-      delete splashConfig.imageWidth;
-      return ["expo-splash-screen", splashConfig];
+      return [
+        "expo-splash-screen",
+        {
+          ...p[1],
+          image: asset("splash.png", p[1]?.image),
+          backgroundColor: splashBg,
+          resizeMode: "contain",
+          imageWidth: 220,
+        },
+      ];
     }
     return p;
   });
@@ -46,7 +45,7 @@ module.exports = ({ config }) => {
       bundleIdentifier: t.bundleId || config.ios?.bundleIdentifier,
       splash: {
         image: asset("splash.png", config.ios?.splash?.image),
-        resizeMode: "cover",
+        resizeMode: "contain",
         backgroundColor: splashBg,
       },
     },
@@ -56,7 +55,7 @@ module.exports = ({ config }) => {
       package: t.packageName || t.bundleId || config.android?.package,
       splash: {
         image: asset("splash.png", config.android?.splash?.image),
-        resizeMode: "cover",
+        resizeMode: "contain",
         backgroundColor: splashBg,
       },
       adaptiveIcon: {

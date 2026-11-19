@@ -106,9 +106,16 @@ def tenant_config(j, api_base, logo_bytes=None, splash_bytes=None):
     if splash_bytes:
         try:
             temp_splash = Image.open(io.BytesIO(splash_bytes))
+            w, h = temp_splash.size
+            if h > w:
+                temp_splash = temp_splash.crop((0, (h - w) // 2, w, (h + w) // 2))
+            elif w > h:
+                temp_splash = temp_splash.crop(((w - h) // 2, 0, (w + h) // 2, h))
             splash_bg = _sample_bg_color(temp_splash)
         except Exception:
             pass
+    elif logo_bytes:
+        splash_bg = adaptive_bg
 
     return {
         "tenantId": j.id,
@@ -201,6 +208,18 @@ def _sample_bg_color(img):
     return f"#{avg_r:02x}{avg_g:02x}{avg_b:02x}"
 
 
+def _feather_square(img, target_size, feather=45):
+    """Resizes square image to target_size with feathered (alpha-faded) edges for seamless blending."""
+    scaled = img.convert("RGBA").resize((target_size, target_size), Image.Resampling.LANCZOS)
+    mask = Image.new("L", (target_size, target_size), 255)
+    d = ImageDraw.Draw(mask)
+    for i in range(feather):
+        alpha = int(255 * (i / max(feather, 1)))
+        d.rectangle([i, i, target_size - 1 - i, target_size - 1 - i], outline=alpha)
+    scaled.putalpha(mask)
+    return scaled
+
+
 def _paste_logo(canvas, logo, size, center):
     lg = logo.convert("RGBA")
     lg.thumbnail((size, size), Image.Resampling.LANCZOS)
@@ -235,28 +254,31 @@ def make_icon(name, p, logo=None, transparent=False):
             # Full square icon for iOS, Play Store listing, Web
             img = Image.new("RGB", (s, s), bg_rgb)
             if 0.85 <= w / h <= 1.15:
-                # Square: resize directly to 1024x1024
-                lg_resized = lg.resize((s, s), Image.Resampling.LANCZOS)
-                img.paste(lg_resized, (0, 0), lg_resized)
+                # Scale logo to target safe size (740px) with feathered edges so emblem has comfortable breathing room
+                scaled = _feather_square(lg, 740, 45)
+                pos = ((s - 740) // 2, (s - 740) // 2)
+                img.paste(scaled.convert("RGB"), pos, scaled)
             else:
-                # Aspect fit inside 1024x1024 centered
+                # Aspect fit inside 740x740 centered
                 lg_fit = lg.copy()
-                lg_fit.thumbnail((s, s), Image.Resampling.LANCZOS)
+                lg_fit.thumbnail((740, 740), Image.Resampling.LANCZOS)
                 img.paste(lg_fit, (int((s - lg_fit.width) / 2), int((s - lg_fit.height) / 2)), lg_fit)
             out = io.BytesIO()
             img.save(out, "PNG")
             return out.getvalue()
         else:
             # Android Adaptive Icon foreground (adaptive-icon.png):
-            # Android launchers mask the outer 18% into squircles/circles within the 66% safe zone.
-            # Fill 1024x1024 canvas with background and resize square logo edge-to-edge
+            # Android launchers mask the outer 18-20% into squircles/circles within the 66% safe zone (~676px).
+            # By scaling the emblem inside a 720px box with feathered edges onto bg_rgb canvas,
+            # brand text & emblems will never touch the edges of Samsung squircles, Pixel circles, or OnePlus icons!
             img = Image.new("RGBA", (s, s), (*bg_rgb, 255))
             if 0.85 <= w / h <= 1.15:
-                lg_resized = lg.resize((s, s), Image.Resampling.LANCZOS)
-                img.paste(lg_resized, (0, 0), lg_resized)
+                scaled = _feather_square(lg, 720, 45)
+                pos = ((s - 720) // 2, (s - 720) // 2)
+                img.paste(scaled, pos, scaled)
             else:
                 lg_fit = lg.copy()
-                lg_fit.thumbnail((720, 720), Image.Resampling.LANCZOS)
+                lg_fit.thumbnail((700, 700), Image.Resampling.LANCZOS)
                 img.paste(lg_fit, (int((s - lg_fit.width) / 2), int((s - lg_fit.height) / 2)), lg_fit)
             out = io.BytesIO()
             img.save(out, "PNG")
@@ -266,14 +288,14 @@ def make_icon(name, p, logo=None, transparent=False):
         if not transparent:
             # iOS / store icon: draw branded gradient and center logo inside safe zone
             img = _gradient(s, s, p["primaryColor"], p["secondaryColor"]).convert("RGBA")
-            _paste_logo(img, logo, 660, (s / 2, s / 2))
+            _paste_logo(img, logo, 520, (s / 2, s / 2))
             out = io.BytesIO()
             img.convert("RGB").save(out, "PNG")
             return out.getvalue()
         else:
             # Android Adaptive Icon foreground: transparent canvas with centered emblem
             img = Image.new("RGBA", (s, s), (0, 0, 0, 0))
-            _paste_logo(img, logo, 660, (s / 2, s / 2))
+            _paste_logo(img, logo, 520, (s / 2, s / 2))
             out = io.BytesIO()
             img.save(out, "PNG")
             return out.getvalue()
@@ -287,26 +309,66 @@ def make_icon_512(name, p, logo=None):
     return out.getvalue()
 
 
-def make_splash(name, p, logo=None):
-    w, h = 1284, 2778
-    img = Image.new("RGB", (w, h), _rgb(p["accentColor"]))
-    d = ImageDraw.Draw(img)
-    if logo:
-        rgba = img.convert("RGBA")
-        if _is_transparent(logo):
-            _paste_logo(rgba, logo, 640, (w / 2, h / 2 - 140))
+def make_splash(name, p, logo=None, splash_img=None):
+    """
+    Generates a 1024x1024 SQUARE Splash Icon.
+    Modern Android 12+ (SplashScreen API) and iOS LaunchScreen display this icon centered
+    over a full-screen windowSplashScreenBackground matching the icon's background color.
+    This produces a seamless, luxury full-screen splash without miniature floating boxes.
+    """
+    s = 1024
+    if splash_img:
+        w, h = splash_img.size
+        # Center-crop square from vertical or horizontal image
+        if h > w:
+            top = (h - w) // 2
+            crop = splash_img.crop((0, top, w, top + w))
+        elif w > h:
+            left = (w - h) // 2
+            crop = splash_img.crop((left, 0, left + h, h))
         else:
-            _paste_logo(rgba, logo, 560, (w / 2, h / 2 - 140))
-        img = rgba.convert("RGB")
-        d = ImageDraw.Draw(img)
+            crop = splash_img
+
+        sp_bg = _sample_bg_color(crop)
+        sp_rgb = _rgb(sp_bg)
+        img = Image.new("RGBA", (s, s), (*sp_rgb, 255))
+        # Center crop contains the centered logo: scale to 740px with feathered edge for seamless blending
+        scaled = _feather_square(crop, 740, 45)
+        pos = ((s - 740) // 2, (s - 740) // 2)
+        img.paste(scaled, pos, scaled)
+        out = io.BytesIO()
+        img.convert("RGB").save(out, "PNG")
+        return out.getvalue()
+
+    if logo:
+        if _is_transparent(logo):
+            sp_rgb = _rgb(p["accentColor"])
+            img = Image.new("RGBA", (s, s), (*sp_rgb, 255))
+            _paste_logo(img, logo, 520, (s / 2, s / 2))
+            out = io.BytesIO()
+            img.convert("RGB").save(out, "PNG")
+            return out.getvalue()
+        else:
+            sp_bg = _sample_bg_color(logo)
+            sp_rgb = _rgb(sp_bg)
+            img = Image.new("RGBA", (s, s), (*sp_rgb, 255))
+            scaled = _feather_square(logo, 720, 45)
+            pos = ((s - 720) // 2, (s - 720) // 2)
+            img.paste(scaled, pos, scaled)
+            out = io.BytesIO()
+            img.convert("RGB").save(out, "PNG")
+            return out.getvalue()
     else:
-        f = _font(300)
-        _center_text(d, w, h / 2 - 380, _initials(name), f, _rgb(p["primaryColor"]))
-    _center_text(d, w, h / 2 + 220, name, _font(84), (255, 255, 255))
-    _center_text(d, w, h / 2 + 330, "24K Digital Gold", _font(48, 500), _rgb(p["primaryColor"]))
-    out = io.BytesIO()
-    img.save(out, "PNG")
-    return out.getvalue()
+        # Default initials monogram
+        img = Image.new("RGB", (s, s), _rgb(p["accentColor"]))
+        d = ImageDraw.Draw(img)
+        f = _font(280)
+        _center_text(d, s, s / 2 - 200, _initials(name), f, _rgb(p["primaryColor"]))
+        _center_text(d, s, s / 2 + 100, name, _font(56), (255, 255, 255))
+        _center_text(d, s, s / 2 + 180, "24K Digital Gold", _font(34, 500), _rgb(p["primaryColor"]))
+        out = io.BytesIO()
+        img.save(out, "PNG")
+        return out.getvalue()
 
 
 def _inr(n):
@@ -833,11 +895,10 @@ def build_app_kit(j, api_base, rates, logo_bytes=None, splash_bytes=None):
     p = preset(j.theme_preset)
     name = cfg["appName"]
     logo = Image.open(io.BytesIO(logo_bytes)) if logo_bytes else None
+    splash_img = Image.open(io.BytesIO(splash_bytes)) if splash_bytes else None
 
-    # Handle splash screen: if full vertical image uploaded, use it; otherwise generate crisp 1284x2778 splash
-    splash_data = splash_bytes
-    if not splash_data:
-        splash_data = make_splash(name, p, logo)
+    # Generate 1024x1024 square splash icon (blends seamlessly with splashBackground)
+    splash_data = make_splash(name, p, logo, splash_img)
 
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
@@ -847,6 +908,8 @@ def build_app_kit(j, api_base, rates, logo_bytes=None, splash_bytes=None):
         z.writestr("assets/splash.png", splash_data)
         if logo_bytes:
             z.writestr("assets/logo-original.png", logo_bytes)
+        if splash_bytes:
+            z.writestr("assets/splash-original.png", splash_bytes)
         for i, kind in enumerate(("home", "rates", "vault"), 1):
             z.writestr(f"store/screenshots/{i}-{kind}.png", make_screenshot(kind, name, p, rates, logo))
         z.writestr("store/feature-graphic.png", make_feature_graphic(name, p, logo))
