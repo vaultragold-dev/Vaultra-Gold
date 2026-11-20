@@ -26,6 +26,7 @@ function pickDraft() {
     theme_preset: a.theme_preset || 'royal_gold',
     primary_color: a.primary_color || p.primaryColor || '#D4AF37',
     secondary_color: a.secondary_color || p.secondaryColor || '#C5A028',
+    accent_color: a.accent_color || p.accentColor || '#111827',
     logo_url: a.logo_url,
     splash_url: a.splash_url,
     app_version: a.app_version,
@@ -132,6 +133,7 @@ function phone(small) {
   const P = Object.assign({}, S.studio.presets[d.theme_preset]);
   if (d.primary_color) P.primaryColor = d.primary_color;
   if (d.secondary_color) P.secondaryColor = d.secondary_color;
+  if (d.accent_color) P.accentColor = d.accent_color;
   const cur = S.studio.apps.find((x) => x.id === S.studioSel) || {}; const k = cur.karats || S.studio.karats || {}; const nodata = S.studio.price?.has_live === false;
   const r = P.cardRadius; const name = esc(d.app_name || 'Your app');
   const val = (v) => nodata || !v ? '—' : '₹' + Number(v).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -391,15 +393,17 @@ function vStudio() {
       if (curP) {
         d.primary_color = curP.primaryColor;
         d.secondary_color = curP.secondaryColor;
+        d.accent_color = curP.accentColor;
       }
       render();
     };
 
-    const themes = Object.entries(s.presets).map(([key, P]) => `<button class="theme-opt ${d.theme_preset === key ? 'on' : ''}" onclick="dset('theme_preset','${key}',false);dset('primary_color','${P.primaryColor}',false);dset('secondary_color','${P.secondaryColor}',true)" data-testid="theme-${key}">
+    const themes = Object.entries(s.presets).map(([key, P]) => `<button class="theme-opt ${d.theme_preset === key ? 'on' : ''}" onclick="dset('theme_preset','${key}',false);dset('primary_color','${P.primaryColor}',false);dset('secondary_color','${P.secondaryColor}',false);dset('accent_color','${P.accentColor}',true)" data-testid="theme-${key}">
       <div class="sw">${[P.primaryColor, P.secondaryColor, P.accentColor, P.backgroundColor].map((c) => `<i style="background:${c}"></i>`).join('')}</div><b>${P.label}</b><span>Radius ${P.cardRadius} · ${P.homeLayout.slice(0, 3).map((x) => SECTION_LABEL[x]).join(' → ')}</span></button>`).join('');
 
     const activePrimary = d.primary_color || s.presets[d.theme_preset].primaryColor;
     const activeSecondary = d.secondary_color || s.presets[d.theme_preset].secondaryColor;
+    const activeAccent = d.accent_color || s.presets[d.theme_preset].accentColor;
 
     stepContent = `<div class="card pad">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
@@ -414,18 +418,27 @@ function vStudio() {
 
       <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:14px;margin-top:14px">
         <h4 style="margin:0 0 10px 0;font-size:13px;color:#0f172a">🎨 Professional Custom Color Override (Optional)</h4>
-        <div class="grid g2">
-          <div class="field"><label>Primary Gold Brand Color</label>
+        <div class="grid g3">
+          <div class="field"><label>1. Primary Brand / Gold Color</label>
             <div style="display:flex;gap:8px;align-items:center">
               <input type="color" value="${esc(activePrimary)}" onchange="dset('primary_color',this.value,true)" style="width:40px;height:38px;padding:2px;border-radius:6px;cursor:pointer">
               <input class="input" value="${esc(activePrimary)}" oninput="dset('primary_color',this.value,true)" style="flex:1">
             </div>
+            <div class="hint" style="font-size:10.5px;color:#64748b;margin-top:3px">Buttons, active icons & badges</div>
           </div>
-          <div class="field"><label>Secondary Accent Tone</label>
+          <div class="field"><label>2. Secondary Accent Tone</label>
             <div style="display:flex;gap:8px;align-items:center">
               <input type="color" value="${esc(activeSecondary)}" onchange="dset('secondary_color',this.value,true)" style="width:40px;height:38px;padding:2px;border-radius:6px;cursor:pointer">
               <input class="input" value="${esc(activeSecondary)}" oninput="dset('secondary_color',this.value,true)" style="flex:1">
             </div>
+            <div class="hint" style="font-size:10.5px;color:#64748b;margin-top:3px">Banners, gradients & subtitles</div>
+          </div>
+          <div class="field"><label>3. Deep Accent / Card Tone</label>
+            <div style="display:flex;gap:8px;align-items:center">
+              <input type="color" value="${esc(activeAccent)}" onchange="dset('accent_color',this.value,true)" style="width:40px;height:38px;padding:2px;border-radius:6px;cursor:pointer">
+              <input class="input" value="${esc(activeAccent)}" oninput="dset('accent_color',this.value,true)" style="flex:1">
+            </div>
+            <div class="hint" style="font-size:10.5px;color:#64748b;margin-top:3px">Live rate cards, SIP & headers</div>
           </div>
         </div>
       </div>

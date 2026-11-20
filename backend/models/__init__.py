@@ -35,6 +35,7 @@ class Jeweller(Base):
     logo_url = Column(String(500), default="")
     primary_color = Column(String(7), default="#D4AF37")
     secondary_color = Column(String(7), default="#1A1A2E")
+    accent_color = Column(String(7), default="#111827")
     domain = Column(String(200), default="")
     admin_domain = Column(String(200), default="")
     gold_buy_markup_pct = Column(Float, default=0.0)

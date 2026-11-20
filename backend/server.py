@@ -579,7 +579,7 @@ def jeweller_dict(j: Jeweller):
         "phone": j.phone, "email": j.email, "address": j.address,
         "city": j.city, "state": j.state, "pincode": j.pincode,
         "logo_url": j.logo_url, "primary_color": j.primary_color,
-        "secondary_color": j.secondary_color, "domain": j.domain,
+        "secondary_color": j.secondary_color, "accent_color": getattr(j, "accent_color", "") or "", "domain": j.domain,
         "admin_domain": j.admin_domain or "",
         "gold_buy_markup_pct": j.gold_buy_markup_pct, "gold_sell_discount_pct": j.gold_sell_discount_pct,
         "silver_buy_markup_pct": j.silver_buy_markup_pct, "silver_sell_discount_pct": j.silver_sell_discount_pct,
@@ -714,6 +714,7 @@ class JewellerOnboard(BaseModel):
     logo_url: str = ""
     primary_color: str = "#D4AF37"
     secondary_color: str = "#1A1A2E"
+    accent_color: str = "#111827"
     domain: str = ""
     admin_domain: str = ""
     min_redemption_grams: float = 1.0
@@ -4258,6 +4259,7 @@ def app_studio_row(j, base):
     return {"id": j.id, "business_name": j.business_name, "city": j.city, "status": j.status, "phone": j.phone, "email": j.email,
             "app_name": j.app_name or "", "bundle_id": j.bundle_id or "", "theme_preset": j.theme_preset or "",
             "primary_color": j.primary_color or "", "secondary_color": j.secondary_color or "",
+            "accent_color": getattr(j, "accent_color", "") or "",
             "logo_url": j.logo_url or "", "splash_url": j.splash_url or "", "app_version": j.app_version or "1.0.0",
             "app_status": j.app_status or "details_pending", "support_email": j.support_email or "",
             "store_short": j.store_short or "", "store_long": j.store_long or "", "store_keywords": j.store_keywords or "",
@@ -4298,6 +4300,7 @@ class AppStudioUpdate(BaseModel):
     theme_preset: str
     primary_color: str = ""
     secondary_color: str = ""
+    accent_color: str = ""
     logo_url: str = ""
     splash_url: str = ""
     app_version: str = Field(default="1.0.0", pattern=r"^\d+\.\d+\.\d+$")
@@ -4327,6 +4330,8 @@ async def ms_update(jid: str, body: AppStudioUpdate, request: Request, admin: Ma
         j.primary_color = body.primary_color.strip()
     if body.secondary_color:
         j.secondary_color = body.secondary_color.strip()
+    if body.accent_color:
+        j.accent_color = body.accent_color.strip()
     j.logo_url, j.splash_url, j.app_version = body.logo_url, body.splash_url, body.app_version
     j.support_email, j.store_short, j.store_long, j.store_keywords = body.support_email.strip(), body.store_short.strip(), body.store_long.strip(), body.store_keywords.strip()
     if body.domain is not None:

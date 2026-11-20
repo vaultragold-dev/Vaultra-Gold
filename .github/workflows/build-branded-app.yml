@@ -103,6 +103,10 @@ jobs:
               if r.status_code == 200:
                   data = r.json()
                   j.business_name = data.get("business_name") or j.business_name
+                  thm = data.get("theme") or {}
+                  j.primary_color = thm.get("primaryColor") or ""
+                  j.secondary_color = thm.get("secondaryColor") or ""
+                  j.accent_color = thm.get("accentColor") or ""
                   assets = data.get("assets") or {}
                   if assets.get("logoUrl"):
                       j.logo_url = assets["logoUrl"]

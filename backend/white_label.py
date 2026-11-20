@@ -93,6 +93,8 @@ def tenant_config(j, api_base, logo_bytes=None, splash_bytes=None):
         p["primaryColor"] = j.primary_color
     if getattr(j, "secondary_color", None):
         p["secondaryColor"] = j.secondary_color
+    if getattr(j, "accent_color", None):
+        p["accentColor"] = j.accent_color
     short, long, kw = default_store_text(j)
     bundle = j.bundle_id or default_bundle_id(j.business_name)
     name = j.app_name or f"{j.business_name} Gold"
@@ -902,7 +904,13 @@ def delete_account_html(j=None):
 
 def build_app_kit(j, api_base, rates, logo_bytes=None, splash_bytes=None):
     cfg = tenant_config(j, api_base, logo_bytes, splash_bytes)
-    p = preset(j.theme_preset)
+    p = dict(preset(j.theme_preset))
+    if getattr(j, "primary_color", None):
+        p["primaryColor"] = j.primary_color
+    if getattr(j, "secondary_color", None):
+        p["secondaryColor"] = j.secondary_color
+    if getattr(j, "accent_color", None):
+        p["accentColor"] = j.accent_color
     name = cfg["appName"]
     logo = Image.open(io.BytesIO(logo_bytes)) if logo_bytes else None
     splash_img = Image.open(io.BytesIO(splash_bytes)) if splash_bytes else None
