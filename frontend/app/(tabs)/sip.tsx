@@ -12,7 +12,7 @@ import { useToast } from "@/src/components/Toast";
 import { Button, Card, Sheet, StatusBadge } from "@/src/components/ui";
 import { grams, inr, shortDate } from "@/src/format";
 import { useApp } from "@/src/store/AppContext";
-import { colors, fonts, radius } from "@/src/theme";
+import { colors, fonts, radius, themed } from "@/src/theme";
 
 const AMOUNTS = [500, 1000, 2500, 5000, 10000];
 const FREQS = ["daily", "weekly", "monthly"] as const;
@@ -195,7 +195,7 @@ export default function SipScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themed(() => ({
   root: { flex: 1, backgroundColor: "transparent" },
   label: { fontFamily: fonts.semibold, fontSize: 12, color: colors.muted, textTransform: "uppercase", letterSpacing: 0.3 },
   big: { fontFamily: fonts.black, fontSize: 34, letterSpacing: -1.2, color: colors.onSurface, marginTop: 4 },
@@ -220,4 +220,4 @@ const styles = StyleSheet.create({
   mandateTitle: { fontFamily: fonts.bold, fontSize: 13, color: colors.onBrandTertiary },
   sipActions: { flexDirection: "row", gap: 8, marginTop: 12, alignItems: "center" },
   trash: { width: 40, height: 40, borderRadius: radius.md, borderWidth: 1, borderColor: colors.errorTint, alignItems: "center", justifyContent: "center" },
-});
+}));

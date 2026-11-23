@@ -15,7 +15,7 @@ import { TxnRow } from "@/src/components/TxnRow";
 import { Button, Chip, ChipRow, Row, Sheet, StatusBadge } from "@/src/components/ui";
 import { dateTime, grams, inr, TENANT_NAME, TXN_LABEL } from "@/src/format";
 import { useApp } from "@/src/store/AppContext";
-import { cardShadow, colors, fonts, radius } from "@/src/theme";
+import { cardShadow, colors, fonts, radius, themed } from "@/src/theme";
 
 const FILTERS = [
   { id: "all", label: "All" },
@@ -257,7 +257,7 @@ function InvoiceSheet({ t, onClose }: { t: any; onClose: () => void }) {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themed(() => ({
   root: { flex: 1, backgroundColor: "transparent" },
   center: { flex: 1, alignItems: "center", justifyContent: "center", padding: 24, gap: 12 },
   emptyIcon: { width: 72, height: 72, borderRadius: 36, backgroundColor: colors.brandTertiary, alignItems: "center", justifyContent: "center" },
@@ -295,4 +295,4 @@ const styles = StyleSheet.create({
   invHead: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 12, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: colors.divider },
   invDate: { fontFamily: fonts.regular, fontSize: 13, color: colors.muted, marginTop: 2 },
   invNo: { fontFamily: fonts.bold, fontSize: 16, color: colors.onSurface },
-});
+}));

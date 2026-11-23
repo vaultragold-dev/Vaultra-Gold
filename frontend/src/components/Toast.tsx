@@ -5,7 +5,7 @@ import { Platform, StyleSheet, Text, View } from "react-native";
 import Animated, { FadeInUp, FadeOutUp } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { colors, fonts, radius } from "@/src/theme";
+import { colors, fonts, radius, themed } from "@/src/theme";
 
 type Kind = "success" | "error" | "info";
 type ToastItem = { id: number; kind: Kind; title: string; message?: string };
@@ -52,7 +52,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
 
 export const useToast = () => useContext(ToastCtx);
 
-const styles = StyleSheet.create({
+const styles = themed(() => ({
   wrap: { position: "absolute", left: 16, right: 16, gap: 8, alignItems: "stretch", zIndex: 9999, elevation: 30 },
   toast: {
     flexDirection: "row",
@@ -73,4 +73,4 @@ const styles = StyleSheet.create({
   },
   title: { color: colors.onSurfaceInverse, fontFamily: fonts.semibold, fontSize: 14 },
   msg: { color: colors.mutedLight, fontFamily: fonts.regular, fontSize: 12, marginTop: 2 },
-});
+}));

@@ -5,7 +5,8 @@ import React from "react";
 import { Platform, StyleSheet, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { colors, fonts } from "@/src/theme";
+import { t } from "@/src/i18n";
+import { colors, fonts, themed } from "@/src/theme";
 
 /** Floating iOS-style liquid-glass tab bar. */
 function GlassBar() {
@@ -54,15 +55,15 @@ export default function TabLayout() {
         },
       }}
     >
-      <Tabs.Screen name="index" options={{ title: "Home", tabBarIcon: ({ color }) => <Home size={22} color={color} /> }} />
-      <Tabs.Screen name="vault" options={{ title: "Vault", tabBarIcon: ({ color }) => <Vault size={22} color={color} /> }} />
-      <Tabs.Screen name="jewellery" options={{ title: "Jewellery", tabBarIcon: ({ color }) => <Gem size={22} color={color} /> }} />
-      <Tabs.Screen name="sip" options={{ title: "SIP", tabBarIcon: ({ color }) => <RefreshCw size={22} color={color} /> }} />
+      <Tabs.Screen name="index" options={{ title: t("home"), tabBarIcon: ({ color }) => <Home size={22} color={color} /> }} />
+      <Tabs.Screen name="vault" options={{ title: t("vault"), tabBarIcon: ({ color }) => <Vault size={22} color={color} /> }} />
+      <Tabs.Screen name="jewellery" options={{ title: t("jewellery"), tabBarIcon: ({ color }) => <Gem size={22} color={color} /> }} />
+      <Tabs.Screen name="sip" options={{ title: t("sip"), tabBarIcon: ({ color }) => <RefreshCw size={22} color={color} /> }} />
     </Tabs>
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themed(() => ({
   barClip: { borderRadius: 32, overflow: "hidden" },
   shine: { position: "absolute", left: 0, right: 0, top: 0, height: "50%", backgroundColor: colors.glassHighlight },
-});
+}));

@@ -177,12 +177,12 @@ def price_payload(jid: Optional[str] = None):
     if not ctl["rates"]:  # rates hidden by Master for this shop / all shops: never send numbers
         return {"purity": "24K (99.9%)", "buy": 0, "sell": 0, "change": 0, "change_pct": 0, "direction": "up",
                 "gst_rate": GST_RATE, "updated_at": now_iso(), "source": "hidden", "live": False, "offline": False,
-                "has_live": False, "rates_hidden": True, "booking_enabled": ctl["booking"], "min_investment": ctl["min_investment"],
+                "has_live": False, "rates_hidden": True, "booking_enabled": ctl["booking"], "min_investment": ctl["min_investment"], "max_investment": ctl["max_investment"], "daily_limit": ctl["daily_limit"],
                 "base_rate": 0, "karats": {"24K": 0, "22K": 0, "18K": 0},
                 "silver": {"buy": 0, "sell": 0, "change": 0, "change_pct": 0, "direction": "up", "base_rate": 0}}
     return {
         "purity": "24K (99.9%)", "buy": buy, "sell": sell,
-        "rates_hidden": False, "booking_enabled": ctl["booking"], "min_investment": ctl["min_investment"],
+        "rates_hidden": False, "booking_enabled": ctl["booking"], "min_investment": ctl["min_investment"], "max_investment": ctl["max_investment"], "daily_limit": ctl["daily_limit"],
         "change": change, "change_pct": r2(change / PRICE["open"] * 100) if PRICE["open"] else 0,
         "direction": "up" if PRICE["base"] >= PRICE["open"] else "down",
         "gst_rate": GST_RATE, "updated_at": PRICE["updated_at"] or now_iso(),
@@ -207,7 +207,7 @@ def require_live_rates():
 
 
 # ─── Platform controls (Master → Security & Controls) ─────────────────────────
-CONTROLS = {"global": {"rates": True, "booking": True, "min_investment": 500.0}, "shops": {}}
+CONTROLS = {"global": {"rates": True, "booking": True, "min_investment": 500.0, "max_investment": 200000.0, "daily_limit": 200000.0}, "shops": {}}
 
 
 def controls_for(jid):
@@ -215,7 +215,9 @@ def controls_for(jid):
     s = CONTROLS["shops"].get(jid or "", {})
     return {"rates": bool(g.get("rates", True) and s.get("rates", True)),
             "booking": bool(g.get("booking", True) and s.get("booking", True)),
-            "min_investment": float(g.get("min_investment", 500.0))}
+            "min_investment": float(g.get("min_investment", 500.0)),
+            "max_investment": float(g.get("max_investment", 200000.0) or 200000.0),
+            "daily_limit": float(g.get("daily_limit", 200000.0) or 200000.0)}
 
 
 def shown_gold_rate(jid):
@@ -229,6 +231,20 @@ def require_booking(jid, amount=None):
         raise HTTPException(403, "Booking is currently turned off for this store. Please try again later.")
     if amount is not None and amount < ctl["min_investment"]:
         raise HTTPException(400, f"Minimum investment is ₹{ctl['min_investment']:,.0f}")
+    if amount is not None and amount > ctl["max_investment"]:
+        raise HTTPException(400, f"Maximum purchase per order is ₹{ctl['max_investment']:,.0f}")
+
+
+async def require_daily_limit(db, customer, amount):
+    """Total completed purchases today + this order must stay within the platform daily limit."""
+    ctl = controls_for(customer.jeweller_id)
+    start = now_utc().replace(hour=0, minute=0, second=0, microsecond=0)
+    spent = (await db.execute(select(func.coalesce(func.sum(Transaction.total), 0)).where(
+        Transaction.customer_id == customer.id, Transaction.status == "completed",
+        Transaction.type.in_(["buy", "sip", "buy_silver"]), Transaction.created_at >= start))).scalar() or 0
+    if float(spent) + float(amount) > ctl["daily_limit"]:
+        left = max(0.0, ctl["daily_limit"] - float(spent))
+        raise HTTPException(400, f"Daily purchase limit is ₹{ctl['daily_limit']:,.0f}. You can buy up to ₹{left:,.0f} more today.")
 
 
 def _mt5_url():
@@ -1538,6 +1554,7 @@ async def buy(body: BuyRequest, request: Request, customer: Customer = Depends(g
     else:
         total = r2(body.value)
     require_booking(customer.jeweller_id, total)
+    await require_daily_limit(db, customer, total)
     gst = r2(total * GST_RATE)
     amount = r2(total - gst)
     grams = r4(amount / rate)
@@ -2399,6 +2416,7 @@ async def referral_info(customer: Customer = Depends(get_current_customer), db: 
     referrals = [{"name": f"{r[0]} {r[1]}".strip(), "joined": r[2].isoformat() if r[2] else ""} for r in refs.all()]
     return {
         "referral_code": customer.referral_code,
+        "referred": bool(customer.referred_by),
         "referral_balance": r2(customer.referral_balance or 0),
         "referral_count": count.scalar(),
         "referrals": referrals,
@@ -3252,10 +3270,11 @@ async def jp_holding_detail(customer_id: str, jeweller: Jeweller = Depends(get_c
 
 
 class CommissionUpdate(BaseModel):
-    gold_per_g: float = Field(ge=-1000, le=1000)
-    silver_per_g: float = Field(ge=-100, le=100)
-    gold22_per_g: Optional[float] = Field(default=None, ge=-1000, le=1000)
-    gold18_per_g: Optional[float] = Field(default=None, ge=-1000, le=1000)
+    # Margins are added on top of the live rate and can never be negative (no selling below cost)
+    gold_per_g: float = Field(ge=0, le=1000)
+    silver_per_g: float = Field(ge=0, le=100)
+    gold22_per_g: Optional[float] = Field(default=None, ge=0, le=1000)
+    gold18_per_g: Optional[float] = Field(default=None, ge=0, le=1000)
 
 
 def apply_commission(j, body: "CommissionUpdate"):
@@ -3829,6 +3848,8 @@ class ControlsUpdate(BaseModel):
     rates: bool = True
     booking: bool = True
     min_investment: float = Field(default=500, ge=10, le=100000)
+    max_investment: float = Field(default=200000, ge=100, le=10000000)
+    daily_limit: float = Field(default=200000, ge=100, le=50000000)
     shops: dict = {}
 
 
@@ -3858,7 +3879,12 @@ async def mc_get(admin: MasterAdmin = Depends(get_master_admin), db: AsyncSessio
 
 @api.put("/master/v3/controls")
 async def mc_put(body: ControlsUpdate, admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
-    CONTROLS["global"] = {"rates": body.rates, "booking": body.booking, "min_investment": r2(body.min_investment)}
+    if body.max_investment < body.min_investment:
+        raise HTTPException(400, "Maximum purchase must be more than the minimum investment")
+    if body.daily_limit < body.max_investment:
+        raise HTTPException(400, "Daily limit must be at least the maximum purchase per order")
+    CONTROLS["global"] = {"rates": body.rates, "booking": body.booking, "min_investment": r2(body.min_investment),
+                          "max_investment": r2(body.max_investment), "daily_limit": r2(body.daily_limit)}
     CONTROLS["shops"] = {k: {"rates": bool(v.get("rates", True)), "booking": bool(v.get("booking", True))} for k, v in body.shops.items()}
     await _setting("platform_controls", json.dumps(CONTROLS))
     await audit(db, "master", admin, "controls.update", "platform", CONTROLS, None)
@@ -4259,7 +4285,9 @@ def app_studio_row(j, base):
     return {"id": j.id, "business_name": j.business_name, "city": j.city, "status": j.status, "phone": j.phone, "email": j.email,
             "app_name": j.app_name or "", "bundle_id": j.bundle_id or "", "theme_preset": j.theme_preset or "",
             "primary_color": j.primary_color or "", "secondary_color": j.secondary_color or "",
-            "accent_color": getattr(j, "accent_color", "") or "",
+            "accent_color": getattr(j, "accent_color", "") or "", "background_color": getattr(j, "background_color", "") or "",
+            "text_color": getattr(j, "text_color", "") or "",
+            "address": j.address or "", "store_lat": j.store_lat, "store_lng": j.store_lng, "store_hours": j.store_hours or "",
             "logo_url": j.logo_url or "", "splash_url": j.splash_url or "", "app_version": j.app_version or "1.0.0",
             "app_status": j.app_status or "details_pending", "support_email": j.support_email or "",
             "store_short": j.store_short or "", "store_long": j.store_long or "", "store_keywords": j.store_keywords or "",
@@ -4301,6 +4329,11 @@ class AppStudioUpdate(BaseModel):
     primary_color: str = ""
     secondary_color: str = ""
     accent_color: str = ""
+    background_color: str = ""
+    text_color: str = ""
+    store_lat: Optional[float] = None
+    store_lng: Optional[float] = None
+    store_hours: str = Field(default="", max_length=120)
     logo_url: str = ""
     splash_url: str = ""
     app_version: str = Field(default="1.0.0", pattern=r"^\d+\.\d+\.\d+$")
@@ -4332,6 +4365,12 @@ async def ms_update(jid: str, body: AppStudioUpdate, request: Request, admin: Ma
         j.secondary_color = body.secondary_color.strip()
     if body.accent_color:
         j.accent_color = body.accent_color.strip()
+    if body.background_color:
+        j.background_color = body.background_color.strip()
+    if body.text_color:
+        j.text_color = body.text_color.strip()
+    j.store_lat, j.store_lng = body.store_lat, body.store_lng
+    j.store_hours = (body.store_hours or "").strip()
     j.logo_url, j.splash_url, j.app_version = body.logo_url, body.splash_url, body.app_version
     j.support_email, j.store_short, j.store_long, j.store_keywords = body.support_email.strip(), body.store_short.strip(), body.store_long.strip(), body.store_keywords.strip()
     if body.domain is not None:
@@ -4640,7 +4679,7 @@ async def tenant_public_config(jid: str, request: Request, db: AsyncSession = De
     logo_bytes = await _file_bytes(j.logo_url, db) if j.logo_url else None
     splash_bytes = await _file_bytes(j.splash_url, db) if j.splash_url else None
     cfg = wl.tenant_config(j, _public_base(request), logo_bytes, splash_bytes)
-    return {k: cfg[k] for k in ("tenantId", "appName", "theme", "homeLayout", "assets", "support")} | {"business_name": j.business_name}
+    return {k: cfg[k] for k in ("tenantId", "appName", "theme", "homeLayout", "assets", "support", "storeInfo")} | {"business_name": j.business_name}
 
 
 @app.get("/privacy", response_class=HTMLResponse)

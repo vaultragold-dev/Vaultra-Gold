@@ -2,7 +2,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import React from "react";
 import { Platform, StyleSheet, View } from "react-native";
 
-import { colors } from "@/src/theme";
+import { colors, themed } from "@/src/theme";
 
 /** Soft pastel backdrop with blurred orbs that the frosted-glass cards sit on. */
 export function GlassBackdrop() {
@@ -16,10 +16,10 @@ export function GlassBackdrop() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themed(() => ({
   orb: {
     position: "absolute",
     borderRadius: 999,
     ...(Platform.OS === "web" ? ({ filter: "blur(40px)" } as any) : { opacity: 0.8 }),
   },
-});
+}));

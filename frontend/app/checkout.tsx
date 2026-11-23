@@ -11,7 +11,7 @@ import { api } from "@/src/api";
 import { useToast } from "@/src/components/Toast";
 import { Button } from "@/src/components/ui";
 import { useApp } from "@/src/store/AppContext";
-import { colors, fonts } from "@/src/theme";
+import { colors, fonts, themed } from "@/src/theme";
 
 /** Razorpay hosted checkout (activates when RAZORPAY keys are configured on the backend). */
 export default function Checkout() {
@@ -89,11 +89,11 @@ export default function Checkout() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themed(() => ({
   root: { flex: 1, backgroundColor: "transparent" },
   bar: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 16, height: 52, borderBottomWidth: 1, borderBottomColor: colors.divider },
   title: { fontFamily: fonts.bold, fontSize: 16, color: colors.onSurface },
   close: { width: 44, height: 44, alignItems: "flex-end", justifyContent: "center" },
   center: { flex: 1, alignItems: "center", justifyContent: "center", gap: 16, padding: 24 },
   sub: { fontFamily: fonts.regular, fontSize: 14, color: colors.muted, textAlign: "center" },
-});
+}));

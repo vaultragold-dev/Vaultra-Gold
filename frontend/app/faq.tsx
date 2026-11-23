@@ -8,7 +8,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { GlassBackdrop } from "@/src/components/GlassBackdrop";
 import { api } from "@/src/api";
 import { useApp } from "@/src/store/AppContext";
-import { colors, fonts, radius } from "@/src/theme";
+import { colors, fonts, radius, themed } from "@/src/theme";
 
 const DEFAULT_FAQS = [
   ["What is digital gold?", "A digital way to buy 24K 99.9% pure LBMA-certified gold starting at ₹10. Every gram you buy is backed by physical gold stored in insured, audited vaults."],
@@ -61,7 +61,7 @@ export default function Faq() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themed(() => ({
   root: { flex: 1, backgroundColor: "transparent" },
   header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 16, paddingBottom: 8, backgroundColor: "transparent", borderBottomWidth: 1, borderBottomColor: colors.divider },
   back: { width: 44, height: 44, justifyContent: "center" },
@@ -71,4 +71,4 @@ const styles = StyleSheet.create({
   qRow: { flexDirection: "row", alignItems: "center", gap: 12 },
   q: { flex: 1, fontFamily: fonts.semibold, fontSize: 15, color: colors.onSurface },
   a: { fontFamily: fonts.regular, fontSize: 14, lineHeight: 21, color: colors.onSurfaceTertiary, marginTop: 10 },
-});
+}));

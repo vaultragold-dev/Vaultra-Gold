@@ -9,7 +9,7 @@ import { useToast } from "@/src/components/Toast";
 import { Button, Sheet } from "@/src/components/ui";
 import { grams, inr, shortDate } from "@/src/format";
 import { useApp } from "@/src/store/AppContext";
-import { cardShadow, colors, fonts, radius } from "@/src/theme";
+import { cardShadow, colors, fonts, radius, themed } from "@/src/theme";
 
 export type Goal = { id: string; name: string; occasion: string; target_grams: number; months: number; deadline: string; created_at: string; metal?: "gold" | "silver" };
 
@@ -308,7 +308,7 @@ export function HomeGoalCard() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themed(() => ({
   section: { marginHorizontal: 16, marginTop: 24, gap: 8 },
   head: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 4 },
   title: { fontFamily: fonts.black, fontSize: 20, letterSpacing: -0.6, color: colors.onSurface },
@@ -343,4 +343,4 @@ const styles = StyleSheet.create({
   plan: { flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: colors.brandTertiary, borderRadius: radius.md, padding: 12, marginVertical: 16 },
   planText: { flex: 1, fontFamily: fonts.regular, fontSize: 13, color: colors.onBrandTertiary },
   homeCard: { marginHorizontal: 16, marginTop: 12, flexDirection: "row", alignItems: "center", gap: 12, padding: 14, borderRadius: radius.md, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border },
-});
+}));

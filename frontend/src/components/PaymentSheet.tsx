@@ -6,7 +6,7 @@ import Animated, { ZoomIn } from "react-native-reanimated";
 import { api } from "@/src/api";
 import { Button, Row, Sheet } from "@/src/components/ui";
 import { grams, inr } from "@/src/format";
-import { colors, fonts, radius } from "@/src/theme";
+import { colors, fonts, radius, themed } from "@/src/theme";
 
 export type Order = { id: string; grams: number; rate: number; amount: number; gst: number; total: number; tenant: string };
 
@@ -113,7 +113,7 @@ export function PaymentSheet({ order, onClose, onPaid }: { order: Order | null; 
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themed(() => ({
   gateway: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 12 },
   gatewayText: { fontFamily: fonts.semibold, fontSize: 13, color: colors.success },
   amountBox: { backgroundColor: colors.surfaceSecondary, borderRadius: radius.md, padding: 16, marginBottom: 16, borderWidth: 1, borderColor: colors.border },
@@ -134,4 +134,4 @@ const styles = StyleSheet.create({
   procSub: { fontFamily: fonts.regular, fontSize: 13, color: colors.muted, marginTop: 4, textAlign: "center" },
   successIcon: { width: 80, height: 80, borderRadius: 40, backgroundColor: colors.success, alignItems: "center", justifyContent: "center" },
   successGrams: { fontFamily: fonts.black, fontSize: 34, color: colors.brandSecondary, letterSpacing: -1, marginTop: 4 },
-});
+}));

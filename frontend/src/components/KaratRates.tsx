@@ -2,7 +2,7 @@ import React from "react";
 import { StyleSheet, Text, View } from "react-native";
 
 import { useApp } from "@/src/store/AppContext";
-import { colors, fonts } from "@/src/theme";
+import { colors, fonts, themed } from "@/src/theme";
 
 const ROWS: { key: "24K" | "22K" | "18K"; label: string; purity: string }[] = [
   { key: "24K", label: "Gold 24K", purity: "99.9% · digital gold" },
@@ -43,7 +43,7 @@ export function KaratRates() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themed(() => ({
   card: { marginHorizontal: 16, marginTop: 16, backgroundColor: colors.glassCard, borderRadius: 18, borderWidth: 1, borderColor: colors.goldHairline, paddingHorizontal: 16, paddingTop: 14 },
   head: { flexDirection: "row", alignItems: "baseline", justifyContent: "space-between", marginBottom: 4 },
   title: { fontFamily: fonts.bold, fontSize: 16, color: colors.onSurface, letterSpacing: -0.2 },
@@ -55,4 +55,4 @@ const styles = StyleSheet.create({
   purity: { fontFamily: fonts.regular, fontSize: 11, color: colors.muted, marginTop: 1 },
   value: { fontFamily: fonts.bold, fontSize: 15, color: colors.onSurface },
   per: { fontFamily: fonts.regular, fontSize: 11, color: colors.muted },
-});
+}));

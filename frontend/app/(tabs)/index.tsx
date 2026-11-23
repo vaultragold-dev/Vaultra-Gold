@@ -1,7 +1,7 @@
 import { useRouter } from "expo-router";
 import { ArrowRight, CircleDot, Crown, Diamond, Disc3, Gem, HelpCircle, Link2, Users, Watch } from "lucide-react-native";
-import React, { useEffect, useState } from "react";
-import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
+import React, { useEffect, useRef, useState } from "react";
+import { Pressable, RefreshControl, ScrollView, type ScrollViewInstance, StyleSheet, Text, View } from "react-native";
 import Animated, { FadeInDown } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -16,9 +16,10 @@ import { KaratRates } from "@/src/components/KaratRates";
 import { PriceAlertBanner, PriceAlertCard } from "@/src/components/PriceAlert";
 import { PriceCards } from "@/src/components/PriceCards";
 import { Product, ProductCard, RedeemSheet } from "@/src/components/Product";
+import { t } from "@/src/i18n";
 import { useApp } from "@/src/store/AppContext";
 import { homeLayout, type HomeSection } from "@/src/tenantConfig";
-import { colors, fonts } from "@/src/theme";
+import { colors, fonts, themed } from "@/src/theme";
 
 const CAT_ICONS: Record<string, any> = { CircleDot, Disc3, Gem, Link2, Crown, Diamond, Watch };
 
@@ -35,6 +36,13 @@ export default function Home() {
   const [refreshing, setRefreshing] = useState(false);
   const [target, setTarget] = useState<any>(null);
   const bottomChrome = Math.max(insets.bottom, 12) + 72; // room for the floating glass tab bar
+  const scrollRef = useRef<ScrollViewInstance>(null);
+  const buyY = useRef(0);
+  const scrollToBuy = () => scrollRef.current?.scrollTo({ y: Math.max(0, buyY.current - 12), animated: true });
+
+  // Gold & silver rates first, then offers (banners), then trending jewellery; the rest follows the theme's order.
+  const TOP: HomeSection[] = ["prices", "banners", "trending"];
+  const order: HomeSection[] = [...TOP, ...homeLayout.filter((k) => !TOP.includes(k))];
 
   useEffect(() => {
     api<Product[]>(`/products?jeweller_id=${tenant}`, { auth: "none" }).then(setProducts).catch(() => {});
@@ -57,9 +65,9 @@ export default function Home() {
       <Pressable style={styles.sipPromo} onPress={() => router.push("/sip")} testID="home-sip-promo">
         <View style={styles.sipGlow} />
         <View style={{ flex: 1, zIndex: 1 }}>
-          <Text style={styles.sipEyebrow}>AUTO SIP</Text>
-          <Text style={styles.sipTitle}>Save in gold every month from ₹500</Text>
-          <Text style={styles.sipSub}>UPI AutoPay · Pause or cancel anytime</Text>
+          <Text style={styles.sipEyebrow}>{t("sip_eyebrow")}</Text>
+          <Text style={styles.sipTitle}>{t("sip_title")}</Text>
+          <Text style={styles.sipSub}>{t("sip_sub")}</Text>
         </View>
         <View style={styles.sipArrow}>
           <ArrowRight size={20} color={colors.onBrandPrimary} />
@@ -70,13 +78,13 @@ export default function Home() {
       <>
         <PriceAlertBanner />
         <Animated.View entering={FadeInDown.delay(50).duration(400)} style={{ marginTop: 8 }}>
-          <BannerCarousel />
+          <BannerCarousel onBuy={scrollToBuy} />
         </Animated.View>
       </>
     ),
     buy: (
       <>
-        <Animated.View entering={FadeInDown.delay(100).duration(400)} style={{ marginTop: 20 }}>
+        <Animated.View entering={FadeInDown.delay(100).duration(400)} style={{ marginTop: 20 }} onLayout={(e) => { buyY.current = e.nativeEvent.layout.y; }}>
           <BuyWidget />
         </Animated.View>
         <PriceAlertCard />
@@ -86,7 +94,7 @@ export default function Home() {
     categories: (
       <>
         <View style={styles.sectionHead}>
-          <Text style={styles.sectionTitle}>Shop by Category</Text>
+          <Text style={styles.sectionTitle}>{t("shop_by_category")}</Text>
         </View>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 16, gap: 16 }}>
           {CATEGORIES.map((c) => (
@@ -109,10 +117,10 @@ export default function Home() {
     ),
     trending: (
       <>
-        <View style={styles.sectionHead}>
-          <Text style={styles.sectionTitle}>Trending Jewellery</Text>
+        <View style={[styles.sectionHead, { marginTop: 20 }]}>
+          <Text style={styles.sectionTitle}>{t("trending_jewellery")}</Text>
           <Pressable onPress={() => router.push("/jewellery")} style={styles.seeAll} testID="see-all-jewellery">
-            <Text style={styles.seeAllText}>See all</Text>
+            <Text style={styles.seeAllText}>{t("see_all")}</Text>
             <ArrowRight size={14} color={colors.brandSecondary} />
           </Pressable>
         </View>
@@ -130,14 +138,14 @@ export default function Home() {
             <Users size={22} color={colors.brandPrimary} />
           </View>
           <View style={{ flex: 1 }}>
-            <Text style={styles.referTitle}>Refer & Earn ₹50</Text>
-            <Text style={styles.referSub}>Invite friends · You both earn ₹50 reward</Text>
+            <Text style={styles.referTitle}>{t("refer_title")}</Text>
+            <Text style={styles.referSub}>{t("refer_sub")}</Text>
           </View>
           <ArrowRight size={18} color={colors.brandPrimary} />
         </Pressable>
         <Pressable style={styles.faqRow} onPress={() => router.push("/faq")} testID="home-faq-link">
           <HelpCircle size={20} color={colors.onSurfaceTertiary} />
-          <Text style={styles.faqText}>Frequently asked questions</Text>
+          <Text style={styles.faqText}>{t("faq")}</Text>
           <ArrowRight size={16} color={colors.muted} />
         </Pressable>
       </>
@@ -149,12 +157,13 @@ export default function Home() {
       <GlassBackdrop />
       <HomeHeader />
       <ScrollView
+        ref={scrollRef}
         contentContainerStyle={{ paddingTop: 16, paddingBottom: bottomChrome + 24 }}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.brandPrimary} />}
         keyboardShouldPersistTaps="handled"
       >
         {/* Section order comes from the white-label theme (tenantConfig.homeLayout) */}
-        {homeLayout.map((k) => (
+        {order.map((k) => (
           <React.Fragment key={k}>{sections[k]}</React.Fragment>
         ))}
       </ScrollView>
@@ -163,7 +172,7 @@ export default function Home() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themed(() => ({
   root: { flex: 1, backgroundColor: "transparent" },
   sectionHead: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 16, marginTop: 32, marginBottom: 14 },
   sectionTitle: { fontFamily: fonts.bold, fontSize: 20, letterSpacing: -0.4, color: colors.onSurface },
@@ -230,4 +239,4 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
   },
   faqText: { flex: 1, fontFamily: fonts.semibold, fontSize: 14, color: colors.onSurface },
-});
+}));

@@ -15,7 +15,7 @@ import { useToast } from "@/src/components/Toast";
 import { Button, Card, Row, StatusBadge } from "@/src/components/ui";
 import { grams, maskPhone, shortDate } from "@/src/format";
 import { useApp } from "@/src/store/AppContext";
-import { colors, fonts, radius, useTheme } from "@/src/theme";
+import { colors, fonts, radius, useTheme, themed } from "@/src/theme";
 
 export default function Profile() {
   const insets = useSafeAreaInsets();
@@ -265,7 +265,7 @@ export default function Profile() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themed(() => ({
   root: { flex: 1, backgroundColor: "transparent" },
   header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 16, paddingBottom: 8, backgroundColor: "transparent", borderBottomWidth: 1, borderBottomColor: colors.divider },
   back: { width: 44, height: 44, justifyContent: "center" },
@@ -289,4 +289,4 @@ const styles = StyleSheet.create({
   links: { backgroundColor: colors.surface, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border },
   link: { flexDirection: "row", alignItems: "center", gap: 12, padding: 16, borderBottomWidth: 1, borderBottomColor: colors.divider, minHeight: 56 },
   linkText: { flex: 1, fontFamily: fonts.semibold, fontSize: 14, color: colors.onSurface },
-});
+}));

@@ -13,13 +13,13 @@ function vPricing() {
     <div class="card rate-card"><div class="coin"></div><div><div class="label"><span class="dot ${p.price.live ? 'live' : ''}"></span> Live gold</div><div class="value num">${rv(p.price, p.price.base_rate)} <small>/g</small></div></div></div>
     <div class="card rate-card"><div class="coin silver"></div><div><div class="label"><span class="dot ${p.price.live ? 'live' : ''}"></span> Live silver</div><div class="value num">${rv(p.price, p.price.silver.base_rate)} <small>/g</small></div></div></div></div>
     <div class="card"><div class="table-wrap"><table><thead><tr><th>Shop</th><th>24K margin / g</th><th>22K margin / g</th><th>18K margin / g</th><th>Silver margin / g</th><th class="r">Customer rates</th><th></th></tr></thead><tbody>
-    ${p.shops.map((s) => { const inp = (id, v, max) => `<div class="prefix" style="width:120px"><span>₹</span><input class="input num" type="number" min="-${max}" max="${max}" step="0.01" id="${id}_${s.id}" value="${v}"></div>`; return `<tr><td><b>${esc(s.shop)}</b><div class="sub">${statusBadge(s.status)}</div></td>
+    ${p.shops.map((s) => { const inp = (id, v, max) => `<div class="prefix" style="width:120px"><span>₹</span><input class="input num" type="number" min="0" max="${max}" step="0.01" id="${id}_${s.id}" value="${Math.max(0, Number(v) || 0)}" oninput="if (Number(this.value) < 0) this.value = 0"></div>`; return `<tr><td><b>${esc(s.shop)}</b><div class="sub">${statusBadge(s.status)}</div></td>
       <td>${inp('pg', s.gold_commission_per_g, 1000)}</td><td>${inp('p22', s.gold22_commission_per_g, 1000)}</td><td>${inp('p18', s.gold18_commission_per_g, 1000)}</td><td>${inp('ps', s.silver_commission_per_g, 100)}</td>
       <td class="r num" style="white-space:nowrap;font-size:12px">24K <b>${rv(p.price, s.karats['24K'])}</b><br>22K <b>${rv(p.price, s.karats['22K'])}</b><br>18K <b>${rv(p.price, s.karats['18K'])}</b><br>Silver <b>${rv(p.price, s.silver_buy)}</b></td>
       <td class="r"><button class="btn sm primary" onclick="savePricing('${s.id}')">Save</button></td></tr>`; }).join('')}</tbody></table></div></div>
-    <div class="note gray section">${icon('rate')}<span>22K = live 24K × 22/24 and 18K = live 24K × 18/24, plus each shop's margin. Margins can be negative (discount). 24K and silver margins apply to digital gold/silver purchases.</span></div>`;
+    <div class="note gray section">${icon('rate')}<span>22K = live 24K × 22/24 and 18K = live 24K × 18/24, plus each shop's margin. Margins cannot be negative — minimum is ₹0 (customers never get a price below the live rate). 24K and silver margins apply to digital gold/silver purchases.</span></div>`;
 }
-async function savePricing(id) { const n = (k) => Number($(`#${k}_${id}`).value || 0); try { await api('/master/v3/pricing/' + id, { method: 'PUT', body: { gold_per_g: n('pg'), silver_per_g: n('ps'), gold22_per_g: n('p22'), gold18_per_g: n('p18') } }); toast('Pricing updated'); loadPricing(); } catch (e) { toast(e.message, true); } }
+async function savePricing(id) { const n = (k) => Number($(`#${k}_${id}`).value || 0); if (['pg', 'ps', 'p22', 'p18'].some((k) => n(k) < 0)) return toast('Margins cannot be negative', true); try { await api('/master/v3/pricing/' + id, { method: 'PUT', body: { gold_per_g: n('pg'), silver_per_g: n('ps'), gold22_per_g: n('p22'), gold18_per_g: n('p18') } }); toast('Pricing updated'); loadPricing(); } catch (e) { toast(e.message, true); } }
 
 /* catalogue */
 S.catJ = '';
@@ -59,7 +59,7 @@ S.mo = { j: '', side: 'all', q: '' }; let moT;
 const loadMOrders = () => safe(async () => { await needJ(); S.morders = await api(`/master/v3/orders?jeweller_id=${S.mo.j}&side=${S.mo.side}&search=${encodeURIComponent(S.mo.q)}`); }, 'orders');
 function vMOrders() {
   const head = ph('Orders', 'Purchases and redemptions across every shop.', `<div class="toolbar">${shopSel(S.mo.j, "S.mo.j=this.value;loadMOrders()")}<div class="seg">${[['all', 'All'], ['buy', 'Buy'], ['redeem', 'Redeem']].map(([k, l]) => `<button class="${S.mo.side === k ? 'on' : ''}" onclick="S.mo.side='${k}';loadMOrders()">${l}</button>`).join('')}</div>
-    <input class="input search" placeholder="Name, phone, invoice" value="${esc(S.mo.q)}" oninput="S.mo.q=this.value;clearTimeout(moT);moT=setTimeout(loadMOrders,300)"></div>`);
+    <input class="input search" placeholder="Name, phone, invoice" value="${esc(S.mo.q)}" id="m-orders-search" oninput="S.mo.q=this.value;clearTimeout(moT);moT=setTimeout(loadMOrders,300)"></div>`);
   const o = S.morders; if (!o) return head + loading;
   return head + `<div class="card"><div class="table-wrap"><table><thead><tr><th>When</th><th>Customer</th><th>Shop</th><th>Type</th><th>Metal</th><th class="r">Qty</th><th class="r">Total</th><th>Status</th><th></th></tr></thead><tbody>
     ${o.length ? o.map((x) => `<tr><td>${dt(x.created_at)}<div class="sub">${esc(x.invoice_no)}</div></td><td><b>${esc(x.customer_name)}</b><div class="sub">${phoneFmt(x.phone)}</div></td><td>${esc(x.shop)}</td>

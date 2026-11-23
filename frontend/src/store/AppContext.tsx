@@ -36,7 +36,7 @@ export type User = {
 
 export type SilverPrice = { buy: number; sell: number; change: number; change_pct: number; direction: "up" | "down" };
 
-export type Price = { buy: number; sell: number; change: number; change_pct: number; direction: "up" | "down"; updated_at: string; live?: boolean; offline?: boolean; has_live?: boolean; rates_hidden?: boolean; booking_enabled?: boolean; min_investment?: number; source?: string; silver?: SilverPrice; karats?: Record<"24K" | "22K" | "18K", number> };
+export type Price = { buy: number; sell: number; change: number; change_pct: number; direction: "up" | "down"; updated_at: string; live?: boolean; offline?: boolean; has_live?: boolean; rates_hidden?: boolean; booking_enabled?: boolean; min_investment?: number; max_investment?: number; daily_limit?: number; source?: string; silver?: SilverPrice; karats?: Record<"24K" | "22K" | "18K", number> };
 
 export type Vault = {
   user: User;

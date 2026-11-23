@@ -6,7 +6,7 @@ import { Button, Sheet } from "@/src/components/ui";
 import { useToast } from "@/src/components/Toast";
 import { grams as fmtGrams } from "@/src/format";
 import { useApp } from "@/src/store/AppContext";
-import { colors, fonts } from "@/src/theme";
+import { colors, fonts, themed } from "@/src/theme";
 
 /** Customer asks the store to redeem vault grams (min 1g); the shop accepts or declines in the Shop Panel. */
 export function RedeemGramsSheet({ visible, onClose }: { visible: boolean; onClose: () => void }) {
@@ -75,7 +75,7 @@ export function RedeemGramsSheet({ visible, onClose }: { visible: boolean; onClo
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themed(() => ({
   sub: { fontFamily: fonts.regular, fontSize: 13, color: colors.muted },
   metalTab: { flex: 1, minHeight: 40, borderRadius: 10, borderWidth: 1, borderColor: colors.border, alignItems: "center", justifyContent: "center", backgroundColor: colors.surfaceSecondary },
   metalTabOn: { backgroundColor: colors.brandPrimary, borderColor: colors.brandPrimary },
@@ -92,4 +92,4 @@ const styles = StyleSheet.create({
   unit: { fontFamily: fonts.medium, fontSize: 14, color: colors.muted },
   err: { fontFamily: fonts.medium, fontSize: 12, color: colors.error, marginTop: 6 },
   note: { fontFamily: fonts.regular, fontSize: 12, color: colors.muted, marginTop: 12, textAlign: "center" },
-});
+}));

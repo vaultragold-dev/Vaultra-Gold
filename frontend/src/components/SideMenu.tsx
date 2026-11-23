@@ -1,6 +1,6 @@
 import { useRouter } from "expo-router";
 import {
-  BadgeCheck, Bell, ChevronRight, Gem, HelpCircle, LogIn, Moon, Phone, Power, RefreshCw, Sun, Users, Vault, X,
+  BadgeCheck, Bell, ChevronRight, Gem, HelpCircle, Languages, LockKeyhole, LogIn, MapPin, Moon, Phone, Power, RefreshCw, Sun, Users, Vault, X,
 } from "lucide-react-native";
 import React from "react";
 import { Linking, Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
@@ -10,8 +10,9 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Glass } from "@/src/components/Glass";
 import { LogoMark } from "@/src/components/Header";
 import { maskPhone, TENANT_NAME } from "@/src/format";
+import { LANGUAGES, t, useLang } from "@/src/i18n";
 import { useApp } from "@/src/store/AppContext";
-import { colors, fonts, radius, useTheme } from "@/src/theme";
+import { colors, fonts, radius, useTheme, themed } from "@/src/theme";
 
 type Item = { key: string; label: string; icon: any; to?: string; auth?: boolean; hint?: string };
 
@@ -21,19 +22,23 @@ export function SideMenu({ visible, onClose }: { visible: boolean; onClose: () =
   const { token, user, vault, tenant, tenantName, tenantPhone, tenantLocked, setTenant, signOut } = useApp();
   const { scheme, toggle: toggleTheme } = useTheme();
   const [pickOpen, setPickOpen] = React.useState(false);
+  const [langOpen, setLangOpen] = React.useState(false);
+  const { lang, setLang } = useLang();
   const stores = Object.entries(TENANT_NAME).filter(([id]) => id !== "all");
   const kyc = vault?.user.kyc_status;
   const name = user?.name || [user?.first_name].filter(Boolean).join(" ") || "Customer";
   const initials = name.split(" ").map((w) => w[0]).join("").slice(0, 2).toUpperCase();
 
   const items: Item[] = [
-    { key: "vault", label: "My Vault & Redeem", icon: Vault, to: "/vault" },
-    { key: "jewellery", label: "Jewellery Catalogue", icon: Gem, to: "/jewellery" },
-    { key: "sip", label: "Auto SIP", icon: RefreshCw, to: "/sip" },
-    { key: "refer", label: "Refer & Earn", icon: Users, to: "/referral" },
-    { key: "notifs", label: "Notifications", icon: Bell, to: "/notifications", auth: true },
-    { key: "kyc", label: "KYC Status", icon: BadgeCheck, to: "/profile", auth: true, hint: kyc === "approved" ? "Verified" : kyc === "pending" ? "In review" : "Pending" },
-    { key: "faq", label: "Help & FAQs", icon: HelpCircle, to: "/faq" },
+    { key: "vault", label: t("my_vault"), icon: Vault, to: "/vault" },
+    { key: "jewellery", label: t("catalogue"), icon: Gem, to: "/jewellery" },
+    { key: "sip", label: t("auto_sip"), icon: RefreshCw, to: "/sip" },
+    { key: "refer", label: t("refer_earn"), icon: Users, to: "/referral" },
+    { key: "store", label: t("store_locator"), icon: MapPin, to: "/store-locator" },
+    { key: "notifs", label: t("notifications"), icon: Bell, to: "/notifications", auth: true },
+    { key: "kyc", label: t("kyc_status"), icon: BadgeCheck, to: "/profile", auth: true, hint: kyc === "approved" ? t("verified") : kyc === "pending" ? t("in_review") : t("pending") },
+    { key: "security", label: t("app_lock"), icon: LockKeyhole, to: "/security", auth: true },
+    { key: "faq", label: t("help"), icon: HelpCircle, to: "/faq" },
   ];
 
   const go = (to: string) => {
@@ -124,24 +129,47 @@ export function SideMenu({ visible, onClose }: { visible: boolean; onClose: () =
                     <Icon size={18} color={colors.brandDeep} strokeWidth={1.9} />
                   </View>
                   <Text style={styles.itemLabel}>{it.label}</Text>
-                  {it.hint ? <Text style={[styles.hint, it.hint === "Verified" && { color: colors.success }]}>{it.hint}</Text> : null}
+                  {it.hint ? <Text style={[styles.hint, it.hint === t("verified") && { color: colors.success }]}>{it.hint}</Text> : null}
                 </Pressable>
               );
             })}
-            <Pressable onPress={toggleTheme} style={styles.item} testID="side-menu-theme-toggle">
+            <Pressable onPress={() => { onClose(); setTimeout(toggleTheme, 250); }} style={styles.item} testID="side-menu-theme-toggle">
               <View style={[styles.itemIcon, { backgroundColor: scheme === "dark" ? "#1E293B" : colors.brandTertiary }]}>
                 {scheme === "dark" ? <Sun size={18} color="#FBBF24" strokeWidth={1.9} /> : <Moon size={18} color={colors.brandDeep} strokeWidth={1.9} />}
               </View>
-              <Text style={styles.itemLabel}>{scheme === "dark" ? "Light Mode" : "Dark Mode"}</Text>
-              <Text style={styles.hint}>{scheme === "dark" ? "ON" : "OFF"}</Text>
+              <Text style={styles.itemLabel}>{t("dark_mode")}</Text>
+              <Text style={[styles.hint, { color: scheme === "dark" ? colors.success : colors.muted }]}>{scheme === "dark" ? t("on") : t("off")}</Text>
             </Pressable>
+
+            <Pressable onPress={() => setLangOpen((v) => !v)} style={styles.item} testID="side-menu-language">
+              <View style={styles.itemIcon}>
+                <Languages size={18} color={colors.brandDeep} strokeWidth={1.9} />
+              </View>
+              <Text style={styles.itemLabel}>{t("language")}</Text>
+              <Text style={[styles.hint, { color: colors.brandDeep }]}>{LANGUAGES.find((l) => l.code === lang)?.native}</Text>
+            </Pressable>
+            {langOpen ? (
+              <View style={styles.langBox}>
+                {LANGUAGES.map((l) => (
+                  <Pressable
+                    key={l.code}
+                    style={[styles.storeOpt, l.code === lang && { backgroundColor: colors.brandTertiary }]}
+                    onPress={() => { setLangOpen(false); onClose(); setTimeout(() => setLang(l.code), 250); }}
+                    testID={`lang-option-${l.code}`}
+                  >
+                    <Text style={[styles.itemLabel, l.code === lang && { fontFamily: fonts.bold }]}>{l.native}</Text>
+                    <Text style={styles.footMuted}>{l.label}</Text>
+                  </Pressable>
+                ))}
+              </View>
+            ) : null}
 
             {token ? (
               <Pressable onPress={() => { onClose(); signOut(); }} style={styles.item} testID="side-menu-logout">
                 <View style={[styles.itemIcon, { backgroundColor: colors.errorTint }]}>
                   <Power size={18} color={colors.error} strokeWidth={1.9} />
                 </View>
-                <Text style={[styles.itemLabel, { color: colors.error }]}>Logout</Text>
+                <Text style={[styles.itemLabel, { color: colors.error }]}>{t("logout")}</Text>
               </Pressable>
             ) : null}
           </ScrollView>
@@ -166,7 +194,7 @@ export function SideMenu({ visible, onClose }: { visible: boolean; onClose: () =
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themed(() => ({
   root: { flex: 1, flexDirection: "row" },
   panel: { width: "82%", maxWidth: 340, backgroundColor: "transparent", borderTopRightRadius: 28, borderBottomRightRadius: 28, overflow: "hidden", borderRightWidth: StyleSheet.hairlineWidth * 1.5, borderColor: colors.glassBorder, zIndex: 0 },
   close: { position: "absolute", right: 12, top: 12, zIndex: 2, width: 44, height: 44, alignItems: "center", justifyContent: "center" },
@@ -185,10 +213,11 @@ const styles = StyleSheet.create({
   storeLabel: { fontFamily: fonts.semibold, fontSize: 10, letterSpacing: 1, color: colors.muted },
   storeName: { fontFamily: fonts.bold, fontSize: 14, color: colors.onSurface, marginTop: 2 },
   storeChange: { fontFamily: fonts.semibold, fontSize: 13, color: colors.brandDeep },
+  langBox: { marginHorizontal: 16, marginBottom: 6, borderRadius: radius.md, borderWidth: 1, borderColor: colors.goldHairline, overflow: "hidden" },
   storeOpt: { flexDirection: "row", alignItems: "center", minHeight: 48, paddingHorizontal: 14, borderTopWidth: 1, borderTopColor: colors.divider },
   footMuted: { fontFamily: fonts.regular, fontSize: 12, color: colors.muted },
   phoneRow: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 4 },
   footPhone: { fontFamily: fonts.semibold, fontSize: 15, color: colors.onSurface, letterSpacing: 0.3 },
   powered: { fontFamily: fonts.regular, fontSize: 11, color: colors.muted },
   poweredBrand: { fontFamily: fonts.bold, color: colors.brandDeep },
-});
+}));

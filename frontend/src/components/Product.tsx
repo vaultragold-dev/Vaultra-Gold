@@ -10,7 +10,7 @@ import { useToast } from "@/src/components/Toast";
 import { Button, Row, Sheet } from "@/src/components/ui";
 import { grams, inr, TENANT_NAME } from "@/src/format";
 import { useApp } from "@/src/store/AppContext";
-import { cardShadow, colors, fonts, radius } from "@/src/theme";
+import { cardShadow, colors, fonts, radius, themed } from "@/src/theme";
 
 export type Product = { id: string; name: string; category: string; grams: number; making_charges: number; image: string; tag: string; image_url?: string; total_price?: number; making_pct?: number };
 
@@ -140,7 +140,7 @@ export function RedeemSheet({ target, onClose }: { target: Target | null; onClos
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themed(() => ({
   card: { backgroundColor: colors.surface, borderRadius: radius.md, borderWidth: 1, borderColor: colors.goldHairline, overflow: "hidden", ...cardShadow },
   imgWrap: { width: "100%", aspectRatio: 1, padding: 8, backgroundColor: colors.brandTertiary, overflow: "hidden" },
   tag: { position: "absolute", top: 8, left: 8, backgroundColor: colors.surfaceInverse, borderRadius: radius.pill, paddingHorizontal: 8, paddingVertical: 3 },
@@ -163,4 +163,4 @@ const styles = StyleSheet.create({
   otpLabel: { fontFamily: fonts.medium, fontSize: 12, color: colors.mutedLight },
   otp: { fontFamily: fonts.black, fontSize: 40, letterSpacing: 8, color: colors.brandPrimary, marginVertical: 8 },
   otpSub: { fontFamily: fonts.regular, fontSize: 12, color: colors.mutedLight },
-});
+}));

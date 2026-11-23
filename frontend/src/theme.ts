@@ -160,49 +160,10 @@ const dark: typeof light = {
 };
 
 export type ThemeColors = typeof light;
-
-// Reactive theme context
-const ThemeCtx = createContext<{ scheme: ColorScheme; colors: ThemeColors; toggle: () => void }>({
-  scheme: "light",
-  colors: light,
-  toggle: () => {},
-});
-
-export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [scheme, setScheme] = useState<ColorScheme>("light");
-
-  useEffect(() => {
-    AsyncStorage.getItem("theme_preference").then((v) => {
-      if (v === "dark" || v === "light") {
-        setScheme(v);
-        Object.assign(colors, v === "dark" ? dark : light);
-      }
-    });
-  }, []);
-
-  const toggle = useCallback(() => {
-    setScheme((prev) => {
-      const next = prev === "light" ? "dark" : "light";
-      AsyncStorage.setItem("theme_preference", next);
-      Object.assign(colors, next === "dark" ? dark : light);
-      return next;
-    });
-  }, []);
-
-  const value = useMemo(() => ({ scheme, colors: scheme === "dark" ? dark : light, toggle }), [scheme, toggle]);
-
-  return React.createElement(ThemeCtx.Provider, { value }, children);
-}
-
-export function useTheme() {
-  return useContext(ThemeCtx);
-}
-
-// Static colors for files that import { colors } directly - uses light as default
-export const colors = light;
+type NamedStyles<T> = { [P in keyof T]: ViewStyle | TextStyle | ImageStyle };
 
 // White-label: a branded build's theme replaces the brand tokens (base app keeps the defaults above)
-const tt = tenantConfig.theme;
+const tt = tenantConfig.theme as (typeof tenantConfig.theme & { textColor?: string }) | null;
 if (tt) {
   const hexA = (h: string, a: number) => {
     const n = parseInt(h.replace("#", ""), 16);
@@ -213,7 +174,92 @@ if (tt) {
     brandDeep: tt.secondaryColor, onBrandTertiary: tt.secondaryColor, goldHairline: hexA(tt.primaryColor, 0.35),
   };
   Object.assign(light, brand, { surfaceInverse: tt.accentColor, brandTertiary: tt.backgroundColor || light.brandTertiary });
+  if (tt.textColor) Object.assign(light, { onSurface: tt.textColor, onSurfaceSecondary: tt.textColor });
   Object.assign(dark, brand);
+}
+
+// Pristine palettes (never mutated) — switching back to light always restores the real light colours.
+const LIGHT: ThemeColors = Object.freeze({ ...light }) as ThemeColors;
+const DARK: ThemeColors = Object.freeze({ ...dark }) as ThemeColors;
+
+/** Live colour tokens used across the app. Updated in place whenever the theme changes. */
+export const colors: ThemeColors = { ...LIGHT };
+let themeVersion = 0;
+let currentScheme: ColorScheme = "light";
+
+function applyScheme(s: ColorScheme) {
+  currentScheme = s;
+  Object.assign(colors, s === "dark" ? DARK : LIGHT);
+  themeVersion++;
+}
+
+export function getScheme() {
+  return currentScheme;
+}
+
+/**
+ * Theme-aware StyleSheet: the factory re-runs (once) after every light/dark switch, so module-level
+ * styles always use the current colours without restarting the app.
+ */
+export function themed<T extends NamedStyles<T> | NamedStyles<any>>(factory: () => T & NamedStyles<any>): T {
+  let cache: T | null = null;
+  let ver = -1;
+  const get = (): T => {
+    if (!cache || ver !== themeVersion) {
+      cache = StyleSheet.create(factory() as any) as unknown as T;
+      ver = themeVersion;
+    }
+    return cache;
+  };
+  return new Proxy({} as T, {
+    get: (_t, k) => (get() as any)[k],
+    has: (_t, k) => k in get(),
+    ownKeys: () => Reflect.ownKeys(get()),
+    getOwnPropertyDescriptor: (_t, k) => ({ value: (get() as any)[k], enumerable: true, configurable: true }),
+  });
+}
+
+type ThemeCtxValue = { scheme: ColorScheme; colors: ThemeColors; toggle: () => void; setMode: (s: ColorScheme) => void; ready: boolean };
+
+// Reactive theme context
+const ThemeCtx = createContext<ThemeCtxValue>({
+  scheme: "light",
+  colors: LIGHT,
+  toggle: () => {},
+  setMode: () => {},
+  ready: true,
+});
+
+export function ThemeProvider({ children }: { children: React.ReactNode }) {
+  const [scheme, setScheme] = useState<ColorScheme>("light");
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    AsyncStorage.getItem("theme_preference")
+      .then((v) => {
+        const s: ColorScheme = v === "dark" ? "dark" : "light";
+        applyScheme(s);
+        setScheme(s);
+      })
+      .catch(() => {})
+      .finally(() => setReady(true));
+  }, []);
+
+  const setMode = useCallback((next: ColorScheme) => {
+    applyScheme(next);
+    AsyncStorage.setItem("theme_preference", next).catch(() => {});
+    setScheme(next);
+  }, []);
+
+  const toggle = useCallback(() => setMode(currentScheme === "dark" ? "light" : "dark"), [setMode]);
+
+  const value = useMemo(() => ({ scheme, colors: scheme === "dark" ? DARK : LIGHT, toggle, setMode, ready }), [scheme, toggle, setMode, ready]);
+
+  return React.createElement(ThemeCtx.Provider, { value }, children);
+}
+
+export function useTheme() {
+  return useContext(ThemeCtx);
 }
 
 export const fonts = {
@@ -234,7 +280,6 @@ export const cardShadow = Platform.select({
 
 export const defaultScheme = "light" satisfies ColorScheme;
 
-type NamedStyles<T> = { [P in keyof T]: ViewStyle | TextStyle | ImageStyle };
 
 export function makeStyles<T extends NamedStyles<T> | NamedStyles<any>>(
   factory: (colors: ThemeColors) => T & NamedStyles<any>,

@@ -18,7 +18,7 @@ import { KeyboardAvoidingView, KeyboardAwareScrollView } from "react-native-keyb
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { X } from "lucide-react-native";
 
-import { cardShadow, colors, fonts, radius } from "@/src/theme";
+import { cardShadow, colors, fonts, radius, themed } from "@/src/theme";
 
 export function T({ style, weight = "regular", ...p }: React.ComponentProps<typeof Text> & { weight?: keyof typeof fonts }) {
   return <Text {...p} style={[{ fontFamily: fonts[weight], color: colors.onSurface }, style]} />;
@@ -35,7 +35,7 @@ type BtnProps = PressableProps & {
 };
 
 export function Button({ title, variant = "gold", loading, icon, style, textStyle, size = "md", disabled, onPress, ...p }: BtnProps) {
-  const v = BTN[variant];
+  const v = BTN()[variant];
   const h = size === "lg" ? 56 : size === "sm" ? 40 : 48;
   return (
     <Pressable
@@ -64,7 +64,7 @@ export function Button({ title, variant = "gold", loading, icon, style, textStyl
   );
 }
 
-const BTN: Record<string, { bg: string; fg: string; border: string; pressed?: string }> = {
+const BTN = (): Record<string, { bg: string; fg: string; border: string; pressed?: string }> => ({
   gold: { bg: colors.brandPrimary, fg: colors.onBrandPrimary, border: colors.brandPrimary, pressed: colors.brandSecondary },
   dark: { bg: colors.surfaceInverse, fg: colors.onSurfaceInverse, border: colors.surfaceInverse },
   outline: { bg: colors.surface, fg: colors.onSurface, border: colors.border, pressed: colors.surfaceTertiary },
@@ -72,7 +72,7 @@ const BTN: Record<string, { bg: string; fg: string; border: string; pressed?: st
   danger: { bg: colors.error, fg: colors.onError, border: colors.error },
   success: { bg: colors.success, fg: colors.onSuccess, border: colors.success },
   adminOutline: { bg: colors.adminSurfaceSecondary, fg: colors.adminOnSurface, border: colors.adminBorder },
-};
+});
 
 export function Card({ style, children, testID }: { style?: StyleProp<ViewStyle>; children: React.ReactNode; testID?: string }) {
   return (
@@ -82,7 +82,7 @@ export function Card({ style, children, testID }: { style?: StyleProp<ViewStyle>
   );
 }
 
-const STATUS: Record<string, { bg: string; fg: string; label: string }> = {
+const STATUS = (): Record<string, { bg: string; fg: string; label: string }> => ({
   completed: { bg: colors.successTint, fg: colors.success, label: "Completed" },
   processing: { bg: colors.warningTint, fg: "#B45309", label: "Processing" },
   pending: { bg: colors.warningTint, fg: "#B45309", label: "Pending" },
@@ -94,10 +94,11 @@ const STATUS: Record<string, { bg: string; fg: string; label: string }> = {
   active: { bg: colors.successTint, fg: colors.success, label: "Active" },
   paused: { bg: colors.surfaceTertiary, fg: colors.muted, label: "Paused" },
   collected: { bg: colors.successTint, fg: colors.success, label: "Collected" },
-};
+});
 
 export function StatusBadge({ status, label, testID, dark }: { status: string; label?: string; testID?: string; dark?: boolean }) {
-  const s = STATUS[status] || STATUS.pending;
+  const st = STATUS();
+  const s = st[status] || st.pending;
   const bg = dark
     ? status === "completed" || status === "approved" || status === "collected" || status === "active"
       ? colors.adminSuccessTint
@@ -224,7 +225,7 @@ export function Row({ label, value, bold, dark, testID }: { label: string; value
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themed(() => ({
   btn: {
     borderRadius: radius.md,
     borderWidth: 1,
@@ -236,12 +237,14 @@ const styles = StyleSheet.create({
   },
   btnText: { fontFamily: fonts.semibold, letterSpacing: -0.2 },
   card: {
-    backgroundColor: colors.glassCard,
+    // Android draws the elevation shadow *through* a translucent card, which showed up as a heavy grey frame.
+    // Use a solid surface + hairline border there; iOS/web keep the frosted glass look.
+    backgroundColor: Platform.OS === "android" ? colors.surface : colors.glassCard,
     borderRadius: 22,
-    borderWidth: 1,
-    borderColor: colors.glassCardBorder,
+    borderWidth: Platform.OS === "android" ? StyleSheet.hairlineWidth : 1,
+    borderColor: Platform.OS === "android" ? colors.border : colors.glassCardBorder,
     padding: 16,
-    ...cardShadow,
+    ...(Platform.OS === "android" ? { elevation: 0 } : cardShadow),
     ...(Platform.OS === "web" ? ({ backdropFilter: "blur(18px) saturate(160%)" } as any) : null),
   },
   badge: { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 8, height: 24, borderRadius: radius.pill, alignSelf: "flex-start" },
@@ -258,4 +261,4 @@ const styles = StyleSheet.create({
   row: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 6 },
   rowLabel: { fontFamily: fonts.regular, fontSize: 14 },
   rowValue: { fontFamily: fonts.semibold, fontSize: 14 },
-});
+}));

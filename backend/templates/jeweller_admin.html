@@ -180,7 +180,7 @@ function vCommission() {
       <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px"><div class="rate-card" style="padding:0"><div class="coin ${metal === 'silver' ? 'silver' : ''}" style="width:36px;height:36px"></div></div>
         <div><h3 style="font-size:16px">${metal === 'gold' ? 'Gold · 24K 99.9%' : 'Silver · 999'}</h3><div style="font-size:12px;color:var(--mute)">Commission added on every gram your customers buy</div></div></div>
       <div class="field"><label>Your commission per gram</label>
-        <div class="prefix"><span>₹</span><input class="input lg num" id="c_${metal}" type="number" min="-${max}" max="${max}" step="0.01" value="${val}" oninput="commInput('${metal}', this.value)"></div>
+        <div class="prefix"><span>₹</span><input class="input lg num" id="c_${metal}" type="number" min="0" max="${max}" step="0.01" value="${val}" oninput="commInput('${metal}', this.value)"></div>
         <div class="hint">Flat amount in rupees per gram · up to ₹${max.toLocaleString('en-IN')}</div></div>
       <div class="calc">
         <div class="row"><span>Live ${metal} rate</span><span class="num" id="cl_${metal}">${rv(S.price, base)}</span></div>
@@ -197,7 +197,7 @@ function vCommission() {
     </div>
     <div class="grid g2 section">${card('gold', p.base_rate, S.comm.gold, 1000)}${card('silver', p.silver?.base_rate, S.comm.silver, 100)}</div>
     <div class="card pad section"><h3 style="font-size:16px;margin-bottom:4px">Jewellery karat rates</h3><div style="font-size:12px;color:var(--mute);margin-bottom:14px">Shown to customers on the live rates screen. 22K = 24K × 22/24, 18K = 24K × 18/24, plus your margin (use minus for a discount).</div>
-      <div class="grid g2">${['22', '18'].map((k) => `<div class="field"><label>${k}K margin per gram</label><div class="prefix"><span>₹</span><input class="input num" id="c_g${k}" type="number" min="-1000" max="1000" step="0.01" value="${S.comm['g' + k]}" oninput="S.comm['g${k}']=this.value;S.comm.dirty=true;$('#comm-status').textContent='Unsaved changes'"></div><div class="hint">Customer ${k}K rate now: <b>${rv(S.price, p.karats?.[k + 'K'])}/g</b></div></div>`).join('')}</div></div>
+      <div class="grid g2">${['22', '18'].map((k) => `<div class="field"><label>${k}K margin per gram</label><div class="prefix"><span>₹</span><input class="input num" id="c_g${k}" type="number" min="0" max="1000" step="0.01" value="${S.comm['g' + k]}" oninput="S.comm['g${k}']=this.value;S.comm.dirty=true;$('#comm-status').textContent='Unsaved changes'"></div><div class="hint">Customer ${k}K rate now: <b>${rv(S.price, p.karats?.[k + 'K'])}/g</b></div></div>`).join('')}</div></div>
     <div class="section" style="display:flex;align-items:center;gap:14px">
       <button class="btn gold" id="save-commission" onclick="saveComm()" style="height:44px;padding:0 22px">Save commission</button>
       <span style="font-size:12px;color:var(--mute)" id="comm-status">${S.comm.dirty ? 'Unsaved changes' : (S.me.commission_updated_at ? 'Last updated ' + dt(S.me.commission_updated_at) : '')}</span>
@@ -242,7 +242,7 @@ async function loadOrders() {
   try { S.orders = await api(`/jeweller/v3/orders?side=${f.side}&metal=${f.metal}&status=${f.status}&search=${encodeURIComponent(f.search)}`); } catch (e) { toast(e.message, true); }
   if (S.tab === 'orders') {
     const tb = document.getElementById('orders-tbody');
-    if (tb) {
+    if (tb && document.activeElement && document.activeElement.id === 'orders-search') {
       tb.innerHTML = renderOrderRows(S.orders ? S.orders.orders : []);
       return;
     }
@@ -396,15 +396,24 @@ function vRedemptions() {
     <div class="card"><div class="card-h"><div><h3>Redeem at counter</h3><p>For walk-in customers without an app request</p></div></div><div style="padding:20px">
       <div class="field"><label>Customer wallet ID</label><div style="display:flex;gap:8px"><input class="input" style="flex:1" id="rw" placeholder="e.g. VDG123456" value="${esc(L?.customer?.wallet_id || '')}"><button class="btn" onclick="lookupW()">Find</button></div></div>
       ${L ? (L.found ? `<div class="card pad" style="margin-top:14px;background:#FCFBF8"><b>${esc(L.customer.name)}</b><div style="font-size:12px;color:var(--mute)">${phoneFmt(L.customer.phone)} · KYC ${esc(L.customer.kyc_status)}</div>
-        <div class="kv" style="margin-top:8px"><span>Gold available</span><b class="num">${g4(L.customer.gold_grams)}</b></div></div>
-        <div class="field" style="margin-top:14px"><label>Grams to redeem</label><input class="input" type="number" step="0.001" id="rg" placeholder="Minimum ${S.me.min_redemption_grams}g"></div>
-        <div class="field" style="margin-top:12px"><label>Item</label><input class="input" id="ri" value="Physical Gold Coin"></div>
+        <div class="kv" style="margin-top:8px"><span>Gold available</span><b class="num">${g4(L.customer.gold_grams)}</b></div>
+        <div class="kv"><span>Silver available</span><b class="num">${g4(L.customer.silver_grams || 0)}</b></div></div>
+        <div class="field" style="margin-top:14px"><label>Metal to redeem</label><div class="seg" style="display:flex">${[['gold', 'Gold 24K'], ['silver', 'Silver 999']].map(([k, l]) => `<button type="button" class="${(S.rmetal || 'gold') === k ? 'on' : ''}" onclick="setRMetal('${k}')" data-rmetal="${k}">${l}</button>`).join('')}</div></div>
+        <div class="field" style="margin-top:12px"><label>Grams to redeem</label><input class="input" type="number" step="0.001" min="0" id="rg" placeholder="${(S.rmetal || 'gold') === 'silver' ? 'Minimum 10g' : 'Minimum ' + S.me.min_redemption_grams + 'g'}"></div>
+        <div class="field" style="margin-top:12px"><label>Item</label><input class="input" id="ri" value="${(S.rmetal || 'gold') === 'silver' ? 'Physical Silver Coin' : 'Physical Gold Coin'}"></div>
         <button class="btn gold" style="width:100%;margin-top:16px;height:44px" onclick="approveR()">Confirm redemption</button>` : '<div class="note" style="margin-top:14px">No customer found with this wallet ID.</div>') : ''}
     </div></div></div>`;
 }
 async function collect(id) { const otp = $('#otp_' + id).value.trim(); if (otp.length !== 6) return toast('Enter the 6-digit code', true); try { await api(`/jeweller/pickups/${id}/collect?otp=${otp}`, { method: 'POST' }); toast('Handed over'); loadPickups(); loadDash(); } catch (e) { toast(e.message, true); } }
 async function lookupW() { const w = $('#rw').value.trim(); if (!w) return; try { S.lookup = await api('/jeweller/customers/lookup?wallet_id=' + encodeURIComponent(w)); render(); } catch (e) { toast(e.message, true); } }
-async function approveR() { try { await api('/jeweller/redemption/approve', { method: 'POST', body: { wallet_id: S.lookup.customer.wallet_id, grams: Number($('#rg').value), item: $('#ri').value || 'Physical Gold' } }); toast('Redemption recorded'); S.lookup = null; render(); } catch (e) { toast(e.message, true); } }
+function setRMetal(m) { const g = $('#rg')?.value; S.rmetal = m; render(); if (g && $('#rg')) $('#rg').value = g; }
+async function approveR() {
+  const metal = S.rmetal || 'gold'; const grams = Number($('#rg').value);
+  if (!(grams > 0)) return toast('Enter grams to redeem', true);
+  const bal = metal === 'silver' ? (S.lookup.customer.silver_grams || 0) : (S.lookup.customer.gold_grams || 0);
+  if (grams > bal + 1e-9) return toast(`Customer has only ${g4(bal)} ${metal} available`, true);
+  try { await api('/jeweller/redemption/approve', { method: 'POST', body: { wallet_id: S.lookup.customer.wallet_id, grams, metal, item: $('#ri').value || (metal === 'silver' ? 'Physical Silver' : 'Physical Gold') } }); toast(`${metal === 'silver' ? 'Silver' : 'Gold'} redemption recorded`); S.lookup = null; S.rmetal = 'gold'; render(); loadPickups(); } catch (e) { toast(e.message, true); }
+}
 
 /* ── catalogue ────────────────────────── */
 async function loadProducts() { try { S.products = await api('/jeweller/products'); } catch (e) { toast(e.message, true); } if (S.tab === 'catalogue') render(); }

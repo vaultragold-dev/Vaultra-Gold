@@ -7,7 +7,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { GlassBackdrop } from "@/src/components/GlassBackdrop";
 import { api } from "@/src/api";
 import { useApp } from "@/src/store/AppContext";
-import { colors, fonts, radius, cardShadow } from "@/src/theme";
+import { colors, fonts, radius, cardShadow, themed } from "@/src/theme";
 
 type Notification = {
   id: string;
@@ -95,7 +95,7 @@ export default function NotificationsScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themed(() => ({
   root: { flex: 1, backgroundColor: "transparent" },
   header: {
     flexDirection: "row",
@@ -140,4 +140,4 @@ const styles = StyleSheet.create({
   notifMsg: { fontFamily: fonts.regular, fontSize: 13, color: colors.muted, marginTop: 2 },
   notifTime: { fontFamily: fonts.medium, fontSize: 11, color: colors.mutedLight, marginTop: 6 },
   unreadDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.brandPrimary, marginTop: 6 },
-});
+}));

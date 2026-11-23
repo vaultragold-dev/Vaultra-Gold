@@ -10,7 +10,7 @@ import { CATEGORIES } from "@/src/assets";
 import { LiveTicker, ScreenHeader } from "@/src/components/Header";
 import { Product, ProductCard, RedeemSheet } from "@/src/components/Product";
 import { Button, Chip, ChipRow } from "@/src/components/ui";
-import { colors, fonts } from "@/src/theme";
+import { colors, fonts, themed } from "@/src/theme";
 
 export default function Jewellery() {
   const insets = useSafeAreaInsets();
@@ -86,10 +86,10 @@ export default function Jewellery() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themed(() => ({
   root: { flex: 1, backgroundColor: "transparent" },
   center: { flex: 1, alignItems: "center", justifyContent: "center", gap: 12 },
   listHead: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 4 },
   count: { fontFamily: fonts.semibold, fontSize: 13, color: colors.onSurfaceTertiary },
   empty: { fontFamily: fonts.medium, fontSize: 14, color: colors.muted, textAlign: "center", marginTop: 24 },
-});
+}));

@@ -1,8 +1,8 @@
 import * as Clipboard from "expo-clipboard";
 import { useRouter } from "expo-router";
-import { ArrowLeft, Copy, Gift, Share2, Users } from "lucide-react-native";
+import { ArrowLeft, Copy, Gift, Link2, Share2, Users } from "lucide-react-native";
 import React, { useEffect, useState } from "react";
-import { ActivityIndicator, Pressable, ScrollView, Share, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Pressable, ScrollView, Share, StyleSheet, Text, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { GlassBackdrop } from "@/src/components/GlassBackdrop";
@@ -10,13 +10,16 @@ import { api } from "@/src/api";
 import { useToast } from "@/src/components/Toast";
 import { Button, Card } from "@/src/components/ui";
 import { inr, shortDate } from "@/src/format";
+import { t } from "@/src/i18n";
 import { useApp } from "@/src/store/AppContext";
-import { cardShadow, colors, fonts, radius } from "@/src/theme";
+import { tenantConfig } from "@/src/tenantConfig";
+import { cardShadow, colors, fonts, radius, themed } from "@/src/theme";
 
 type ReferralData = {
   referral_code: string;
   referral_balance: number;
   referral_count: number;
+  referred?: boolean;
   referrals: { name: string; joined: string }[];
 };
 
@@ -31,14 +34,54 @@ export default function ReferralScreen() {
   }, [tenant]);
   const [data, setData] = useState<ReferralData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [friendCode, setFriendCode] = useState("");
+  const [applying, setApplying] = useState(false);
+  const { refresh } = useApp();
 
-  useEffect(() => {
-    if (!token) { setLoading(false); return; }
+  const load = () =>
     api<ReferralData>("/referral")
       .then(setData)
       .catch(() => {})
       .finally(() => setLoading(false));
-  }, [token]);
+
+  useEffect(() => {
+    if (!token) { setLoading(false); return; }
+    load();
+  }, [token]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Store link carries the code so the friend's sign-up form is pre-filled
+  const pkg = tenantConfig.packageName || tenantConfig.bundleId || "";
+  const inviteLink = data
+    ? pkg
+      ? `https://play.google.com/store/apps/details?id=${pkg}&referrer=${encodeURIComponent(`ref=${data.referral_code}`)}`
+      : `${(tenantConfig.apiBaseUrl || "https://master.vaultragold.com").replace(/\/+$/, "")}/?ref=${data.referral_code}`
+    : "";
+
+  const copyLink = async () => {
+    if (!inviteLink) return;
+    await Clipboard.setStringAsync(inviteLink);
+    toast("success", "Copied!", "Invite link copied to clipboard");
+  };
+
+  const applyFriendCode = async () => {
+    const code = friendCode.trim().toUpperCase();
+    if (code.length < 4) return toast("error", "Enter a valid referral code");
+    if (code === data?.referral_code) return toast("error", "You cannot use your own code");
+    setApplying(true);
+    try {
+      await api("/me", { method: "PATCH", body: { referral_code: code } });
+      await load();
+      refresh();
+      const fresh = await api<ReferralData>("/referral").catch(() => null);
+      if (fresh?.referred) toast("success", "Referral applied!", `₹${reward} reward added to your account`);
+      else toast("error", "Code not valid", "Please check the code with your friend");
+      setFriendCode("");
+    } catch (e: any) {
+      toast("error", "Could not apply code", e.message);
+    } finally {
+      setApplying(false);
+    }
+  };
 
   const copyCode = async () => {
     if (!data) return;
@@ -50,7 +93,7 @@ export default function ReferralScreen() {
     if (!data) return;
     try {
       await Share.share({
-        message: `Join ${tenantName || "us"} and get ₹${reward} reward! Use my referral code: ${data.referral_code}\n\nBuy & save 24K gold from ₹500.`,
+        message: `Join ${tenantName || "us"} and get ₹${reward} reward! Use my referral code: ${data.referral_code}\n\nDownload the app: ${inviteLink}\n\nBuy & save 24K gold from ₹500.`,
         title: `Invite to ${tenantName || "Digital Gold"}`,
       });
     } catch {}
@@ -115,8 +158,15 @@ export default function ReferralScreen() {
                 </Pressable>
               </View>
 
+              <Text style={[styles.codeLabel, { marginTop: 16 }]}>{t("your_link")}</Text>
+              <Pressable onPress={copyLink} style={[styles.codeBox, { paddingVertical: 10 }]} testID="referral-link">
+                <Link2 size={16} color={colors.brandSecondary} />
+                <Text style={styles.linkText} numberOfLines={1}>{inviteLink}</Text>
+                <Copy size={16} color={colors.brandSecondary} />
+              </Pressable>
+
               <Button
-                title="Share Invite Link"
+                title={t("share_link")}
                 size="lg"
                 icon={<Share2 size={18} color={colors.onBrandPrimary} />}
                 onPress={shareLink}
@@ -124,6 +174,24 @@ export default function ReferralScreen() {
                 testID="referral-share-button"
               />
             </Card>
+
+            {!data.referred ? (
+              <Card>
+                <Text style={styles.howTitle}>{t("have_code")}</Text>
+                <View style={{ flexDirection: "row", gap: 8, marginTop: 10 }}>
+                  <TextInput
+                    value={friendCode}
+                    onChangeText={(v) => setFriendCode(v.toUpperCase())}
+                    placeholder="e.g. VDG12AB3"
+                    placeholderTextColor={colors.mutedLight}
+                    autoCapitalize="characters"
+                    style={styles.codeInput}
+                    testID="referral-apply-input"
+                  />
+                  <Button title={t("apply")} loading={applying} onPress={applyFriendCode} style={{ minWidth: 96 }} testID="referral-apply-button" />
+                </View>
+              </Card>
+            ) : null}
 
             {/* Stats */}
             <View style={styles.statsRow}>
@@ -184,7 +252,7 @@ export default function ReferralScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themed(() => ({
   root: { flex: 1, backgroundColor: "transparent" },
   header: {
     flexDirection: "row",
@@ -274,4 +342,6 @@ const styles = StyleSheet.create({
   refName: { fontFamily: fonts.semibold, fontSize: 14, color: colors.onSurface },
   refDate: { fontFamily: fonts.regular, fontSize: 12, color: colors.muted },
   refReward: { fontFamily: fonts.bold, fontSize: 14, color: colors.success },
-});
+  linkText: { flex: 1, fontFamily: fonts.medium, fontSize: 12, color: colors.onSurfaceTertiary, marginHorizontal: 8 },
+  codeInput: { flex: 1, height: 48, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, paddingHorizontal: 14, fontFamily: fonts.bold, fontSize: 15, letterSpacing: 1, color: colors.onSurface, backgroundColor: colors.surface },
+}));

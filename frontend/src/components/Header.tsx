@@ -10,8 +10,9 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Glass } from "@/src/components/Glass";
 import { SideMenu } from "@/src/components/SideMenu";
 import { grams, inr } from "@/src/format";
+import { t } from "@/src/i18n";
 import { useApp } from "@/src/store/AppContext";
-import { colors, fonts, radius } from "@/src/theme";
+import { colors, fonts, radius, themed } from "@/src/theme";
 
 export function PulseDot({ color = colors.success, size = 8 }: { color?: string; size?: number }) {
   const s = useSharedValue(1);
@@ -30,14 +31,33 @@ export function PulseDot({ color = colors.success, size = 8 }: { color?: string;
 export function LiveTicker({ testID = "live-gold-ticker" }: { testID?: string }) {
   const { price, priceError } = useApp();
   const up = (price?.change_pct ?? 0) >= 0;
+  const sUp = (price?.silver?.change_pct ?? 0) >= 0;
+  const bad = priceError || price?.offline || price?.rates_hidden;
+  const show = !!price && price.has_live !== false;
+  const fmt0 = (n?: number) => (n ? `₹${n.toLocaleString("en-IN", { maximumFractionDigits: 0 })}` : "—");
+  const fmt2 = (n?: number) => (n ? `₹${n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "—");
   return (
     <View style={styles.ticker} testID={testID}>
-      <PulseDot color={priceError || price?.offline || price?.rates_hidden ? colors.error : colors.success} />
-      <Text style={styles.tickerLabel} numberOfLines={1}>24K</Text>
-      <Text style={styles.tickerPrice} numberOfLines={1} testID="live-gold-price">
-        {price && price.has_live !== false ? `${inr(price.buy)}/g` : "—"}
-      </Text>
-      <Text numberOfLines={1} style={[styles.tickerLive, { color: priceError || price?.offline || price?.rates_hidden ? colors.error : up ? colors.success : colors.error }]}>{priceError ? "NO NETWORK" : price?.rates_hidden ? "HIDDEN" : price?.offline ? "PAUSED" : `${up ? "▲" : "▼"} ${price?.live ? "LIVE" : "INDICATIVE"}`}</Text>
+      <PulseDot color={bad ? colors.error : colors.success} />
+      {bad ? (
+        <Text numberOfLines={1} style={[styles.tickerLive, { color: colors.error, flex: 1 }]}>
+          {priceError ? "NO NETWORK" : price?.rates_hidden ? "RATES HIDDEN" : "RATES PAUSED"}
+        </Text>
+      ) : (
+        <>
+          <View style={styles.tickSeg}>
+            <Text style={styles.tickerLabel} numberOfLines={1}>24K</Text>
+            <Text style={styles.tickerPrice} numberOfLines={1} testID="live-gold-price">{show ? fmt0(price?.buy) : "—"}</Text>
+            <Text style={[styles.tickerArrow, { color: up ? colors.success : colors.error }]}>{up ? "▲" : "▼"}</Text>
+          </View>
+          <View style={styles.tickDivider} />
+          <View style={styles.tickSeg}>
+            <Text style={styles.tickerLabel} numberOfLines={1}>Ag</Text>
+            <Text style={styles.tickerPrice} numberOfLines={1} testID="live-silver-price">{show ? fmt2(price?.silver?.buy) : "—"}</Text>
+            <Text style={[styles.tickerArrow, { color: sUp ? colors.success : colors.error }]}>{sUp ? "▲" : "▼"}</Text>
+          </View>
+        </>
+      )}
     </View>
   );
 }
@@ -115,7 +135,7 @@ export function HomeHeader() {
           {token && user ? <Text style={styles.eyebrow} numberOfLines={1}>{tenantName || "Digital Gold"}</Text> : null}
           <Text style={styles.brand} numberOfLines={2}>
             {token && user ? (
-              <>Hi, <Text style={{ color: colors.brandDeep }}>{displayName}</Text></>
+              <>{t("hi")}, <Text style={{ color: colors.brandDeep }}>{displayName}</Text></>
             ) : (
               <>{tenantName || "Digital Gold"}</>
             )}
@@ -144,7 +164,7 @@ export function HomeHeader() {
         >
           <User size={16} color={token ? colors.onSurfaceInverse : colors.onSurface} />
           <Text style={[styles.profileText, token ? { color: colors.onSurfaceInverse } : null]} numberOfLines={1}>
-            {token ? displayName : "Sign In"}
+            {token ? displayName : t("sign_in")}
           </Text>
         </Pressable>
       </View>
@@ -185,7 +205,7 @@ export function ScreenHeader({ title, subtitle, right, showBack = false }: { tit
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themed(() => ({
   headRow: { flexDirection: "row", alignItems: "center", gap: 10 },
   menuBtn: { width: 44, height: 44, alignItems: "center", justifyContent: "center" },
   logoMark: { alignItems: "center", justifyContent: "center" },
@@ -232,8 +252,11 @@ const styles = StyleSheet.create({
     borderColor: colors.goldHairline,
     overflow: "hidden",
   },
-  tickerLabel: { fontFamily: fonts.medium, fontSize: 11, color: colors.muted },
-  tickerPrice: { fontFamily: fonts.bold, fontSize: 13, color: colors.onSurface, letterSpacing: -0.3 },
+  tickerLabel: { fontFamily: fonts.medium, fontSize: 10, color: colors.muted },
+  tickerPrice: { fontFamily: fonts.bold, fontSize: 12.5, color: colors.onSurface, letterSpacing: -0.3, flexShrink: 1 },
+  tickerArrow: { fontFamily: fonts.bold, fontSize: 9 },
+  tickSeg: { flexDirection: "row", alignItems: "center", gap: 3, flexShrink: 1 },
+  tickDivider: { width: 1, height: 16, backgroundColor: colors.goldHairline, marginHorizontal: 2 },
   tickerLive: { fontFamily: fonts.bold, fontSize: 10, letterSpacing: 0.4 },
   balancePill: {
     height: 36,
@@ -251,4 +274,4 @@ const styles = StyleSheet.create({
   backBtn: { width: 44, height: 44, justifyContent: "center", alignItems: "center" },
   // headers sit on a soft tinted backdrop so the glass controls read as frosted
   header: { backgroundColor: "transparent", paddingHorizontal: 16, paddingBottom: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.goldHairline },
-});
+}));

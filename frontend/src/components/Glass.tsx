@@ -2,7 +2,7 @@ import { BlurView } from "expo-blur";
 import React from "react";
 import { Platform, StyleSheet, View, type StyleProp, type ViewStyle } from "react-native";
 
-import { colors } from "@/src/theme";
+import { colors, themed } from "@/src/theme";
 
 /** iOS-style frosted "liquid glass" surface. Android gets a near-opaque fill because its blur is unreliable. */
 export function Glass({ style, contentStyle, children, intensity = 60, radius = 24, testID }: {
@@ -23,7 +23,7 @@ export function Glass({ style, contentStyle, children, intensity = 60, radius = 
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themed(() => ({
   wrap: {
     overflow: "hidden",
     borderWidth: StyleSheet.hairlineWidth * 1.5,
@@ -36,4 +36,4 @@ const styles = StyleSheet.create({
   },
   highlight: { position: "absolute", left: 0, right: 0, top: 0, height: "45%", backgroundColor: colors.glassHighlight },
   content: { position: "relative", zIndex: 1, flex: 1, alignItems: "center", justifyContent: "center" },
-});
+}));

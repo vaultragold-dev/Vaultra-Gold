@@ -8,10 +8,10 @@ import { api } from "@/src/api";
 import { BANNERS as DEFAULT_BANNERS, IMAGES } from "@/src/assets";
 import { useApp } from "@/src/store/AppContext";
 import { tenantConfig } from "@/src/tenantConfig";
-import { colors, fonts, radius } from "@/src/theme";
+import { colors, fonts, radius, themed } from "@/src/theme";
 
 type Banner = { id: string; image?: string; image_url?: string; eyebrow?: string; title?: string; subtitle?: string; link?: string };
-const LINK_ROUTES: Record<string, string> = { buy: "/", sip: "/sip", jewellery: "/jewellery", refer: "/referral" };
+const LINK_ROUTES: Record<string, string> = { buy: "/", sip: "/sip", jewellery: "/jewellery", catalogue: "/jewellery", refer: "/referral", referral: "/referral", vault: "/vault", store: "/store-locator" };
 
 function toAbsUrl(u?: string): string {
   if (!u) return "";
@@ -24,7 +24,7 @@ function toAbsUrl(u?: string): string {
   return `${base}${u.startsWith("/") ? "" : "/"}${u}`;
 }
 
-export function BannerCarousel() {
+export function BannerCarousel({ onBuy }: { onBuy?: () => void } = {}) {
   const { width: winW } = useWindowDimensions();
   const screenW = Math.min(winW, 720);
   const cardWidth = screenW - 32; // 16px margin on each side
@@ -85,7 +85,15 @@ export function BannerCarousel() {
               ]}
               testID={`banner-${b.id}`}
               disabled={!b.link || !LINK_ROUTES[b.link]}
-              onPress={() => b.link && LINK_ROUTES[b.link] && router.push(LINK_ROUTES[b.link] as any)}
+              onPress={() => {
+                if (!b.link || !LINK_ROUTES[b.link]) return;
+                if (b.link === "buy") {
+                  if (onBuy) onBuy();
+                  else router.navigate("/");
+                  return;
+                }
+                router.push(LINK_ROUTES[b.link] as any);
+              }}
             >
               <Image
                 source={src}
@@ -123,7 +131,7 @@ export function BannerCarousel() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themed(() => ({
   banner: {
     aspectRatio: 2.0,
     borderRadius: 16,
@@ -147,4 +155,4 @@ const styles = StyleSheet.create({
   dots: { flexDirection: "row", justifyContent: "center", gap: 6, marginTop: 10 },
   dot: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.borderStrong },
   dotOn: { width: 20, backgroundColor: colors.brandPrimary },
-});
+}));

@@ -27,6 +27,11 @@ function pickDraft() {
     primary_color: a.primary_color || p.primaryColor || '#D4AF37',
     secondary_color: a.secondary_color || p.secondaryColor || '#C5A028',
     accent_color: a.accent_color || p.accentColor || '#111827',
+    background_color: a.background_color || p.backgroundColor || '#FDF8E8',
+    text_color: a.text_color || '#111827',
+    store_lat: a.store_lat ?? null,
+    store_lng: a.store_lng ?? null,
+    store_hours: a.store_hours || '',
     logo_url: a.logo_url,
     splash_url: a.splash_url,
     app_version: a.app_version,
@@ -134,6 +139,8 @@ function phone(small) {
   if (d.primary_color) P.primaryColor = d.primary_color;
   if (d.secondary_color) P.secondaryColor = d.secondary_color;
   if (d.accent_color) P.accentColor = d.accent_color;
+  if (d.background_color) P.backgroundColor = d.background_color;
+  P.textColor = d.text_color || '#111827';
   const cur = S.studio.apps.find((x) => x.id === S.studioSel) || {}; const k = cur.karats || S.studio.karats || {}; const nodata = S.studio.price?.has_live === false;
   const r = P.cardRadius; const name = esc(d.app_name || 'Your app');
   const val = (v) => nodata || !v ? '—' : '₹' + Number(v).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -219,16 +226,16 @@ function phone(small) {
     karats: `<div style="background:#fff;border:1px solid ${P.primaryColor}55;border-radius:${r * .6}px;padding:7px 9px;font-size:9px">${['24K', '22K', '18K'].map((x) => `<div style="display:flex;justify-content:space-between;padding:2px 0"><span style="color:${P.secondaryColor}">${x}</span><b style="color:${P.accentColor}">${val(k[x])}</b></div>`).join('')}</div>`,
     sip: `<div style="background:${P.accentColor};border-radius:${r * .6}px;padding:8px;color:#fff;font-size:9px"><span style="color:${P.primaryColor};font-size:7px;letter-spacing:.6px">AUTO SIP</span><br><b>Save daily from ₹100</b></div>`,
     banners: `<div style="height:44px;border-radius:${r * .6}px;background:linear-gradient(120deg,${P.secondaryColor},${P.primaryColor});color:#fff;font-size:9px;padding:8px"><b>Festive offer</b><br>0% making on coins</div>`,
-    buy: `<div style="background:#fff;border-radius:${r * .6}px;padding:8px;border:1px solid ${P.primaryColor}33"><div style="font-size:8px;color:#6b7280">Buy gold</div><div style="font-size:12px;font-weight:700;color:${P.accentColor}">₹ 1,000</div><div style="margin-top:5px;background:${P.primaryColor};color:#fff;border-radius:${r * .5}px;text-align:center;font-size:9px;padding:5px;font-weight:700">Proceed to Buy →</div></div>`,
-    categories: `<div style="display:flex;gap:5px">${['Rings', 'Bangles', 'Chains', 'Kadas'].map((c) => `<div style="flex:1;text-align:center"><div style="height:26px;border-radius:${r * .5}px;background:${P.backgroundColor};border:1px solid ${P.primaryColor}55"></div><div style="font-size:7px;margin-top:2px;color:${P.accentColor}">${c}</div></div>`).join('')}</div>`,
+    buy: `<div style="background:#fff;border-radius:${r * .6}px;padding:8px;border:1px solid ${P.primaryColor}33"><div style="font-size:8px;color:#6b7280">Buy gold</div><div style="font-size:12px;font-weight:700;color:${P.textColor}">₹ 1,000</div><div style="margin-top:5px;background:${P.primaryColor};color:#fff;border-radius:${r * .5}px;text-align:center;font-size:9px;padding:5px;font-weight:700">Proceed to Buy →</div></div>`,
+    categories: `<div style="display:flex;gap:5px">${['Rings', 'Bangles', 'Chains', 'Kadas'].map((c) => `<div style="flex:1;text-align:center"><div style="height:26px;border-radius:${r * .5}px;background:${P.backgroundColor};border:1px solid ${P.primaryColor}55"></div><div style="font-size:7px;margin-top:2px;color:${P.textColor}">${c}</div></div>`).join('')}</div>`,
     trending: `<div style="display:flex;gap:5px">${[1, 2].map(() => `<div style="flex:1;height:46px;border-radius:${r * .6}px;background:#fff;border:1px solid ${P.primaryColor}33"></div>`).join('')}</div>`,
-    promos: `<div style="background:#fff;border-radius:${r * .6}px;padding:7px;font-size:9px;color:${P.accentColor};border:1px solid ${P.primaryColor}33">Refer & Earn · FAQs</div>`,
+    promos: `<div style="background:#fff;border-radius:${r * .6}px;padding:7px;font-size:9px;color:${P.textColor};border:1px solid ${P.primaryColor}33">Refer & Earn · FAQs</div>`,
   }[s] || '');
   const sections = small ? P.homeLayout.slice(0, 4) : P.homeLayout;
   return `<div class="phone ${small ? 'sm' : ''}" style="background:${P.backgroundColor}">
     <div style="display:flex;align-items:center;gap:6px;padding:10px 10px 8px;background:#fff;border-bottom:1px solid ${P.primaryColor}55">
       <div style="width:22px;height:22px;border-radius:${Math.max(4, r * .35)}px;background:linear-gradient(135deg,${P.primaryColor},${P.secondaryColor});color:#fff;font-size:9px;font-weight:800;display:flex;align-items:center;justify-content:center;overflow:hidden">${logo}</div>
-      <b style="font-size:11px;color:${P.accentColor};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${name}</b></div>
+      <b style="font-size:11px;color:${P.textColor};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${name}</b></div>
     <div style="display:flex;flex-direction:column;gap:7px;padding:9px">${sections.map(block).join('')}</div></div>`;
 }
 
@@ -376,6 +383,16 @@ function vStudio() {
       </div>
 
       <div style="margin-top:16px;padding-top:16px;border-top:1px solid #e2e8f0">
+        <h4 style="margin:0 0 4px 0;font-size:13.5px">📍 Store Locator (shown in the app)</h4>
+        <div class="sub" style="margin-bottom:10px">Address comes from the shop profile${S.studio.apps.find((x) => x.id === S.studioSel)?.address ? ': <b>' + esc(S.studio.apps.find((x) => x.id === S.studioSel).address) + '</b>' : ''}. Add map pin (optional) for exact directions.</div>
+        <div class="grid g3">
+          <div class="field"><label>Latitude</label><input class="input" id="st_lat" type="number" step="0.000001" value="${d.store_lat ?? ''}" placeholder="23.0225" oninput="dset('store_lat',this.value === '' ? null : Number(this.value))"></div>
+          <div class="field"><label>Longitude</label><input class="input" id="st_lng" type="number" step="0.000001" value="${d.store_lng ?? ''}" placeholder="72.5714" oninput="dset('store_lng',this.value === '' ? null : Number(this.value))"></div>
+          <div class="field"><label>Store Timings</label><input class="input" id="st_hours" maxlength="120" value="${esc(d.store_hours)}" placeholder="10:00 AM – 8:00 PM (Mon–Sat)" oninput="dset('store_hours',this.value)"></div>
+        </div>
+      </div>
+
+      <div style="margin-top:16px;padding-top:16px;border-top:1px solid #e2e8f0">
         <h4 style="margin:0 0 10px 0;font-size:13.5px">Store Listing (Google Play & Apple App Store)</h4>
         <div class="field"><label>Short Description (80 chars max for Play Store listing)</label><input class="input" maxlength="80" value="${esc(d.store_short)}" oninput="dset('store_short',this.value)"></div>
         <div class="field"><label>Full Store Description</label><textarea class="input" rows="5" oninput="dset('store_long',this.value)">${esc(d.store_long)}</textarea></div>
@@ -398,12 +415,21 @@ function vStudio() {
       render();
     };
 
-    const themes = Object.entries(s.presets).map(([key, P]) => `<button class="theme-opt ${d.theme_preset === key ? 'on' : ''}" onclick="dset('theme_preset','${key}',false);dset('primary_color','${P.primaryColor}',false);dset('secondary_color','${P.secondaryColor}',false);dset('accent_color','${P.accentColor}',true)" data-testid="theme-${key}">
+    const themes = Object.entries(s.presets).map(([key, P]) => `<button class="theme-opt ${d.theme_preset === key ? 'on' : ''}" onclick="dset('theme_preset','${key}',false);dset('primary_color','${P.primaryColor}',false);dset('secondary_color','${P.secondaryColor}',false);dset('accent_color','${P.accentColor}',false);dset('background_color','${P.backgroundColor}',true)" data-testid="theme-${key}">
       <div class="sw">${[P.primaryColor, P.secondaryColor, P.accentColor, P.backgroundColor].map((c) => `<i style="background:${c}"></i>`).join('')}</div><b>${P.label}</b><span>Radius ${P.cardRadius} · ${P.homeLayout.slice(0, 3).map((x) => SECTION_LABEL[x]).join(' → ')}</span></button>`).join('');
 
     const activePrimary = d.primary_color || s.presets[d.theme_preset].primaryColor;
     const activeSecondary = d.secondary_color || s.presets[d.theme_preset].secondaryColor;
     const activeAccent = d.accent_color || s.presets[d.theme_preset].accentColor;
+    const activeBg = d.background_color || s.presets[d.theme_preset].backgroundColor;
+    const activeText = d.text_color || '#111827';
+    const colorField = (key, label, val, hint) => `<div class="field"><label>${label}</label>
+            <div style="display:flex;gap:8px;align-items:center">
+              <input type="color" value="${esc(val)}" onchange="dset('${key}',this.value,true)" style="width:40px;height:38px;padding:2px;border-radius:6px;cursor:pointer">
+              <input class="input" id="st_hex_${key}" value="${esc(val)}" oninput="dset('${key}',this.value,true)" style="flex:1">
+            </div>
+            <div class="hint" style="font-size:10.5px;color:#64748b;margin-top:3px">${hint}</div>
+          </div>`;
 
     stepContent = `<div class="card pad">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
@@ -419,27 +445,11 @@ function vStudio() {
       <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:14px;margin-top:14px">
         <h4 style="margin:0 0 10px 0;font-size:13px;color:#0f172a">🎨 Professional Custom Color Override (Optional)</h4>
         <div class="grid g3">
-          <div class="field"><label>1. Primary Brand / Gold Color</label>
-            <div style="display:flex;gap:8px;align-items:center">
-              <input type="color" value="${esc(activePrimary)}" onchange="dset('primary_color',this.value,true)" style="width:40px;height:38px;padding:2px;border-radius:6px;cursor:pointer">
-              <input class="input" value="${esc(activePrimary)}" oninput="dset('primary_color',this.value,true)" style="flex:1">
-            </div>
-            <div class="hint" style="font-size:10.5px;color:#64748b;margin-top:3px">Buttons, active icons & badges</div>
-          </div>
-          <div class="field"><label>2. Secondary Accent Tone</label>
-            <div style="display:flex;gap:8px;align-items:center">
-              <input type="color" value="${esc(activeSecondary)}" onchange="dset('secondary_color',this.value,true)" style="width:40px;height:38px;padding:2px;border-radius:6px;cursor:pointer">
-              <input class="input" value="${esc(activeSecondary)}" oninput="dset('secondary_color',this.value,true)" style="flex:1">
-            </div>
-            <div class="hint" style="font-size:10.5px;color:#64748b;margin-top:3px">Banners, gradients & subtitles</div>
-          </div>
-          <div class="field"><label>3. Deep Accent / Card Tone</label>
-            <div style="display:flex;gap:8px;align-items:center">
-              <input type="color" value="${esc(activeAccent)}" onchange="dset('accent_color',this.value,true)" style="width:40px;height:38px;padding:2px;border-radius:6px;cursor:pointer">
-              <input class="input" value="${esc(activeAccent)}" oninput="dset('accent_color',this.value,true)" style="flex:1">
-            </div>
-            <div class="hint" style="font-size:10.5px;color:#64748b;margin-top:3px">Live rate cards, SIP & headers</div>
-          </div>
+          ${colorField('primary_color', '1. Primary Brand / Gold Color', activePrimary, 'Buttons, active icons & badges')}
+          ${colorField('secondary_color', '2. Secondary Accent Tone', activeSecondary, 'Banners, gradients & subtitles')}
+          ${colorField('accent_color', '3. Deep Accent / Card Tone', activeAccent, 'Live rate cards, SIP & headers')}
+          ${colorField('background_color', '4. App Background Color', activeBg, 'Screen background & soft tints')}
+          ${colorField('text_color', '5. Font / Text Color', activeText, 'Headings, labels & body text')}
         </div>
       </div>
 
@@ -472,12 +482,12 @@ function vStudio() {
       <div class="grid g2" style="margin-top:8px">
         <div class="field">
           <label>22K Jewellery Rate Margin (+/- ₹/gram)</label>
-          <input class="input num" type="number" step="1" value="${esc(a.gold22_commission_per_g || 0)}" id="st_m_gold22" placeholder="0">
+          <input class="input num" type="number" min="0" step="1" value="${esc(Math.max(0, a.gold22_commission_per_g || 0))}" id="st_m_gold22" placeholder="0">
           <div class="hint">Adjusts live 22K (916 Hallmarked) rate for showroom shopping</div>
         </div>
         <div class="field">
           <label>18K Jewellery Rate Margin (+/- ₹/gram)</label>
-          <input class="input num" type="number" step="1" value="${esc(a.gold18_commission_per_g || 0)}" id="st_m_gold18" placeholder="0">
+          <input class="input num" type="number" min="0" step="1" value="${esc(Math.max(0, a.gold18_commission_per_g || 0))}" id="st_m_gold18" placeholder="0">
           <div class="hint">Adjusts live 18K (750 Diamond Jewellery) rate for showroom shopping</div>
         </div>
       </div>
@@ -764,6 +774,8 @@ function vSecurity() {
     <div class="ctl-row"><div><b>Show live rates</b><div class="sub">Off hides every price in all customer apps</div></div>${sw('g_rates', g.rates, 'ctlSet()')}</div>
     <div class="ctl-row"><div><b>Allow booking</b><div class="sub">Off stops all new buys and SIP payments on every shop</div></div>${sw('g_booking', g.booking, 'ctlSet()')}</div>
     <div class="ctl-row"><div><b>Minimum investment (gold & silver)</b><div class="sub">Smallest buy or SIP amount a customer can place</div></div><div class="prefix" style="width:140px"><span>₹</span><input class="input num" id="g_min" type="number" min="10" step="50" value="${g.min_investment}"></div></div>
+    <div class="ctl-row"><div><b>Maximum purchase per order</b><div class="sub">Largest single buy a customer can place (gold & silver)</div></div><div class="prefix" style="width:160px"><span>₹</span><input class="input num" id="g_max" type="number" min="100" step="1000" value="${g.max_investment || 200000}"></div></div>
+    <div class="ctl-row"><div><b>Daily purchase limit per customer</b><div class="sub">Total a customer can buy in one day across all orders</div></div><div class="prefix" style="width:160px"><span>₹</span><input class="input num" id="g_daily" type="number" min="100" step="1000" value="${g.daily_limit || 200000}"></div></div>
     <div style="margin-top:12px"><button class="btn primary" onclick="ctlSave()" id="ctl-save">Save controls</button></div></div>
     <div class="card section"><div class="card-h"><h3>Per shop <span class="sub" style="font-weight:400">only that shop's customers are affected</span></h3></div><div class="table-wrap"><table><thead><tr><th>Shop</th><th>Live rates</th><th>Booking</th><th>Customers see</th></tr></thead><tbody>
     ${c.shops.map((s) => `<tr><td><b>${esc(s.name)}</b><div class="sub">${statusBadge(s.status)}</div></td><td>${sw('r_' + s.id, s.rates, 'ctlSet()')}</td><td>${sw('b_' + s.id, s.booking, 'ctlSet()')}</td>
@@ -772,5 +784,5 @@ function vSecurity() {
 function ctlSet() { const b = $('#ctl-save'); if (b) b.textContent = 'Save controls · unsaved changes'; }
 async function ctlSave() {
   const shops = {}; S.ctl.shops.forEach((s) => { shops[s.id] = { rates: $('#r_' + s.id).checked, booking: $('#b_' + s.id).checked }; });
-  try { await api('/master/v3/controls', { method: 'PUT', body: { rates: $('#g_rates').checked, booking: $('#g_booking').checked, min_investment: Number($('#g_min').value || 500), shops } }); toast('Controls saved'); loadCtl(); } catch (e) { toast(e.message, true); }
+  try { await api('/master/v3/controls', { method: 'PUT', body: { rates: $('#g_rates').checked, booking: $('#g_booking').checked, min_investment: Number($('#g_min').value || 500), max_investment: Number($('#g_max').value || 200000), daily_limit: Number($('#g_daily').value || 200000), shops } }); toast('Controls saved'); loadCtl(); } catch (e) { toast(e.message, true); }
 }

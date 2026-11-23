@@ -9,7 +9,7 @@ import { useToast } from "@/src/components/Toast";
 import { Button, Row, Sheet } from "@/src/components/ui";
 import { grams, inr } from "@/src/format";
 import { useApp } from "@/src/store/AppContext";
-import { colors, fonts, radius } from "@/src/theme";
+import { colors, fonts, radius, themed } from "@/src/theme";
 
 const QUICK = [500, 1000, 2000, 5000];
 
@@ -36,6 +36,7 @@ export function BuyWidget() {
   const amt = total * 0.97;
   const g = rate ? Math.floor((amt / rate) * 10000) / 10000 : 0;
   const minInv = price?.min_investment ?? 500;
+  const maxInv = price?.max_investment ?? 200000;
   const metalLabel = metal === "gold" ? "24K Gold" : "Silver";
 
   const proceedToBuy = async () => {
@@ -47,6 +48,7 @@ export function BuyWidget() {
     }
     if (n <= 0 || !liveRate) { toast("info", "Enter an amount first"); return; }
     if (total < minInv) { toast("info", `Minimum investment is ₹${minInv.toLocaleString("en-IN")}`); return; }
+    if (total > maxInv) { toast("info", "Purchase limit exceeded", `Maximum per order is ₹${maxInv.toLocaleString("en-IN")}. Daily limit ₹${(price?.daily_limit ?? maxInv).toLocaleString("en-IN")}.`); return; }
     // Freeze a fresh price at the moment the customer taps Proceed (2 minutes)
     try {
       const q = await api(metal === "gold" ? "/quote" : "/quote/silver", { method: "POST", body: { tenant }, auth: "none" });
@@ -197,7 +199,7 @@ export function BuyWidget() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themed(() => ({
   pausedBox: { backgroundColor: colors.errorTint, borderRadius: 12, padding: 12, marginTop: 12 },
   pausedTitle: { fontFamily: fonts.bold, fontSize: 13, color: colors.error },
   pausedSub: { fontFamily: fonts.regular, fontSize: 12, color: colors.onSurface, marginTop: 2 },
@@ -248,4 +250,4 @@ const styles = StyleSheet.create({
   procSub: { fontFamily: fonts.regular, fontSize: 13, color: colors.muted, marginTop: 4 },
   successIcon: { width: 80, height: 80, borderRadius: 40, backgroundColor: colors.success, alignItems: "center", justifyContent: "center" },
   successGrams: { fontFamily: fonts.black, fontSize: 34, color: colors.brandSecondary, letterSpacing: -1, marginTop: 4 },
-});
+}));

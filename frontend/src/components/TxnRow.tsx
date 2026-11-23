@@ -4,7 +4,7 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 
 import { StatusBadge } from "@/src/components/ui";
 import { dateTime, grams, inr, TXN_LABEL } from "@/src/format";
-import { colors, fonts } from "@/src/theme";
+import { colors, fonts, themed } from "@/src/theme";
 
 const ICON: Record<string, any> = {
   buy: ArrowDownLeft,
@@ -49,11 +49,11 @@ export function TxnRow({ t, onPress, dark }: { t: any; onPress?: () => void; dar
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themed(() => ({
   row: { flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 12, borderBottomWidth: 1 },
   icon: { width: 40, height: 40, borderRadius: 12, alignItems: "center", justifyContent: "center" },
   title: { fontFamily: fonts.semibold, fontSize: 14 },
   sub: { fontFamily: fonts.regular, fontSize: 11 },
   grams: { fontFamily: fonts.bold, fontSize: 14, letterSpacing: -0.2 },
   amt: { fontFamily: fonts.medium, fontSize: 12 },
-});
+}));

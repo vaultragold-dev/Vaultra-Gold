@@ -279,7 +279,7 @@ function vTransactions() {
 let cT;
 const loadC = () => safe(async () => { if (!S.jewellers) S.jewellers = await api('/master/jewellers'); S.customers = await api(`/master/customers?jeweller_id=${S.cj}&search=${encodeURIComponent(S.cs)}`); }, 'customers');
 function vCustomers() {
-  const head = `<div class="page-head"><div><h2>Customers</h2><p>All app users across stores.</p></div><div class="toolbar">${jSelect(S.cj, "S.cj=this.value;loadC()")}<input class="input search" placeholder="Name or phone" value="${esc(S.cs)}" oninput="S.cs=this.value;clearTimeout(cT);cT=setTimeout(loadC,300)"></div></div>`;
+  const head = `<div class="page-head"><div><h2>Customers</h2><p>All app users across stores.</p></div><div class="toolbar">${jSelect(S.cj, "S.cj=this.value;loadC()")}<input class="input search" id="m-cust-search" placeholder="Name or phone" value="${esc(S.cs)}" oninput="S.cs=this.value;clearTimeout(cT);cT=setTimeout(loadC,300)"></div></div>`;
   if (!S.customers) return head + loading;
   return head + `<div class="card"><div class="table-wrap"><table><thead><tr><th>Customer</th><th>Store</th><th>Wallet ID</th><th class="r">Gold</th><th class="r">Silver</th><th>KYC</th><th>Joined</th><th></th></tr></thead><tbody>
     ${S.customers.length ? S.customers.map((c) => `<tr><td><b>${esc(c.name)}</b><div class="sub">${phoneFmt(c.phone)}</div></td><td>${esc(jname(c.jeweller_id))}</td><td><code>${esc(c.wallet_id)}</code></td><td class="r num">${g4(c.gold_grams)}</td><td class="r num">${g4(c.silver_grams)}</td><td>${statusBadge(c.kyc_status)}</td><td>${dOnly(c.created_at)}</td><td class="r"><button class="btn sm" onclick="mCustomer('${c.id}')" data-mcust="${c.id}">${icon('eye')} Full details</button></td></tr>`).join('') : emptyRow(8, 'No customers')}

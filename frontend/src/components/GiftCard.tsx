@@ -3,7 +3,7 @@ import React from "react";
 import { StyleSheet, Text, View } from "react-native";
 
 import { grams } from "@/src/format";
-import { colors, fonts, radius } from "@/src/theme";
+import { colors, fonts, radius, themed } from "@/src/theme";
 
 export const GIFT_THEMES = [
   { id: "diwali", label: "Diwali", title: "Shubh Deepavali", bg: colors.giftDiwali, accent: colors.giftDiwaliAccent, Icon: Sparkles },
@@ -61,7 +61,7 @@ export function GiftCard({
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themed(() => ({
   card: { borderRadius: radius.md, borderWidth: 1.5, padding: 20, overflow: "hidden", minHeight: 200 },
   glow: { position: "absolute", width: 180, height: 180, borderRadius: 90, right: -60, top: -60, opacity: 0.18 },
   top: { flexDirection: "row", alignItems: "center", gap: 8 },
@@ -74,4 +74,4 @@ const styles = StyleSheet.create({
   grams: { fontFamily: fonts.black, fontSize: 20, color: colors.onSurfaceInverse, letterSpacing: -0.5 },
   k: { fontFamily: fonts.semibold, fontSize: 11 },
   from: { fontFamily: fonts.semibold, fontSize: 13, maxWidth: 120 },
-});
+}));

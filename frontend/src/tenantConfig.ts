@@ -16,6 +16,7 @@ export type TenantTheme = {
   secondaryColor: string;
   accentColor: string;
   backgroundColor?: string;
+  textColor?: string;
   font: string;
   cardRadius?: number;
 };
@@ -32,6 +33,7 @@ export type TenantConfig = {
   homeLayout: HomeSection[] | null;
   assets: { logoUrl: string; splashUrl: string };
   support?: { phone: string; email: string };
+  storeInfo?: { name: string; address: string; city: string; state: string; pincode: string; phone: string; lat?: number | null; lng?: number | null; hours?: string };
 };
 
 export const tenantConfig = raw as TenantConfig;
@@ -39,6 +41,6 @@ export const tenantConfig = raw as TenantConfig;
 /** Jeweller this build is locked to ("" in the base app). */
 export const LOCKED_TENANT_ID = tenantConfig.tenantId || "";
 
-export const DEFAULT_HOME_LAYOUT: HomeSection[] = ["prices", "karats", "sip", "banners", "buy", "categories", "trending", "promos"];
+export const DEFAULT_HOME_LAYOUT: HomeSection[] = ["prices", "banners", "trending", "karats", "sip", "buy", "categories", "promos"];
 
 export const homeLayout: HomeSection[] = tenantConfig.homeLayout?.length ? tenantConfig.homeLayout : DEFAULT_HOME_LAYOUT;

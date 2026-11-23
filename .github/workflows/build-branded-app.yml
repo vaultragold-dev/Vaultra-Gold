@@ -107,6 +107,17 @@ jobs:
                   j.primary_color = thm.get("primaryColor") or ""
                   j.secondary_color = thm.get("secondaryColor") or ""
                   j.accent_color = thm.get("accentColor") or ""
+                  j.background_color = thm.get("backgroundColor") or ""
+                  j.text_color = thm.get("textColor") or ""
+                  si = data.get("storeInfo") or {}
+                  j.address = si.get("address") or ""
+                  j.city = si.get("city") or j.city
+                  j.state = si.get("state") or ""
+                  j.pincode = si.get("pincode") or ""
+                  j.phone = si.get("phone") or ""
+                  j.store_lat = si.get("lat")
+                  j.store_lng = si.get("lng")
+                  j.store_hours = si.get("hours") or ""
                   assets = data.get("assets") or {}
                   if assets.get("logoUrl"):
                       j.logo_url = assets["logoUrl"]

@@ -7,7 +7,7 @@ import { useToast } from "@/src/components/Toast";
 import { Button, Sheet } from "@/src/components/ui";
 import { inr } from "@/src/format";
 import { useApp } from "@/src/store/AppContext";
-import { colors, fonts, radius } from "@/src/theme";
+import { colors, fonts, radius, themed } from "@/src/theme";
 
 // ----- Banner on home when price drops -----
 export function PriceAlertBanner() {
@@ -188,7 +188,7 @@ export function PriceAlertCard() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themed(() => ({
   banner: {
     flexDirection: "row",
     alignItems: "center",
@@ -250,4 +250,4 @@ const styles = StyleSheet.create({
   alertTarget: { fontFamily: fonts.bold, fontSize: 15, color: colors.onSurface },
   alertMeta: { fontFamily: fonts.regular, fontSize: 12, color: colors.muted, marginTop: 2 },
   removeText: { fontFamily: fonts.semibold, fontSize: 13, color: colors.error },
-});
+}));

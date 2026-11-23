@@ -13,7 +13,7 @@ import { RedeemSheet } from "@/src/components/Product";
 import { Button } from "@/src/components/ui";
 import { grams, inr } from "@/src/format";
 import { useApp } from "@/src/store/AppContext";
-import { cardShadow, colors, fonts, radius } from "@/src/theme";
+import { cardShadow, colors, fonts, radius, themed } from "@/src/theme";
 
 type ProductDetail = {
   id: string;
@@ -204,7 +204,7 @@ export default function ProductDetailScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themed(() => ({
   root: { flex: 1, backgroundColor: "transparent" },
   center: { flex: 1, alignItems: "center", justifyContent: "center", gap: 12 },
   errorText: { fontFamily: fonts.medium, fontSize: 16, color: colors.muted },
@@ -304,4 +304,4 @@ const styles = StyleSheet.create({
   },
   ctaPrice: { fontFamily: fonts.black, fontSize: 22, color: colors.onSurface, letterSpacing: -0.5 },
   ctaSub: { fontFamily: fonts.regular, fontSize: 12, color: colors.muted },
-});
+}));

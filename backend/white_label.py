@@ -19,27 +19,27 @@ THEME_PRESETS = {
     "royal_gold": {
         "label": "Royal Gold", "primaryColor": "#D4AF37", "secondaryColor": "#8A6E1C", "accentColor": "#111827",
         "backgroundColor": "#FDF8E8", "font": "Inter", "cardRadius": 18,
-        "homeLayout": ["prices", "karats", "sip", "banners", "buy", "categories", "trending", "promos"],
+        "homeLayout": ["prices", "banners", "trending", "karats", "sip", "buy", "categories", "promos"],
     },
     "midnight_luxe": {
         "label": "Midnight Luxe", "primaryColor": "#C9A227", "secondaryColor": "#334155", "accentColor": "#0B1220",
         "backgroundColor": "#F1F3F7", "font": "Inter", "cardRadius": 12,
-        "homeLayout": ["prices", "buy", "karats", "banners", "trending", "categories", "sip", "promos"],
+        "homeLayout": ["prices", "banners", "trending", "buy", "karats", "categories", "sip", "promos"],
     },
     "ivory_classic": {
         "label": "Ivory Classic", "primaryColor": "#A67C2E", "secondaryColor": "#5B4321", "accentColor": "#3A2E1F",
         "backgroundColor": "#FBF7EF", "font": "Inter", "cardRadius": 8,
-        "homeLayout": ["banners", "prices", "karats", "buy", "categories", "trending", "sip", "promos"],
+        "homeLayout": ["prices", "banners", "trending", "karats", "buy", "categories", "sip", "promos"],
     },
     "emerald_heritage": {
         "label": "Emerald Heritage", "primaryColor": "#C8A04A", "secondaryColor": "#0F5132", "accentColor": "#064E3B",
         "backgroundColor": "#F3F8F5", "font": "Inter", "cardRadius": 14,
-        "homeLayout": ["prices", "karats", "categories", "buy", "banners", "trending", "sip", "promos"],
+        "homeLayout": ["prices", "banners", "trending", "karats", "categories", "buy", "sip", "promos"],
     },
     "rose_gold": {
         "label": "Rose Gold", "primaryColor": "#B76E79", "secondaryColor": "#8C4A55", "accentColor": "#3B1F24",
         "backgroundColor": "#FDF4F3", "font": "Inter", "cardRadius": 22,
-        "homeLayout": ["prices", "sip", "buy", "karats", "trending", "banners", "categories", "promos"],
+        "homeLayout": ["prices", "banners", "trending", "sip", "buy", "karats", "categories", "promos"],
     },
 }
 DEFAULT_PRESET = "royal_gold"
@@ -95,6 +95,9 @@ def tenant_config(j, api_base, logo_bytes=None, splash_bytes=None):
         p["secondaryColor"] = j.secondary_color
     if getattr(j, "accent_color", None):
         p["accentColor"] = j.accent_color
+    if getattr(j, "background_color", None):
+        p["backgroundColor"] = j.background_color
+    p["textColor"] = getattr(j, "text_color", None) or p.get("textColor") or "#111827"
     short, long, kw = default_store_text(j)
     bundle = j.bundle_id or default_bundle_id(j.business_name)
     name = j.app_name or f"{j.business_name} Gold"
@@ -133,7 +136,7 @@ def tenant_config(j, api_base, logo_bytes=None, splash_bytes=None):
         "apiBaseUrl": api_base,
         "theme": {"preset": j.theme_preset or DEFAULT_PRESET, "primaryColor": p["primaryColor"],
                   "secondaryColor": p["secondaryColor"], "accentColor": p["accentColor"],
-                  "backgroundColor": p["backgroundColor"],
+                  "backgroundColor": p["backgroundColor"], "textColor": p.get("textColor") or "#111827",
                   "adaptiveIconBackground": adaptive_bg,
                   "splashBackground": splash_bg,
                   "font": p["font"], "cardRadius": p["cardRadius"]},
@@ -141,6 +144,10 @@ def tenant_config(j, api_base, logo_bytes=None, splash_bytes=None):
         "assets": {"logoUrl": abs_url(j.logo_url, api_base), "splashUrl": abs_url(j.splash_url, api_base),
                    "icon": "assets/icon.png", "adaptiveIcon": "assets/adaptive-icon.png", "splash": "assets/splash.png"},
         "support": {"phone": j.phone, "email": j.support_email or j.email},
+        "storeInfo": {"name": j.business_name, "address": getattr(j, "address", "") or "", "city": getattr(j, "city", "") or "",
+                      "state": getattr(j, "state", "") or "", "pincode": getattr(j, "pincode", "") or "",
+                      "phone": getattr(j, "phone", "") or "", "lat": getattr(j, "store_lat", None), "lng": getattr(j, "store_lng", None),
+                      "hours": getattr(j, "store_hours", "") or "10:00 AM – 8:00 PM (Mon–Sat)"},
         "store": {"shortDescription": j.store_short or short, "longDescription": j.store_long or long,
                   "keywords": j.store_keywords or kw,
                   "privacyPolicyUrl": f"{api_base}/api/tenant/{j.id}/privacy",
@@ -911,6 +918,9 @@ def build_app_kit(j, api_base, rates, logo_bytes=None, splash_bytes=None):
         p["secondaryColor"] = j.secondary_color
     if getattr(j, "accent_color", None):
         p["accentColor"] = j.accent_color
+    if getattr(j, "background_color", None):
+        p["backgroundColor"] = j.background_color
+    p["textColor"] = getattr(j, "text_color", None) or p.get("textColor") or "#111827"
     name = cfg["appName"]
     logo = Image.open(io.BytesIO(logo_bytes)) if logo_bytes else None
     splash_img = Image.open(io.BytesIO(splash_bytes)) if splash_bytes else None

@@ -1,4 +1,4 @@
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { ArrowLeft, KeyRound, ShieldCheck, Smartphone } from "lucide-react-native";
 import React, { useState } from "react";
 import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
@@ -11,7 +11,7 @@ import { LogoMark } from "@/src/components/Header";
 import { useToast } from "@/src/components/Toast";
 import { Button } from "@/src/components/ui";
 import { useApp } from "@/src/store/AppContext";
-import { colors, fonts, radius } from "@/src/theme";
+import { colors, fonts, radius, themed } from "@/src/theme";
 
 type Step = "phone" | "otp" | "register";
 
@@ -33,7 +33,8 @@ export default function Login() {
   const [email, setEmail] = useState("");
   const [dob, setDob] = useState("");
   const [gender, setGender] = useState("");
-  const [referralCode, setReferralCode] = useState("");
+  const params = useLocalSearchParams<{ ref?: string }>();
+  const [referralCode, setReferralCode] = useState(String(params.ref || "").toUpperCase());
 
   const requestOtp = async () => {
     setErr("");
@@ -272,7 +273,7 @@ export default function Login() {
   );
 }
 
-const styles = StyleSheet.create({
+const styles = themed(() => ({
   root: { flex: 1, backgroundColor: "transparent" },
   back: { width: 44, height: 44, justifyContent: "center", marginBottom: 16 },
   title: { fontFamily: fonts.black, fontSize: 28, letterSpacing: -1, color: colors.onSurface, marginTop: 20 },
@@ -308,4 +309,4 @@ const styles = StyleSheet.create({
   genderActive: { borderColor: colors.brandPrimary, backgroundColor: colors.brandTertiary },
   genderText: { fontFamily: fonts.semibold, fontSize: 14, color: colors.muted },
   genderActiveText: { color: colors.brandSecondary },
-});
+}));
