@@ -364,17 +364,25 @@ function vCustomers() {
 }
 
 /* ── KYC ──────────────────────────────── */
-async function loadKyc() { try { S.kyc = await api('/jeweller/kyc-queue'); } catch (e) { toast(e.message, true); } if (S.tab === 'kyc') render(); }
+async function loadKyc() { try { const [q, u] = await Promise.all([api('/jeweller/kyc-queue'), api('/jeweller/v3/kyc-usage').catch(() => null)]); S.kyc = q; S.kycUsage = u; } catch (e) { toast(e.message, true); } if (S.tab === 'kyc') render(); }
 function vKyc() {
-  const head = `<div class="page-head"><div><h2>KYC</h2><p>Verify customer identity before they redeem metal.</p></div></div>`;
+  const head = `<div class="page-head"><div><h2>KYC</h2><p>Customers verify PAN instantly in the app — matching names are approved automatically. Only mismatches and manual submissions wait here.</p></div></div>`;
   if (!S.kyc) return head + loading;
-  return head + `<div class="card"><div class="card-h"><h3>Pending review</h3><span class="badge amber">${S.kyc.length} waiting</span></div>
-    <div class="table-wrap"><table><thead><tr><th>Customer</th><th>PAN</th><th>Aadhaar</th><th>Submitted details</th><th>Photo</th><th></th></tr></thead><tbody>
+  const u = S.kycUsage;
+  const usage = u ? `<div class="grid g4" style="margin-bottom:16px">
+      ${kpi('PAN checks (this month)', u.usage.pan || 0, inr(u.charges.pan) + ' each', 'kyc', 'green')}
+      ${kpi('Aadhaar (DigiLocker)', u.usage.digilocker || 0, inr(u.charges.digilocker) + ' each', 'shield', 'blue')}
+      ${kpi('Bank verifications', u.usage.bank || 0, inr(u.charges.bank) + ' each', 'wallet', 'gray')}
+      ${kpi('KYC charges this month', inr(u.usage.charge || 0), 'payable to Vaultra', 'invoice')}
+    </div>` : '';
+  return head + usage + `<div class="card"><div class="card-h"><h3>Pending review</h3><span class="badge amber">${S.kyc.length} waiting</span></div>
+    <div class="table-wrap"><table><thead><tr><th>Customer</th><th>PAN</th><th>Aadhaar</th><th>Submitted details</th><th>Instant checks</th><th>Photo</th><th></th></tr></thead><tbody>
     ${S.kyc.length ? S.kyc.map((c) => { const k = c.kyc || {}; return `<tr><td><b>${esc(c.name)}</b><div class="sub">${phoneFmt(c.phone)}</div></td>
       <td><code>${esc(k.pan || '—')}</code></td><td><code>${esc(k.aadhaar ? 'XXXX XXXX ' + String(k.aadhaar).slice(-4) : '—')}</code></td>
       <td>${esc(k.name || k.full_name || c.name)}<div class="sub">${esc(k.dob || c.dob || '')}</div></td>
+      <td>${kycAutoBadges(k)}${k.note ? `<div class="sub" style="color:#B54708">${esc(k.note)}</div>` : ''}</td>
       <td>${k.photo_id ? '<span class="badge green plain">Added</span>' : '<span class="badge plain">None</span>'}</td>
-      <td class="r" style="white-space:nowrap"><button class="btn sm" onclick="kycView('${c.id}')" data-kyc-view="${c.id}">${icon('eye')} Full details</button> <button class="btn sm danger" onclick="decideKyc('${c.id}',false)">Reject</button> <button class="btn sm primary" onclick="decideKyc('${c.id}',true)">Approve</button></td></tr>`; }).join('') : emptyRow(6, 'All caught up', 'No KYC requests are waiting.')}
+      <td class="r" style="white-space:nowrap"><button class="btn sm" onclick="kycView('${c.id}')" data-kyc-view="${c.id}">${icon('eye')} Full details</button> <button class="btn sm danger" onclick="decideKyc('${c.id}',false)">Reject</button> <button class="btn sm primary" onclick="decideKyc('${c.id}',true)">Approve</button></td></tr>`; }).join('') : emptyRow(7, 'All caught up', 'No KYC requests are waiting.')}
     </tbody></table></div></div>`;
 }
 function kycView(id) {

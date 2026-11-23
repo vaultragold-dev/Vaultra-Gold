@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import time
 import os, re, json, logging, uuid, random, asyncio, hmac, hashlib, secrets, math
 import white_label as wl
+import kyc_setu as ks
 import bcrypt, jwt
 
 ROOT_DIR = Path(__file__).parent
@@ -24,7 +25,7 @@ from database import get_db, init_db, AsyncSessionLocal
 from models import (
     Jeweller, Customer, OtpChallenge, Transaction, Order, PoolAccumulator,
     PoolContribution, BifurcationInvoice, Product, Pickup, SIP, Alert, Goal,
-    Gift, Notification, WalletTransaction, Quote, MasterAdmin
+    Gift, Notification, WalletTransaction, Quote, MasterAdmin, KycCheck
 )
 
 JWT_SECRET = os.environ['JWT_SECRET']
@@ -1428,6 +1429,387 @@ async def kyc_submit(body: KycSubmit, customer: Customer = Depends(get_current_c
     return customer_dict(customer)
 
 
+# ─── Automated KYC (Setu: PAN · DigiLocker Aadhaar · Reverse Penny Drop bank) ──
+KYC_CFG = {
+    "enabled": True,
+    "mode": (os.environ.get("SETU_KYC_MODE") or "sandbox").lower(),
+    "client_id": SETU_CLIENT_ID, "client_secret": SETU_CLIENT_SECRET,
+    "products": dict(ks.DEFAULT_PRODUCTS),
+    "auto_approve": True,             # PAN valid + name matches → KYC approved instantly
+    "min_name_match": 0.6,
+    "require_aadhaar_redeem": False,  # ask DigiLocker before physical redemption
+    "require_bank_redeem": False,     # ask bank verification before redemption
+    "charges": {"pan": 5.0, "digilocker": 5.0, "bank": 3.0},  # billed to the shop per successful check
+}
+KYC_KINDS = ("pan", "digilocker", "bank")
+
+
+async def load_kyc_cfg():
+    saved = await _setting("kyc_setu")
+    if saved:
+        try:
+            d = json.loads(saved)
+            KYC_CFG.update({k: v for k, v in d.items() if k in KYC_CFG})
+        except ValueError:
+            pass
+
+
+def _kyc_public_cfg():
+    c = dict(KYC_CFG)
+    sec = c.pop("client_secret", "") or ""
+    c["client_secret_masked"] = ("•" * 8 + sec[-4:]) if sec else ""
+    c["configured"] = bool(c.get("client_id") and sec)
+    return c
+
+
+def _kyc_auto(customer) -> dict:
+    return dict((customer.kyc_data or {}).get("auto") or {})
+
+
+def _profile_name(c) -> str:
+    n = f"{c.first_name or ''} {c.last_name or ''}".strip()
+    return "" if n.lower().startswith("gold ") or n.lower() in ("gold", "gold user", "customer") else n
+
+
+async def _kyc_record(db, customer, kind, ref="", status="created", result=None, return_url=""):
+    chk = KycCheck(id=str(uuid.uuid4()), customer_id=customer.id, jeweller_id=customer.jeweller_id, kind=kind,
+                   mode=KYC_CFG["mode"], ref=ref or "", status=status, result=result or {}, return_url=return_url or "",
+                   charge=float(KYC_CFG["charges"].get(kind, 0)) if status == "success" else 0.0)
+    db.add(chk)
+    return chk
+
+
+def _kyc_mark(chk, status, result=None):
+    chk.status = status
+    if result is not None:
+        chk.result = result
+    chk.charge = float(KYC_CFG["charges"].get(chk.kind, 0)) if status == "success" else 0.0
+    chk.updated_at = now_utc()
+
+
+def _kyc_evaluate(customer):
+    """Decide KYC status from the automated checks. Never downgrades an approved KYC."""
+    auto = _kyc_auto(customer)
+    pan = auto.get("pan") or {}
+    if not pan.get("verified"):
+        return
+    names = [n for n in (_profile_name(customer), (auto.get("aadhaar") or {}).get("name"), (auto.get("bank") or {}).get("name")) if n]
+    score = max([ks.name_match(pan.get("name", ""), n) for n in names] or [1.0])  # no other name yet → PAN name becomes the account name
+    auto["name_score"] = round(score, 2)
+    data = dict(customer.kyc_data or {})
+    data["auto"] = auto
+    data["full_name"] = pan.get("name") or data.get("full_name")
+    data["pan"] = pan.get("pan_masked") or data.get("pan")
+    if customer.kyc_status == "approved":
+        customer.kyc_data = data
+        return
+    if KYC_CFG["auto_approve"] and score >= float(KYC_CFG["min_name_match"]):
+        customer.kyc_status = "approved"
+        data["reviewed_by"] = "Auto (Setu PAN verification)"
+        data["reviewed_at"] = now_iso()
+        data["note"] = ""
+        if not _profile_name(customer) and pan.get("name"):
+            parts = pan["name"].title().split()
+            customer.first_name, customer.last_name = parts[0], " ".join(parts[1:])
+    else:
+        customer.kyc_status = "pending"
+        data["submitted_at"] = data.get("submitted_at") or now_iso()
+        data["note"] = f"Name on PAN ({pan.get('name')}) does not match the profile name — please review"
+    customer.kyc_data = data
+
+
+def _kyc_set(customer, key, value):
+    data = dict(customer.kyc_data or {})
+    auto = dict(data.get("auto") or {})
+    auto[key] = value
+    data["auto"] = auto
+    customer.kyc_data = data
+
+
+def _kyc_steps(customer):
+    auto = _kyc_auto(customer)
+    return {"kyc_status": customer.kyc_status, "enabled": KYC_CFG["enabled"] and _kyc_public_cfg()["configured"], "mode": KYC_CFG["mode"],
+            "pan": auto.get("pan") or {}, "aadhaar": auto.get("aadhaar") or {}, "bank": auto.get("bank") or {},
+            "require_aadhaar_redeem": KYC_CFG["require_aadhaar_redeem"], "require_bank_redeem": KYC_CFG["require_bank_redeem"],
+            "note": (customer.kyc_data or {}).get("note", "")}
+
+
+def _kyc_guard():
+    if not KYC_CFG["enabled"] or not _kyc_public_cfg()["configured"]:
+        raise HTTPException(503, "Instant KYC is not available right now. Please use manual KYC.")
+
+
+class KycPanBody(BaseModel):
+    pan: str = Field(min_length=10, max_length=10)
+
+
+@api.get("/kyc/status")
+async def kyc_status(customer: Customer = Depends(get_current_customer)):
+    return _kyc_steps(customer)
+
+
+@api.post("/kyc/pan")
+async def kyc_pan(body: KycPanBody, customer: Customer = Depends(get_current_customer), db: AsyncSession = Depends(get_db)):
+    _kyc_guard()
+    pan = body.pan.strip().upper()
+    if not re.fullmatch(r"[A-Z]{5}[0-9]{4}[A-Z]", pan):
+        raise HTTPException(400, "Enter a valid PAN (e.g. ABCDE1234F)")
+    if (_kyc_auto(customer).get("pan") or {}).get("verified") and customer.kyc_status == "approved":
+        return _kyc_steps(customer)
+    h = hashlib.sha256(f"{customer.jeweller_id}:{pan}".encode()).hexdigest()
+    dup = (await db.execute(select(KycCheck.id).where(KycCheck.kind == "pan", KycCheck.status == "success", KycCheck.jeweller_id == customer.jeweller_id,
+                                                      KycCheck.customer_id != customer.id, KycCheck.result["pan_hash"].as_string() == h))).first()
+    if dup:
+        raise HTTPException(409, "This PAN is already linked to another account at this store")
+    try:
+        r = await ks.verify_pan(KYC_CFG, pan)
+    except ks.SetuError as e:
+        await _kyc_record(db, customer, "pan", status="failed", result={"error": str(e)[:200]})
+        await db.commit()
+        raise HTTPException(e.status, str(e))
+    if not r["valid"]:
+        await _kyc_record(db, customer, "pan", status="failed", result={"error": r.get("message") or "invalid"})
+        await db.commit()
+        raise HTTPException(400, "PAN could not be verified. Please check the number and try again.")
+    info = {"verified": True, "name": r["name"], "pan_masked": ks.mask(pan), "aadhaar_linked": r["aadhaar_linked"], "at": now_iso()}
+    await _kyc_record(db, customer, "pan", ref=r.get("trace", ""), status="success", result={**info, "pan_hash": h})
+    _kyc_set(customer, "pan", info)
+    _kyc_evaluate(customer)
+    await db.commit()
+    await db.refresh(customer)
+    return _kyc_steps(customer)
+
+
+class KycStartBody(BaseModel):
+    return_url: str = Field(default="", max_length=400)
+
+
+def _safe_return(u: str) -> str:
+    # app deep links (scheme://...) or our own https pages only
+    return u if re.match(r"^[a-z][a-z0-9+.-]*://", u or "") and not u.lower().startswith(("javascript:", "data:")) else ""
+
+
+async def _digilocker_finish(db, chk, customer):
+    if chk.status == "success":
+        return True
+    st = await ks.digilocker_status(KYC_CFG, chk.ref)
+    if st not in ("authenticated", "success", "completed"):
+        return False
+    a = await ks.digilocker_aadhaar(KYC_CFG, chk.ref)
+    info = {"verified": True, "name": a["name"], "dob": a["dob"], "gender": a["gender"], "aadhaar_last4": a["aadhaar_last4"],
+            "city": a["city"], "state": a["state"], "pincode": a["pincode"], "at": now_iso()}
+    _kyc_mark(chk, "success", info)
+    _kyc_set(customer, "aadhaar", info)
+    _kyc_evaluate(customer)
+    return True
+
+
+@api.post("/kyc/digilocker/start")
+async def kyc_digilocker_start(body: KycStartBody, request: Request, customer: Customer = Depends(get_current_customer), db: AsyncSession = Depends(get_db)):
+    _kyc_guard()
+    chk = await _kyc_record(db, customer, "digilocker", return_url=_safe_return(body.return_url))
+    await db.flush()
+    try:
+        r = await ks.digilocker_start(KYC_CFG, f"{_public_base(request)}/api/kyc/setu/callback?kid={chk.id}")
+    except ks.SetuError as e:
+        _kyc_mark(chk, "failed", {"error": str(e)[:200]})
+        await db.commit()
+        raise HTTPException(e.status, str(e))
+    if not r["url"]:
+        raise HTTPException(502, "DigiLocker did not return a link. Please try again.")
+    chk.ref = r["id"]
+    await db.commit()
+    return {"kid": chk.id, "url": r["url"]}
+
+
+@api.post("/kyc/digilocker/{kid}/complete")
+async def kyc_digilocker_complete(kid: str, customer: Customer = Depends(get_current_customer), db: AsyncSession = Depends(get_db)):
+    chk = (await db.execute(select(KycCheck).where(KycCheck.id == kid, KycCheck.customer_id == customer.id, KycCheck.kind == "digilocker"))).scalar_one_or_none()
+    if not chk:
+        raise HTTPException(404, "Verification not found")
+    try:
+        done = await _digilocker_finish(db, chk, customer)
+    except ks.SetuError as e:
+        raise HTTPException(e.status, str(e))
+    await db.commit()
+    await db.refresh(customer)
+    return {"done": done, **_kyc_steps(customer)}
+
+
+@app.get("/api/kyc/setu/callback", response_class=HTMLResponse)
+async def kyc_setu_callback(kid: str = "", db: AsyncSession = Depends(get_db)):
+    """Customer lands here after DigiLocker; we finish the check and send them back to the app."""
+    chk = (await db.execute(select(KycCheck).where(KycCheck.id == kid))).scalar_one_or_none() if kid else None
+    ok = False
+    if chk and chk.kind == "digilocker":
+        customer = (await db.execute(select(Customer).where(Customer.id == chk.customer_id))).scalar_one_or_none()
+        try:
+            ok = bool(customer) and await _digilocker_finish(db, chk, customer)
+            await db.commit()
+        except ks.SetuError:
+            ok = False
+    back = (chk.return_url if chk else "") or ""
+    target = f"{back}{'&' if '?' in back else '?'}kyc={'success' if ok else 'pending'}" if back else ""
+    msg = "Aadhaar verified successfully ✓" if ok else "Verification not completed yet"
+    js = f"<script>setTimeout(function(){{location.href={json.dumps(target)}}},600)</script>" if target else ""
+    return HTMLResponse(f"""<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>KYC</title></head>
+<body style="font-family:system-ui,sans-serif;display:grid;place-items:center;min-height:90vh;text-align:center;color:#1f2937">
+<div><div style="font-size:48px">{'✅' if ok else '⏳'}</div><h2>{msg}</h2><p>You can return to the app now.</p>
+{f'<a href="{target}" style="display:inline-block;margin-top:8px;padding:12px 22px;border-radius:999px;background:#111827;color:#fff;text-decoration:none">Back to app</a>' if target else ''}
+</div>{js}</body></html>""")
+
+
+@api.post("/kyc/bank/start")
+async def kyc_bank_start(body: KycStartBody, customer: Customer = Depends(get_current_customer), db: AsyncSession = Depends(get_db)):
+    _kyc_guard()
+    chk = await _kyc_record(db, customer, "bank", return_url=_safe_return(body.return_url))
+    await db.flush()
+    try:
+        r = await ks.bank_rpd_start(KYC_CFG, chk.return_url, ref=chk.id)
+    except ks.SetuError as e:
+        _kyc_mark(chk, "failed", {"error": str(e)[:200]})
+        await db.commit()
+        raise HTTPException(e.status, str(e))
+    chk.ref = r["id"]
+    await db.commit()
+    return {"kid": chk.id, "url": r["short_url"], "upi_link": r["upi_link"]}
+
+
+def _bank_apply(chk, customer, p):
+    if p["success"]:
+        info = {"verified": True, "name": p["name"], "account_masked": p["account_masked"], "ifsc": p["ifsc"], "bank": p["bank"], "at": now_iso()}
+        _kyc_mark(chk, "success", info)
+        _kyc_set(customer, "bank", info)
+        _kyc_evaluate(customer)
+    elif p["failed"]:
+        _kyc_mark(chk, "failed", {"status": p["status"]})
+
+
+@api.get("/kyc/bank/{kid}")
+async def kyc_bank_status(kid: str, customer: Customer = Depends(get_current_customer), db: AsyncSession = Depends(get_db)):
+    chk = (await db.execute(select(KycCheck).where(KycCheck.id == kid, KycCheck.customer_id == customer.id, KycCheck.kind == "bank"))).scalar_one_or_none()
+    if not chk:
+        raise HTTPException(404, "Verification not found")
+    if chk.status == "created" and chk.ref:
+        try:
+            _bank_apply(chk, customer, await ks.bank_rpd_status(KYC_CFG, chk.ref))
+            await db.commit()
+            await db.refresh(customer)
+        except ks.SetuError:
+            pass
+    return {"status": chk.status, **_kyc_steps(customer)}
+
+
+@app.post("/api/kyc/setu/webhook")
+async def kyc_setu_webhook(request: Request, db: AsyncSession = Depends(get_db)):
+    """Setu notifications (Reverse Penny Drop result). Always answers 200 so Setu does not retry forever."""
+    try:
+        payload = await request.json()
+    except ValueError:
+        return {"ok": False}
+    p = ks.parse_rpd(payload if isinstance(payload, dict) else {})
+    rid = p.get("id") or str((payload.get("data") or {}).get("requestId", "")) if isinstance(payload, dict) else ""
+    chk = (await db.execute(select(KycCheck).where(KycCheck.ref == rid, KycCheck.kind == "bank"))).scalar_one_or_none() if rid else None
+    if chk and chk.status == "created":
+        customer = (await db.execute(select(Customer).where(Customer.id == chk.customer_id))).scalar_one_or_none()
+        if customer:
+            _bank_apply(chk, customer, p)
+            await db.commit()
+    return {"ok": True}
+
+
+def require_redeem_kyc(customer):
+    if customer.kyc_status != "approved":
+        raise HTTPException(403, "Complete KYC to redeem gold or silver")
+    auto = _kyc_auto(customer)
+    if KYC_CFG["require_aadhaar_redeem"] and not (auto.get("aadhaar") or {}).get("verified"):
+        raise HTTPException(403, "Please verify your Aadhaar with DigiLocker (Profile → KYC) before redeeming")
+    if KYC_CFG["require_bank_redeem"] and not (auto.get("bank") or {}).get("verified"):
+        raise HTTPException(403, "Please verify your bank account (Profile → KYC) before redeeming")
+
+
+def _month_start():
+    n = now_utc()
+    return n.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+
+async def _kyc_usage(db, jid: Optional[str] = None, since=None):
+    since = since or _month_start()
+    q = select(KycCheck.jeweller_id, KycCheck.kind, func.count(), func.coalesce(func.sum(KycCheck.charge), 0)).where(
+        KycCheck.status == "success", KycCheck.created_at >= since)
+    if jid:
+        q = q.where(KycCheck.jeweller_id == jid)
+    rows = (await db.execute(q.group_by(KycCheck.jeweller_id, KycCheck.kind))).all()
+    shops = {}
+    for j, kind, n, amt in rows:
+        s = shops.setdefault(j, {"jeweller_id": j, "pan": 0, "digilocker": 0, "bank": 0, "charge": 0.0})
+        s[kind] = int(n)
+        s["charge"] = r2(s["charge"] + float(amt or 0))
+    return list(shops.values())
+
+
+@api.get("/jeweller/v3/kyc-usage")
+async def jp_kyc_usage(jeweller: Jeweller = Depends(get_current_jeweller), db: AsyncSession = Depends(get_db)):
+    u = await _kyc_usage(db, jeweller.id)
+    return {"month": _month_start().isoformat(), "usage": u[0] if u else {"pan": 0, "digilocker": 0, "bank": 0, "charge": 0.0},
+            "charges": KYC_CFG["charges"], "auto_enabled": KYC_CFG["enabled"]}
+
+
+@api.get("/master/v3/kyc-settings")
+async def mp_kyc_settings(admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
+    usage = await _kyc_usage(db)
+    names = {j.id: j.business_name for j in (await db.execute(select(Jeweller))).scalars().all()}
+    for u in usage:
+        u["shop"] = names.get(u["jeweller_id"], u["jeweller_id"])
+    return {"config": _kyc_public_cfg(), "usage": usage, "month": _month_start().isoformat()}
+
+
+class KycSettingsBody(BaseModel):
+    enabled: bool = True
+    mode: str = "sandbox"
+    client_id: str = Field(default="", max_length=120)
+    client_secret: str = Field(default="", max_length=200)  # empty = keep current
+    products: dict = {}
+    auto_approve: bool = True
+    min_name_match: float = Field(default=0.6, ge=0.2, le=1.0)
+    require_aadhaar_redeem: bool = False
+    require_bank_redeem: bool = False
+    charges: dict = {}
+
+
+@api.put("/master/v3/kyc-settings")
+async def mp_kyc_settings_put(body: KycSettingsBody, admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
+    if body.mode not in ("sandbox", "production"):
+        raise HTTPException(400, "Mode must be sandbox or production")
+    KYC_CFG.update({"enabled": body.enabled, "mode": body.mode, "auto_approve": body.auto_approve, "min_name_match": body.min_name_match,
+                    "require_aadhaar_redeem": body.require_aadhaar_redeem, "require_bank_redeem": body.require_bank_redeem})
+    if body.client_id.strip():
+        KYC_CFG["client_id"] = body.client_id.strip()
+    if body.client_secret.strip():
+        KYC_CFG["client_secret"] = body.client_secret.strip()
+    for k in KYC_KINDS:
+        v = str((body.products or {}).get(k, "")).strip()
+        if v:
+            KYC_CFG["products"][k] = v
+        c = (body.charges or {}).get(k)
+        if c is not None:
+            KYC_CFG["charges"][k] = max(0.0, min(500.0, float(c)))
+    await _setting("kyc_setu", json.dumps(KYC_CFG))
+    await audit(db, "master", admin, "kyc.settings", "platform", {"mode": body.mode, "enabled": body.enabled}, None)
+    await db.commit()
+    return {"ok": True, "config": _kyc_public_cfg()}
+
+
+@api.post("/master/v3/kyc-settings/test")
+async def mp_kyc_settings_test(admin: MasterAdmin = Depends(get_master_admin)):
+    """Checks the Setu keys with a PAN lookup (sandbox test PAN)."""
+    try:
+        r = await ks.verify_pan(KYC_CFG, "ABCDE1234A")
+        return {"ok": True, "message": f"Connected to Setu ({KYC_CFG['mode']}) — PAN API answered{': ' + r['name'] if r.get('name') else ''}"}
+    except ks.SetuError as e:
+        return {"ok": False, "message": str(e)}
+
+
 # ─── Vault ────────────────────────────────────────────────────────────────────
 @api.get("/vault")
 async def vault(customer: Customer = Depends(get_current_customer), db: AsyncSession = Depends(get_db)):
@@ -1975,6 +2357,7 @@ async def sell_disabled(customer: Customer = Depends(get_current_customer)):
 
 @api.post("/redeem")
 async def redeem(body: RedeemRequest, customer: Customer = Depends(get_current_customer), db: AsyncSession = Depends(get_db)):
+    require_redeem_kyc(customer)
     # Check minimum redemption for their jeweller
     j_result = await db.execute(select(Jeweller).where(Jeweller.id == customer.jeweller_id))
     jeweller = j_result.scalar_one_or_none()
@@ -3961,8 +4344,7 @@ async def rr_create(body: RedeemGrams, customer: Customer = Depends(get_current_
     min_g = 10.0 if is_silver else max(1.0, (j.min_redemption_grams if j else 1.0) or 1.0)
     if grams < min_g:
         raise HTTPException(400, f"Minimum redemption is {min_g:g}g")
-    if customer.kyc_status != "approved":
-        raise HTTPException(403, "Complete KYC to redeem gold or silver")
+    require_redeem_kyc(customer)
     if grams > user_bal:
         raise HTTPException(400, f"You have only {r4(user_bal)}g in your vault")
     open_req = (await db.execute(select(Pickup.id).where(Pickup.customer_id == customer.id, Pickup.status == "requested"))).first()
@@ -4805,6 +5187,7 @@ async def startup():
     async with AsyncSessionLocal() as db:
         for j in (await db.execute(select(Jeweller))).scalars().all():
             cache_margins(j)
+    await load_kyc_cfg()
     saved_ctl = await _setting("platform_controls")
     if saved_ctl:
         CONTROLS.update(json.loads(saved_ctl))

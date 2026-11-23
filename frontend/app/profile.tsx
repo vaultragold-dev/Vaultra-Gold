@@ -14,6 +14,7 @@ import { LogoMark } from "@/src/components/Header";
 import { useToast } from "@/src/components/Toast";
 import { Button, Card, Row, StatusBadge } from "@/src/components/ui";
 import { grams, maskPhone, shortDate } from "@/src/format";
+import { InstantKyc, useKycSteps } from "@/src/components/InstantKyc";
 import { useApp } from "@/src/store/AppContext";
 import { colors, fonts, radius, useTheme, themed } from "@/src/theme";
 
@@ -101,6 +102,9 @@ export default function Profile() {
   };
 
   const kyc = user?.kyc_status ?? "not_submitted";
+  const { steps, setSteps } = useKycSteps();
+  const [manualOpen, setManualOpen] = useState(false);
+  const instant = !!steps?.enabled;
 
   const confirmDeleteAccount = () => {
     Alert.alert(
@@ -205,12 +209,20 @@ export default function Profile() {
             <Text style={styles.section}>KYC Verification</Text>
           </View>
           {kyc === "approved" ? (
-            <Text style={styles.meta}>Verified. You can redeem gold and silver at the store.</Text>
+            <Text style={styles.meta}>Verified. You can buy and redeem gold and silver.</Text>
           ) : kyc === "pending" ? (
-            <Text style={styles.meta} testID="kyc-pending-text">Under review by store staff.</Text>
+            <Text style={styles.meta} testID="kyc-pending-text">{steps?.note || "Under review by store staff."}</Text>
           ) : (
+            <Text style={styles.meta}>{kyc === "rejected" ? "Rejected. Please verify again." : instant ? "Verify your PAN in seconds to start buying." : "Required to buy and redeem gold and silver."}</Text>
+          )}
+          {instant && steps ? <InstantKyc steps={steps} setSteps={setSteps} /> : null}
+          {instant && kyc !== "approved" && kyc !== "pending" ? (
+            <Pressable onPress={() => setManualOpen((v) => !v)} style={{ paddingVertical: 12 }} testID="kyc-manual-toggle">
+              <Text style={[styles.meta, { color: colors.brandDeep, fontFamily: fonts.semibold }]}>{manualOpen ? "Hide manual KYC" : "Having trouble? Submit documents manually"}</Text>
+            </Pressable>
+          ) : null}
+          {kyc === "approved" || kyc === "pending" || (instant && !manualOpen) ? null : (
             <>
-              <Text style={styles.meta}>{kyc === "rejected" ? "Rejected. Please resubmit." : "Required to redeem coins and jewellery."}</Text>
               <Text style={styles.label}>Full name (as on PAN)</Text>
               <TextInput testID="kyc-name-input" value={fullName} onChangeText={setFullName} style={styles.input} placeholder="Full name" placeholderTextColor={colors.mutedLight} />
               <Text style={styles.label}>Aadhaar number</Text>

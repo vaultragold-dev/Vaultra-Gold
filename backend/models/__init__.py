@@ -456,3 +456,21 @@ class ShopPayment(Base):
     note = Column(Text, default="")
     created_by = Column(String(120), default="")
     created_at = Column(DateTime(timezone=True), default=utcnow)
+
+
+class KycCheck(Base):
+    """One automated KYC verification (Setu PAN / DigiLocker / Reverse Penny Drop) — also the billing ledger."""
+    __tablename__ = "kyc_checks"
+    id = Column(String, primary_key=True, default=gen_uuid)
+    customer_id = Column(String, ForeignKey("customers.id"), nullable=False, index=True)
+    jeweller_id = Column(String, ForeignKey("jewellers.id"), nullable=False, index=True)
+    kind = Column(String(20), nullable=False)  # pan, digilocker, bank
+    provider = Column(String(20), default="setu")
+    mode = Column(String(12), default="sandbox")  # sandbox | production
+    ref = Column(String(120), default="", index=True)  # provider request id
+    status = Column(String(20), default="created")  # created, success, failed, expired
+    result = Column(JSON, default=dict)  # masked, non-sensitive summary only
+    return_url = Column(String(500), default="")
+    charge = Column(Float, default=0.0)  # billed to the shop when successful
+    created_at = Column(DateTime(timezone=True), default=utcnow)
+    updated_at = Column(DateTime(timezone=True), default=utcnow)

@@ -184,6 +184,25 @@ async function photoInto(elId, path, tokenKey) {
     el.innerHTML = `<img src="${URL.createObjectURL(await r.blob())}" alt="KYC photo" style="width:100%;height:100%;object-fit:cover;border-radius:12px">`;
   } catch { const el = document.getElementById(elId); if (el) el.innerHTML = '<span>Photo unavailable</span>'; }
 }
+/* Instant KYC (Setu) badges + detail rows */
+function kycAutoBadges(k) {
+  const a = (k && k.auto) || {};
+  const b = (ok, label) => `<span class="badge ${ok ? 'green' : 'plain'}" style="margin:0 4px 4px 0">${ok ? '✓' : '·'} ${label}</span>`;
+  if (!a.pan && !a.aadhaar && !a.bank) return '<span class="sub">Manual</span>';
+  return b(a.pan && a.pan.verified, 'PAN') + b(a.aadhaar && a.aadhaar.verified, 'Aadhaar') + b(a.bank && a.bank.verified, 'Bank');
+}
+function kycAutoRows(k) {
+  const a = (k && k.auto) || {};
+  if (!a.pan && !a.aadhaar && !a.bank) return '';
+  const row = (l, v) => `<div class="kv"><span>${l}</span><b>${v}</b></div>`;
+  const p = a.pan || {}, ad = a.aadhaar || {}, bk = a.bank || {};
+  return `<div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--line2)"><div style="font-weight:700;margin-bottom:6px">Instant verification (Setu)</div>
+    ${row('PAN', p.verified ? `✅ ${esc(p.name || '')} · <code>${esc(p.pan_masked || '')}</code>` : '—')}
+    ${row('Aadhaar (DigiLocker)', ad.verified ? `✅ ${esc(ad.name || '')} · XXXX ${esc(ad.aadhaar_last4 || '')}${ad.city ? ' · ' + esc(ad.city) : ''}` : '—')}
+    ${row('Bank account', bk.verified ? `✅ ${esc(bk.name || '')} · ${esc(bk.bank || bk.ifsc || '')} ${esc(bk.account_masked || '')}` : '—')}
+    ${a.name_score != null ? row('Name match', `${Math.round(a.name_score * 100)}%`) : ''}
+    ${k.note ? `<div class="note" style="margin-top:8px">${esc(k.note)}</div>` : ''}</div>`;
+}
 function kycDetails(c, photoPath, tokenKey, actions = '') {
   const k = c.kyc || {};
   openModal(`<div class="modal-h"><div><h3>KYC details</h3><p>${esc(c.name)} · ${statusBadge(c.kyc_status)}</p></div><button class="x" onclick="closeModal()">×</button></div>
@@ -199,6 +218,8 @@ function kycDetails(c, photoPath, tokenKey, actions = '') {
         <div class="kv"><span>Email</span><b>${esc(c.email || '—')}</b></div>
         <div class="kv"><span>Wallet ID</span><b><code>${esc(c.wallet_id)}</code></b></div>
         <div class="kv"><span>Submitted</span><b>${k.submitted_at ? dt(k.submitted_at) : '—'}</b></div>
+        ${k.reviewed_by ? `<div class="kv"><span>Approved by</span><b>${esc(k.reviewed_by)}</b></div>` : ''}
+        ${kycAutoRows(k)}
         <div class="kv"><span>Customer since</span><b>${dOnly(c.created_at)}</b></div>
       </div></div></div>${actions ? `<div class="modal-f">${actions}</div>` : ''}`, true);
   photoInto('kyc-photo', photoPath, tokenKey);

@@ -75,14 +75,53 @@ async function mBill(id) { try { const b = await api(`/master/v3/orders/${id}/bi
 
 /* KYC */
 S.mk = 'pending';
-const loadMKyc = () => safe(async () => { S.mkyc = await api('/master/v3/kyc?status=' + S.mk); }, 'kyc');
+const loadMKyc = () => safe(async () => { const [k, s] = await Promise.all([api('/master/v3/kyc?status=' + S.mk), api('/master/v3/kyc-settings').catch(() => null)]); S.mkyc = k; S.kycSet = s; }, 'kyc');
 function vMKyc() {
   const head = ph('KYC', 'Identity checks across all shops.', `<div class="seg">${[['pending', 'Pending'], ['approved', 'Approved'], ['rejected', 'Rejected'], ['all', 'All']].map(([k, l]) => `<button class="${S.mk === k ? 'on' : ''}" onclick="S.mk='${k}';loadMKyc()">${l}</button>`).join('')}</div>`);
   const k = S.mkyc; if (!k) return head + loading;
-  return head + `<div class="card"><div class="table-wrap"><table><thead><tr><th>Customer</th><th>Shop</th><th>PAN</th><th>Photo</th><th>Status</th><th></th></tr></thead><tbody>
-    ${k.length ? k.map((c) => `<tr><td><b>${esc(c.name)}</b><div class="sub">${phoneFmt(c.phone)}</div></td><td>${esc(c.shop)}</td><td><code>${esc((c.kyc || {}).pan || '—')}</code></td><td>${(c.kyc || {}).photo_id ? '<span class="badge green plain">Added</span>' : '<span class="badge plain">None</span>'}</td><td>${statusBadge(c.kyc_status)}</td>
-      <td class="r" style="white-space:nowrap"><button class="btn sm" onclick="mKycView('${c.id}')">${icon('eye')} Full details</button> ${c.kyc_status === 'pending' ? `<button class="btn sm danger" onclick="mKyc('${c.id}',false)">Reject</button> <button class="btn sm primary" onclick="mKyc('${c.id}',true)">Approve</button>` : ''}</td></tr>`).join('') : emptyRow(6, 'Nothing here')}</tbody></table></div></div>`;
+  return head + kycSettingsCard() + `<div class="card"><div class="table-wrap"><table><thead><tr><th>Customer</th><th>Shop</th><th>PAN</th><th>Instant checks</th><th>Photo</th><th>Status</th><th></th></tr></thead><tbody>
+    ${k.length ? k.map((c) => `<tr><td><b>${esc(c.name)}</b><div class="sub">${phoneFmt(c.phone)}</div></td><td>${esc(c.shop)}</td><td><code>${esc((c.kyc || {}).pan || '—')}</code></td><td>${kycAutoBadges(c.kyc || {})}</td><td>${(c.kyc || {}).photo_id ? '<span class="badge green plain">Added</span>' : '<span class="badge plain">None</span>'}</td><td>${statusBadge(c.kyc_status)}</td>
+      <td class="r" style="white-space:nowrap"><button class="btn sm" onclick="mKycView('${c.id}')">${icon('eye')} Full details</button> ${c.kyc_status === 'pending' ? `<button class="btn sm danger" onclick="mKyc('${c.id}',false)">Reject</button> <button class="btn sm primary" onclick="mKyc('${c.id}',true)">Approve</button>` : ''}</td></tr>`).join('') : emptyRow(7, 'Nothing here')}</tbody></table></div></div>`;
 }
+function kycSettingsCard() {
+  const s = S.kycSet; if (!s) return '';
+  const c = s.config, ch = c.charges || {}, pr = c.products || {};
+  const sw2 = (id, on) => `<label class="switch"><input type="checkbox" id="${id}" ${on ? 'checked' : ''}><span></span></label>`;
+  const inp = (id, v, ph, t = 'text') => `<input class="input" id="${id}" type="${t}" value="${esc(v ?? '')}" placeholder="${esc(ph)}">`;
+  const total = (s.usage || []).reduce((a, u) => a + (u.charge || 0), 0);
+  return `<div class="card pad section"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+      <h3 class="card-t" style="margin:0">Instant KYC — Setu <span class="badge ${c.mode === 'production' ? 'green' : 'amber'}">${c.mode === 'production' ? 'LIVE' : 'TEST / SANDBOX'}</span> ${c.configured ? '<span class="badge green">Keys added</span>' : '<span class="badge red">Keys missing</span>'}</h3>
+      <div style="display:flex;gap:8px"><button class="btn sm" onclick="kycTest()">Test connection</button><button class="btn sm primary" onclick="kycSave()" id="kyc-save">Save KYC settings</button></div></div>
+    <div class="grid g3" style="margin-top:12px">
+      <div class="field"><label>Mode</label><select class="select" id="ks_mode"><option value="sandbox" ${c.mode !== 'production' ? 'selected' : ''}>Sandbox (test)</option><option value="production" ${c.mode === 'production' ? 'selected' : ''}>Production (live)</option></select></div>
+      <div class="field"><label>Client ID</label>${inp('ks_cid', c.client_id, 'from Setu Bridge → API credentials')}</div>
+      <div class="field"><label>Client Secret ${c.client_secret_masked ? `<span class="sub">(saved ${esc(c.client_secret_masked)} — leave empty to keep)</span>` : ''}</label><input class="input" id="ks_sec" type="password" autocomplete="new-password" placeholder="Paste secret"></div>
+      <div class="field"><label>PAN product ID</label>${inp('ks_p_pan', pr.pan, 'product instance id')}</div>
+      <div class="field"><label>DigiLocker product ID</label>${inp('ks_p_dl', pr.digilocker, 'product instance id')}</div>
+      <div class="field"><label>Reverse Penny Drop product ID</label>${inp('ks_p_bank', pr.bank, 'product instance id')}</div>
+      <div class="field"><label>Charge shop per PAN check (₹)</label>${inp('ks_c_pan', ch.pan, '5', 'number')}</div>
+      <div class="field"><label>Charge per DigiLocker (₹)</label>${inp('ks_c_dl', ch.digilocker, '5', 'number')}</div>
+      <div class="field"><label>Charge per bank check (₹)</label>${inp('ks_c_bank', ch.bank, '3', 'number')}</div>
+    </div>
+    <div class="ctl-row"><div><b>Instant KYC on</b><div class="sub">Customers see PAN / DigiLocker / Bank buttons in the app</div></div>${sw2('ks_on', c.enabled)}</div>
+    <div class="ctl-row"><div><b>Auto-approve when PAN name matches</b><div class="sub">Mismatches go to the shop's KYC queue</div></div>${sw2('ks_auto', c.auto_approve)}</div>
+    <div class="ctl-row"><div><b>Require Aadhaar (DigiLocker) before redemption</b><div class="sub">Turn on once DigiLocker is live</div></div>${sw2('ks_req_ad', c.require_aadhaar_redeem)}</div>
+    <div class="ctl-row"><div><b>Require verified bank account before redemption</b><div class="sub">Turn on once Reverse Penny Drop is live</div></div>${sw2('ks_req_bank', c.require_bank_redeem)}</div>
+    <div class="sub" style="margin-top:8px">Setu callback URL: <code>${location.origin}/api/kyc/setu/callback</code> · Webhook URL: <code>${location.origin}/api/kyc/setu/webhook</code></div>
+    ${(s.usage || []).length ? `<div class="table-wrap" style="margin-top:14px"><table><thead><tr><th>Shop (this month)</th><th class="r">PAN</th><th class="r">Aadhaar</th><th class="r">Bank</th><th class="r">Charge to shop</th></tr></thead><tbody>
+      ${s.usage.map((u) => `<tr><td><b>${esc(u.shop)}</b></td><td class="r num">${u.pan}</td><td class="r num">${u.digilocker}</td><td class="r num">${u.bank}</td><td class="r num"><b>${inr(u.charge)}</b></td></tr>`).join('')}
+      <tr><td><b>Total</b></td><td></td><td></td><td></td><td class="r num"><b>${inr(total)}</b></td></tr></tbody></table></div>` : '<div class="sub" style="margin-top:10px">No instant KYC checks yet this month.</div>'}
+  </div>`;
+}
+async function kycSave() {
+  const v = (id) => ($('#' + id)?.value || '').trim(); const on = (id) => !!$('#' + id)?.checked;
+  const body = { enabled: on('ks_on'), mode: v('ks_mode'), client_id: v('ks_cid'), client_secret: v('ks_sec'), auto_approve: on('ks_auto'),
+    require_aadhaar_redeem: on('ks_req_ad'), require_bank_redeem: on('ks_req_bank'),
+    products: { pan: v('ks_p_pan'), digilocker: v('ks_p_dl'), bank: v('ks_p_bank') },
+    charges: { pan: Number(v('ks_c_pan') || 0), digilocker: Number(v('ks_c_dl') || 0), bank: Number(v('ks_c_bank') || 0) } };
+  try { await api('/master/v3/kyc-settings', { method: 'PUT', body }); toast('KYC settings saved'); loadMKyc(); } catch (e) { toast(e.message, true); }
+}
+async function kycTest() { try { const r = await api('/master/v3/kyc-settings/test', { method: 'POST' }); toast(r.message, !r.ok); } catch (e) { toast(e.message, true); } }
 async function mKyc(id, ok) { try { await api(`/master/v3/kyc/${id}/decide?approve=${ok}`, { method: 'POST' }); toast(ok ? 'Approved' : 'Rejected'); loadMKyc(); } catch (e) { toast(e.message, true); } }
 
 /* settlement */
