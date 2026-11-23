@@ -2697,6 +2697,32 @@ async def update_min_redemption(body: MinRedemptionUpdate, jeweller: Jeweller = 
     return {"ok": True, "min_redemption_grams": jeweller.min_redemption_grams}
 
 
+class StoreLocatorUpdate(BaseModel):
+    address: str = Field(default="", max_length=500)
+    city: str = Field(default="", max_length=100)
+    state: str = Field(default="", max_length=100)
+    pincode: str = Field(default="", max_length=6)
+    store_lat: Optional[float] = Field(default=None, ge=-90, le=90)
+    store_lng: Optional[float] = Field(default=None, ge=-180, le=180)
+    store_hours: str = Field(default="", max_length=120)
+
+
+@api.put("/jeweller/settings/store-locator")
+async def update_store_locator(body: StoreLocatorUpdate, jeweller: Jeweller = Depends(get_current_jeweller), db: AsyncSession = Depends(get_db)):
+    """Shop owner sets the address / map pin / timings shown in the customer app's Store Locator."""
+    if body.pincode and not re.fullmatch(r"\d{6}", body.pincode.strip()):
+        raise HTTPException(400, "Pincode must be 6 digits")
+    if (body.store_lat is None) != (body.store_lng is None):
+        raise HTTPException(400, "Enter both latitude and longitude (or leave both empty)")
+    jeweller.address, jeweller.city, jeweller.state = body.address.strip(), body.city.strip(), body.state.strip()
+    jeweller.pincode = body.pincode.strip()
+    jeweller.store_lat, jeweller.store_lng = body.store_lat, body.store_lng
+    jeweller.store_hours = body.store_hours.strip()
+    await db.commit()
+    return {"ok": True, "address": jeweller.address, "city": jeweller.city, "state": jeweller.state, "pincode": jeweller.pincode,
+            "store_lat": jeweller.store_lat, "store_lng": jeweller.store_lng, "store_hours": jeweller.store_hours}
+
+
 # ─── Jeweller Product Catalog ────────────────────────────────────────────────
 @api.get("/jeweller/products")
 async def jeweller_products(jeweller: Jeweller = Depends(get_current_jeweller), db: AsyncSession = Depends(get_db)):
@@ -3331,6 +3357,7 @@ async def jp_settings(request: Request, jeweller: Jeweller = Depends(get_current
     return jeweller_dict(jeweller) | {
         "owner_name": jeweller.owner_name, "phone": jeweller.phone, "email": jeweller.email,
         "address": jeweller.address, "city": jeweller.city, "state": jeweller.state, "pincode": jeweller.pincode,
+        "store_lat": jeweller.store_lat, "store_lng": jeweller.store_lng, "store_hours": jeweller.store_hours or "",
         "joined": jeweller.created_at.isoformat() if jeweller.created_at else "",
         "app_key": jeweller.id,
         "app_link": f"https://{jeweller.domain}" if jeweller.domain else f"https://{host}",

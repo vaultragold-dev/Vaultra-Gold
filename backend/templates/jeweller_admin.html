@@ -22,7 +22,7 @@ const S = {
 const NAV = [
   ['Overview', [['dashboard', 'Dashboard', 'dashboard'], ['commission', 'Commission', 'commission'], ['orders', 'Orders', 'orders'], ['holdings', 'Wallet & Holdings', 'wallet'], ['sips', 'SIP', 'refresh'], ['dues', 'Payments to Master', 'invoice']]],
   ['Customers', [['customers', 'Customers', 'customers'], ['kyc', 'KYC', 'kyc'], ['redemptions', 'Redemptions', 'redeem'], ['goals', 'Goals', 'target']]],
-  ['Store', [['catalogue', 'Catalogue', 'catalogue'], ['content', 'App Content', 'image'], ['referral', 'Referral', 'referral'], ['payments', 'Payments & API', 'shield'], ['otp', 'OTP & SMS', 'kyc'], ['settings', 'Settings', 'settings']]],
+  ['Store', [['catalogue', 'Catalogue', 'catalogue'], ['content', 'App Content', 'image'], ['referral', 'Referral', 'referral'], ['store', 'Store Locator', 'store'], ['payments', 'Payments & API', 'shield'], ['otp', 'OTP & SMS', 'kyc'], ['settings', 'Settings', 'settings']]],
 ];
 const TITLES = Object.fromEntries(NAV.flatMap(([, items]) => items.map(([k, l]) => [k, l])));
 
@@ -471,6 +471,44 @@ function vReferral() {
     </tbody></table></div></div></div>`;
 }
 
+/* ── store locator ────────────────────── */
+function vStore() {
+  const head = `<div class="page-head"><div><h2>Store Locator</h2><p>Your shop address, map pin and timings — shown to customers in the app under <b>Store Locator</b> with Directions, Call and WhatsApp.</p></div></div>`;
+  const s = S.settings; if (!s) return head + loading;
+  const full = [s.address, s.city, s.state, s.pincode].filter(Boolean).join(', ');
+  const q = (s.store_lat != null && s.store_lng != null) ? `${s.store_lat},${s.store_lng}` : `${s.business_name}, ${full}`;
+  const f = (id, label, val, extra = '') => `<div class="field"><label>${label}</label><input class="input" id="${id}" value="${esc(val ?? '')}" ${extra}></div>`;
+  return head + `<div class="grid" style="grid-template-columns:minmax(0,1.1fr) minmax(0,1fr)">
+    <div class="card"><div class="card-h"><div><h3>Shop location</h3><p>Customers use this to find and reach your store</p></div></div><div style="padding:20px">
+      <div class="field"><label>Full address (shop no., building, street, area)</label><textarea class="input" id="sl_addr" rows="3" placeholder="e.g. 12, Shreeji Complex, CG Road, Navrangpura">${esc(s.address || '')}</textarea></div>
+      <div class="grid g3">${f('sl_city', 'City', s.city, 'placeholder="Ahmedabad"')}${f('sl_state', 'State', s.state, 'placeholder="Gujarat"')}${f('sl_pin', 'Pincode', s.pincode, 'maxlength="6" inputmode="numeric" placeholder="380009"')}</div>
+      <div class="grid g2">${f('sl_lat', 'Latitude (optional)', s.store_lat, 'type="number" step="0.000001" placeholder="23.0225"')}${f('sl_lng', 'Longitude (optional)', s.store_lng, 'type="number" step="0.000001" placeholder="72.5714"')}</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin:-4px 0 12px"><button class="btn sm" type="button" onclick="useMyLocation()">📍 Use my current location</button><span class="sub" style="align-self:center">or open Google Maps → long-press your shop → copy the numbers</span></div>
+      ${f('sl_hours', 'Store timings', s.store_hours, 'maxlength="120" placeholder="10:00 AM – 8:00 PM (Mon–Sat)"')}
+      <button class="btn primary" style="width:100%;height:44px;margin-top:6px" onclick="saveStore()" id="sl-save">Save store location</button>
+    </div></div>
+    <div class="card"><div class="card-h"><div><h3>Preview</h3><p>What customers see in the app</p></div></div>
+      ${full ? `<iframe src="https://maps.google.com/maps?q=${encodeURIComponent(q)}&z=16&output=embed" style="width:100%;height:260px;border:0;display:block" loading="lazy"></iframe>` : '<div class="empty" style="height:260px;display:grid;place-items:center"><b>Add your address to see the map</b></div>'}
+      <div style="padding:16px 20px"><b>${esc(s.business_name)}</b><div class="sub" style="margin-top:4px">${esc(full || 'Address not set')}</div>
+        <div class="sub" style="margin-top:4px">🕒 ${esc(s.store_hours || '10:00 AM – 8:00 PM (Mon–Sat)')}</div>
+        ${full ? `<a class="btn sm" style="margin-top:12px;display:inline-flex" target="_blank" rel="noopener" href="https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(q)}">Test directions ↗</a>` : ''}</div>
+    </div></div>`;
+}
+function useMyLocation() {
+  if (!navigator.geolocation) return toast('Location not available in this browser', true);
+  navigator.geolocation.getCurrentPosition((p) => { $('#sl_lat').value = p.coords.latitude.toFixed(6); $('#sl_lng').value = p.coords.longitude.toFixed(6); toast('Location filled — press Save'); },
+    () => toast('Allow location access, or paste latitude/longitude from Google Maps', true), { enableHighAccuracy: true, timeout: 10000 });
+}
+async function saveStore() {
+  const num = (id) => { const v = $('#' + id).value.trim(); return v === '' ? null : Number(v); };
+  const body = { address: $('#sl_addr').value.trim(), city: $('#sl_city').value.trim(), state: $('#sl_state').value.trim(), pincode: $('#sl_pin').value.trim(),
+    store_lat: num('sl_lat'), store_lng: num('sl_lng'), store_hours: $('#sl_hours').value.trim() };
+  if (!body.address || !body.city) return toast('Enter the shop address and city', true);
+  const b = $('#sl-save'); if (b) { b.disabled = true; b.textContent = 'Saving…'; }
+  try { const r = await api('/jeweller/settings/store-locator', { method: 'PUT', body }); Object.assign(S.settings, r); toast('Store location saved — live in the app'); render(); }
+  catch (e) { toast(e.message, true); if (b) { b.disabled = false; b.textContent = 'Save store location'; } }
+}
+
 /* ── settings ─────────────────────────── */
 async function loadSettings() { try { S.settings = await api('/jeweller/v3/settings'); } catch (e) { toast(e.message, true); } if (S.tab === 'settings') render(); }
 function vSettings() {
@@ -489,7 +527,7 @@ function vSettings() {
       </div>
       <div class="kv"><span>Business name</span><b>${esc(s.business_name)}</b></div><div class="kv"><span>Owner</span><b>${esc(s.owner_name)}</b></div>
       <div class="kv"><span>Phone</span><b>${phoneFmt(s.phone)}</b></div><div class="kv"><span>Email</span><b>${esc(s.email || '—')}</b></div>
-      <div class="kv"><span>Address</span><b>${esc([s.address, s.city, s.state, s.pincode].filter(Boolean).join(', ') || '—')}</b></div>
+      <div class="kv"><span>Address</span><b>${esc([s.address, s.city, s.state, s.pincode].filter(Boolean).join(', ') || '—')} <a href="#" onclick="go('store');return false" style="font-weight:600;margin-left:6px">Edit</a></b></div>
       <div class="kv"><span>Joined</span><b>${dOnly(s.joined)}</b></div></div></div>
     <div class="card"><div class="card-h"><div><h3>Customer app key</h3><p>Your app uses this key to open your store. Keep it private.</p></div></div><div style="padding:20px;display:flex;flex-direction:column;gap:14px">
       <div class="field"><label>App key</label><div class="copy"><code id="app-key">${esc(key)}</code><button class="btn sm ghost" onclick="S.revealKey=!S.revealKey;render()" id="reveal-key">${S.revealKey ? 'Hide' : 'Reveal'}</button><button class="btn sm ghost" onclick="copyText('${esc(s.app_key)}')">${icon('copy')}</button></div></div>
@@ -595,8 +633,8 @@ function vOtp() {
     + step(3, 'Send a test OTP', `<div style="display:flex;gap:8px;flex-wrap:wrap"><input class="input" id="otp_test" placeholder="Your 10-digit mobile number" maxlength="10" style="max-width:260px"><button class="btn" onclick="otpTest()">Send test OTP</button></div><div class="sub" style="margin-top:6px">If it arrives on your phone, your customers' login OTPs will work too.</div>`);
 }
 
-const VIEWS = { dues: () => `<div class="page-head"><div><h2>Payments to Master</h2><p>You pay Master the metal value + GST of every customer purchase and keep your commission. Master enters each payment when received.</p></div></div>` + (S.mydues ? duesDetail(S.mydues, false) : loading), dashboard: vDashboard, commission: () => { syncComm(); return vCommission(); }, orders: vOrders, holdings: vHoldings, customers: vCustomers, kyc: vKyc, redemptions: vRedemptions, catalogue: vCatalogue2, content: vContent, sips: vSips, goals: vGoals, gifts: vGifts, referral: vReferral, settings: vSettings };
-const LOAD = { dues: async () => { try { S.mydues = await api('/jeweller/v3/dues'); } catch (e) { toast(e.message, true); } if (S.tab === 'dues') render(); }, dashboard: () => { loadDash(); api('/jeweller/v3/dues').then((d) => { S.mydues = d; if (S.tab === 'dashboard') render(); }).catch(() => {}); }, commission: loadDash, orders: loadOrders, holdings: loadHold, customers: loadCustomers, kyc: loadKyc, redemptions: loadPickups, catalogue: loadCat, content: loadContent, sips: loadSips, goals: loadGoals, gifts: loadGifts, referral: loadRefs, settings: loadSettings };
+const VIEWS = { dues: () => `<div class="page-head"><div><h2>Payments to Master</h2><p>You pay Master the metal value + GST of every customer purchase and keep your commission. Master enters each payment when received.</p></div></div>` + (S.mydues ? duesDetail(S.mydues, false) : loading), dashboard: vDashboard, commission: () => { syncComm(); return vCommission(); }, orders: vOrders, holdings: vHoldings, customers: vCustomers, kyc: vKyc, redemptions: vRedemptions, catalogue: vCatalogue2, content: vContent, sips: vSips, goals: vGoals, gifts: vGifts, referral: vReferral, store: vStore, settings: vSettings };
+const LOAD = { dues: async () => { try { S.mydues = await api('/jeweller/v3/dues'); } catch (e) { toast(e.message, true); } if (S.tab === 'dues') render(); }, dashboard: () => { loadDash(); api('/jeweller/v3/dues').then((d) => { S.mydues = d; if (S.tab === 'dashboard') render(); }).catch(() => {}); }, commission: loadDash, orders: loadOrders, holdings: loadHold, customers: loadCustomers, kyc: loadKyc, redemptions: loadPickups, catalogue: loadCat, content: loadContent, sips: loadSips, goals: loadGoals, gifts: loadGifts, referral: loadRefs, store: loadSettings, settings: loadSettings };
 VIEWS.payments = vPayments; LOAD.payments = loadPayments; VIEWS.otp = vOtp; LOAD.otp = loadOtp;
 
 async function boot() {

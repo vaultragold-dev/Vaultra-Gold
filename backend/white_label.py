@@ -112,19 +112,12 @@ def tenant_config(j, api_base, logo_bytes=None, splash_bytes=None):
                 adaptive_bg = _sample_bg_color(temp_logo)
         except Exception:
             pass
-    if splash_bytes:
-        try:
-            temp_splash = Image.open(io.BytesIO(splash_bytes))
-            w, h = temp_splash.size
-            if h > w:
-                temp_splash = temp_splash.crop((0, (h - w) // 2, w, (h + w) // 2))
-            elif w > h:
-                temp_splash = temp_splash.crop(((w - h) // 2, 0, (w + h) // 2, h))
-            splash_bg = _sample_bg_color(temp_splash)
-        except Exception:
-            pass
-    elif logo_bytes:
-        splash_bg = adaptive_bg
+    try:
+        _lg = Image.open(io.BytesIO(logo_bytes)) if logo_bytes else None
+        _sp = Image.open(io.BytesIO(splash_bytes)) if splash_bytes else None
+        splash_bg = splash_background(p, _lg, _sp)
+    except Exception:
+        pass
 
     return {
         "tenantId": j.id,
@@ -322,72 +315,71 @@ def make_icon_512(name, p, logo=None):
     return out.getvalue()
 
 
-def make_splash(name, p, logo=None, splash_img=None):
-    """
-    Generates a 1024x1024 SQUARE Splash Icon.
-    Modern Android 12+ (SplashScreen API) and iOS LaunchScreen display this icon centered
-    over a full-screen windowSplashScreenBackground matching the icon's background color.
-    This produces a seamless, luxury full-screen splash without miniature floating boxes.
-    """
-    s = 1024
+# Splash icon geometry (1024px canvas):
+#  - Android 12+ shows the splash icon masked to a circle of 2/3 of the canvas (~683px).
+#  - The logo is fitted inside that circle (square of 683/sqrt(2) = ~480px), so it is NEVER clipped on
+#    Android 12+ and looks exactly the same size on Android 8-11 and iOS (app.config uses the same imageWidth).
+SPLASH_CANVAS = 1024
+SPLASH_LOGO = 470
 
-    # If logo is provided, and splash_img is either omitted or a vertical poster,
-    # the crisp Brand Logo centered on the luxury brand background produces a 100x cleaner splash
-    # (matching WhatsApp, Blinkit, Swiggy) rather than a miniature squished card.
-    prefer_logo = logo is not None and (splash_img is None or splash_img.height > 1.2 * splash_img.width)
 
-    if splash_img and not prefer_logo:
+def _splash_source(logo=None, splash_img=None):
+    """Which uploaded image the splash uses: a square-ish splash upload, otherwise the brand logo."""
+    if splash_img is not None and (logo is None or splash_img.height <= 1.2 * splash_img.width):
         w, h = splash_img.size
-        # Center-crop square from vertical or horizontal image
         if h > w:
             top = (h - w) // 2
-            crop = splash_img.crop((0, top, w, top + w))
-        elif w > h:
+            return splash_img.crop((0, top, w, top + w)), "splash"
+        if w > h:
             left = (w - h) // 2
-            crop = splash_img.crop((left, 0, left + h, h))
-        else:
-            crop = splash_img
+            return splash_img.crop((left, 0, left + h, h)), "splash"
+        return splash_img, "splash"
+    if logo is not None:
+        return logo, "logo"
+    return None, "none"
 
-        sp_bg = _sample_bg_color(crop)
-        sp_rgb = _rgb(sp_bg)
-        img = Image.new("RGBA", (s, s), (*sp_rgb, 255))
-        # Center crop contains the centered logo: scale to 600px with feathered edge for seamless blending
-        scaled = _feather_square(crop, 600, 40)
-        pos = ((s - 600) // 2, (s - 600) // 2)
-        img.paste(scaled, pos, scaled)
+
+def splash_background(p, logo=None, splash_img=None):
+    """Background colour of the splash image — the native splash window uses the SAME colour so no box is visible."""
+    src, _ = _splash_source(logo, splash_img)
+    if src is None or _is_transparent(src):
+        return p["accentColor"]
+    return _sample_bg_color(src)
+
+
+def make_splash(name, p, logo=None, splash_img=None):
+    """
+    Generates the 1024x1024 splash icon shown centred on a full-screen background of the same colour.
+    Same visual size on every phone (see SPLASH_LOGO above).
+    """
+    s = SPLASH_CANVAS
+    src, _ = _splash_source(logo, splash_img)
+    if src is not None:
+        bg = _rgb(splash_background(p, logo, splash_img))
+        img = Image.new("RGBA", (s, s), (*bg, 255))
+        if _is_transparent(src):
+            _paste_logo(img, src, SPLASH_LOGO, (s / 2, s / 2))
+        else:
+            w, h = src.size
+            if 0.85 <= w / h <= 1.15:
+                scaled = _feather_square(src.convert("RGBA"), SPLASH_LOGO, 70)
+            else:
+                scaled = src.convert("RGBA").copy()
+                scaled.thumbnail((SPLASH_LOGO, SPLASH_LOGO), Image.Resampling.LANCZOS)
+            img.paste(scaled, ((s - scaled.width) // 2, (s - scaled.height) // 2), scaled)
         out = io.BytesIO()
         img.convert("RGB").save(out, "PNG")
         return out.getvalue()
-
-    if logo:
-        if _is_transparent(logo):
-            sp_rgb = _rgb(p["accentColor"])
-            img = Image.new("RGBA", (s, s), (*sp_rgb, 255))
-            _paste_logo(img, logo, 540, (s / 2, s / 2))
-            out = io.BytesIO()
-            img.convert("RGB").save(out, "PNG")
-            return out.getvalue()
-        else:
-            sp_bg = _sample_bg_color(logo)
-            sp_rgb = _rgb(sp_bg)
-            img = Image.new("RGBA", (s, s), (*sp_rgb, 255))
-            scaled = _feather_square(logo, 580, 40)
-            pos = ((s - 580) // 2, (s - 580) // 2)
-            img.paste(scaled, pos, scaled)
-            out = io.BytesIO()
-            img.convert("RGB").save(out, "PNG")
-            return out.getvalue()
-    else:
-        # Default initials monogram
-        img = Image.new("RGB", (s, s), _rgb(p["accentColor"]))
-        d = ImageDraw.Draw(img)
-        f = _font(280)
-        _center_text(d, s, s / 2 - 200, _initials(name), f, _rgb(p["primaryColor"]))
-        _center_text(d, s, s / 2 + 100, name, _font(56), (255, 255, 255))
-        _center_text(d, s, s / 2 + 180, "24K Digital Gold", _font(34, 500), _rgb(p["primaryColor"]))
-        out = io.BytesIO()
-        img.save(out, "PNG")
-        return out.getvalue()
+    # Default initials monogram
+    img = Image.new("RGB", (s, s), _rgb(p["accentColor"]))
+    d = ImageDraw.Draw(img)
+    f = _font(280)
+    _center_text(d, s, s / 2 - 200, _initials(name), f, _rgb(p["primaryColor"]))
+    _center_text(d, s, s / 2 + 100, name, _font(56), (255, 255, 255))
+    _center_text(d, s, s / 2 + 180, "24K Digital Gold", _font(34, 500), _rgb(p["primaryColor"]))
+    out = io.BytesIO()
+    img.save(out, "PNG")
+    return out.getvalue()
 
 
 def _inr(n):

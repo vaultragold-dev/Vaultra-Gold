@@ -356,7 +356,7 @@ function vStudio() {
               <div style="font-size:11px;color:#64748b;line-height:1.45;margin-bottom:10px">
                 • <b>Recommended:</b> 1024×1024 px Square Splash Icon (PNG).<br>
                 • <b>Modern Android 12+ & iOS:</b> Renders centered splash emblem over the full-screen brand background color.<br>
-                • <b>Important:</b> Keep logo within central <b>540px safe circle</b>. Do not upload full vertical poster cards with edge text (Android 12+ shrinks posters into tiny central icons).<br>
+                • <b>Important:</b> Keep logo within the central <b>470px square</b> (Android 12+ shows only a circle) — the app shows it at the same size on every phone. Do not upload full vertical poster cards with edge text (Android 12+ shrinks posters into tiny central icons).<br>
                 • <b>Auto-Fallback:</b> If omitted, your App Icon is automatically used on luxury theme background.
               </div>
             </div>

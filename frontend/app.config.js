@@ -26,7 +26,9 @@ module.exports = ({ config }) => {
           image: asset("splash.png", p[1]?.image),
           backgroundColor: splashBg,
           resizeMode: "contain",
-          imageWidth: 280,
+          // ONE splash definition for every phone. The old per-platform "splash" keys drew the image
+          // full-screen on some devices (huge logo) and as a small icon on others — they are removed.
+          imageWidth: 240,
         },
       ];
     }
@@ -43,21 +45,11 @@ module.exports = ({ config }) => {
     ios: {
       ...config.ios,
       bundleIdentifier: t.bundleId || config.ios?.bundleIdentifier,
-      splash: {
-        image: asset("splash.png", config.ios?.splash?.image),
-        resizeMode: "contain",
-        backgroundColor: splashBg,
-      },
     },
     android: {
       ...config.android,
       usesCleartextTraffic: true,
       package: t.packageName || t.bundleId || config.android?.package,
-      splash: {
-        image: asset("splash.png", config.android?.splash?.image),
-        resizeMode: "contain",
-        backgroundColor: splashBg,
-      },
       adaptiveIcon: {
         ...config.android?.adaptiveIcon,
         foregroundImage: asset("adaptive-icon.png", config.android?.adaptiveIcon?.foregroundImage),

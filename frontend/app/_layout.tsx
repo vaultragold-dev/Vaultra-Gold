@@ -2,14 +2,16 @@ import { useFonts } from "expo-font";
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import React from "react";
+import { View } from "react-native";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
+import { BrandSplash } from "@/src/components/BrandSplash";
 import { ErrorBoundary } from "@/src/components/error-boundary";
 import { ToastProvider } from "@/src/components/Toast";
 import { LanguageProvider, useLang } from "@/src/i18n";
-import { AppProvider } from "@/src/store/AppContext";
+import { AppProvider, useApp } from "@/src/store/AppContext";
 import { AppLockProvider } from "@/src/store/AppLock";
 import { ThemeProvider, fonts, useTheme } from "@/src/theme";
 
@@ -39,6 +41,12 @@ function ThemedStack() {
   );
 }
 
+function SplashGate() {
+  const { ready } = useTheme();
+  const { booting } = useApp();
+  return <BrandSplash ready={ready && !booting} />;
+}
+
 export default function RootLayout() {
   const [loaded, error] = useFonts({
     [fonts.regular]: require("../assets/fonts/Inter-400.ttf"),
@@ -59,9 +67,12 @@ export default function RootLayout() {
               <QueryClientProvider client={qc}>
                 <AppProvider>
                   <ToastProvider>
-                    <AppLockProvider>
-                      <ThemedStack />
-                    </AppLockProvider>
+                    <View style={{ flex: 1 }}>
+                      <AppLockProvider>
+                        <ThemedStack />
+                      </AppLockProvider>
+                      <SplashGate />
+                    </View>
                   </ToastProvider>
                 </AppProvider>
               </QueryClientProvider>
