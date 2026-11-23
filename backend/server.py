@@ -1439,7 +1439,6 @@ KYC_CFG = {
     "min_name_match": 0.6,
     "require_aadhaar_redeem": False,  # ask DigiLocker before physical redemption
     "require_bank_redeem": False,     # ask bank verification before redemption
-    "charges": {"pan": 5.0, "digilocker": 5.0, "bank": 3.0},  # billed to the shop per successful check
 }
 KYC_KINDS = ("pan", "digilocker", "bank")
 
@@ -1449,7 +1448,7 @@ async def load_kyc_cfg():
     if saved:
         try:
             d = json.loads(saved)
-            KYC_CFG.update({k: v for k, v in d.items() if k in KYC_CFG})
+            KYC_CFG.update({k: v for k, v in d.items() if k in KYC_CFG and k != "charges"})
         except ValueError:
             pass
 
@@ -1473,8 +1472,7 @@ def _profile_name(c) -> str:
 
 async def _kyc_record(db, customer, kind, ref="", status="created", result=None, return_url=""):
     chk = KycCheck(id=str(uuid.uuid4()), customer_id=customer.id, jeweller_id=customer.jeweller_id, kind=kind,
-                   mode=KYC_CFG["mode"], ref=ref or "", status=status, result=result or {}, return_url=return_url or "",
-                   charge=float(KYC_CFG["charges"].get(kind, 0)) if status == "success" else 0.0)
+                   mode=KYC_CFG["mode"], ref=ref or "", status=status, result=result or {}, return_url=return_url or "", charge=0.0)
     db.add(chk)
     return chk
 
@@ -1483,7 +1481,6 @@ def _kyc_mark(chk, status, result=None):
     chk.status = status
     if result is not None:
         chk.result = result
-    chk.charge = float(KYC_CFG["charges"].get(chk.kind, 0)) if status == "success" else 0.0
     chk.updated_at = now_utc()
 
 
@@ -1735,24 +1732,22 @@ def _month_start():
 
 async def _kyc_usage(db, jid: Optional[str] = None, since=None):
     since = since or _month_start()
-    q = select(KycCheck.jeweller_id, KycCheck.kind, func.count(), func.coalesce(func.sum(KycCheck.charge), 0)).where(
+    q = select(KycCheck.jeweller_id, KycCheck.kind, func.count()).where(
         KycCheck.status == "success", KycCheck.created_at >= since)
     if jid:
         q = q.where(KycCheck.jeweller_id == jid)
     rows = (await db.execute(q.group_by(KycCheck.jeweller_id, KycCheck.kind))).all()
     shops = {}
-    for j, kind, n, amt in rows:
-        s = shops.setdefault(j, {"jeweller_id": j, "pan": 0, "digilocker": 0, "bank": 0, "charge": 0.0})
+    for j, kind, n in rows:
+        s = shops.setdefault(j, {"jeweller_id": j, "pan": 0, "digilocker": 0, "bank": 0})
         s[kind] = int(n)
-        s["charge"] = r2(s["charge"] + float(amt or 0))
     return list(shops.values())
 
 
 @api.get("/jeweller/v3/kyc-usage")
 async def jp_kyc_usage(jeweller: Jeweller = Depends(get_current_jeweller), db: AsyncSession = Depends(get_db)):
     u = await _kyc_usage(db, jeweller.id)
-    return {"month": _month_start().isoformat(), "usage": u[0] if u else {"pan": 0, "digilocker": 0, "bank": 0, "charge": 0.0},
-            "charges": KYC_CFG["charges"], "auto_enabled": KYC_CFG["enabled"]}
+    return {"month": _month_start().isoformat(), "usage": u[0] if u else {"pan": 0, "digilocker": 0, "bank": 0}, "auto_enabled": KYC_CFG["enabled"]}
 
 
 @api.get("/master/v3/kyc-settings")
@@ -1774,7 +1769,6 @@ class KycSettingsBody(BaseModel):
     min_name_match: float = Field(default=0.6, ge=0.2, le=1.0)
     require_aadhaar_redeem: bool = False
     require_bank_redeem: bool = False
-    charges: dict = {}
 
 
 @api.put("/master/v3/kyc-settings")
@@ -1791,9 +1785,6 @@ async def mp_kyc_settings_put(body: KycSettingsBody, admin: MasterAdmin = Depend
         v = str((body.products or {}).get(k, "")).strip()
         if v:
             KYC_CFG["products"][k] = v
-        c = (body.charges or {}).get(k)
-        if c is not None:
-            KYC_CFG["charges"][k] = max(0.0, min(500.0, float(c)))
     await _setting("kyc_setu", json.dumps(KYC_CFG))
     await audit(db, "master", admin, "kyc.settings", "platform", {"mode": body.mode, "enabled": body.enabled}, None)
     await db.commit()

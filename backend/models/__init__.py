@@ -471,6 +471,6 @@ class KycCheck(Base):
     status = Column(String(20), default="created")  # created, success, failed, expired
     result = Column(JSON, default=dict)  # masked, non-sensitive summary only
     return_url = Column(String(500), default="")
-    charge = Column(Float, default=0.0)  # billed to the shop when successful
+    charge = Column(Float, default=0.0)  # unused — KYC is free for shops and customers
     created_at = Column(DateTime(timezone=True), default=utcnow)
     updated_at = Column(DateTime(timezone=True), default=utcnow)

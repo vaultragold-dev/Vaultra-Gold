@@ -85,10 +85,9 @@ function vMKyc() {
 }
 function kycSettingsCard() {
   const s = S.kycSet; if (!s) return '';
-  const c = s.config, ch = c.charges || {}, pr = c.products || {};
+  const c = s.config, pr = c.products || {};
   const sw2 = (id, on) => `<label class="switch"><input type="checkbox" id="${id}" ${on ? 'checked' : ''}><span></span></label>`;
   const inp = (id, v, ph, t = 'text') => `<input class="input" id="${id}" type="${t}" value="${esc(v ?? '')}" placeholder="${esc(ph)}">`;
-  const total = (s.usage || []).reduce((a, u) => a + (u.charge || 0), 0);
   return `<div class="card pad section"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
       <h3 class="card-t" style="margin:0">Instant KYC — Setu <span class="badge ${c.mode === 'production' ? 'green' : 'amber'}">${c.mode === 'production' ? 'LIVE' : 'TEST / SANDBOX'}</span> ${c.configured ? '<span class="badge green">Keys added</span>' : '<span class="badge red">Keys missing</span>'}</h3>
       <div style="display:flex;gap:8px"><button class="btn sm" onclick="kycTest()">Test connection</button><button class="btn sm primary" onclick="kycSave()" id="kyc-save">Save KYC settings</button></div></div>
@@ -99,26 +98,21 @@ function kycSettingsCard() {
       <div class="field"><label>PAN product ID</label>${inp('ks_p_pan', pr.pan, 'product instance id')}</div>
       <div class="field"><label>DigiLocker product ID</label>${inp('ks_p_dl', pr.digilocker, 'product instance id')}</div>
       <div class="field"><label>Reverse Penny Drop product ID</label>${inp('ks_p_bank', pr.bank, 'product instance id')}</div>
-      <div class="field"><label>Charge shop per PAN check (₹)</label>${inp('ks_c_pan', ch.pan, '5', 'number')}</div>
-      <div class="field"><label>Charge per DigiLocker (₹)</label>${inp('ks_c_dl', ch.digilocker, '5', 'number')}</div>
-      <div class="field"><label>Charge per bank check (₹)</label>${inp('ks_c_bank', ch.bank, '3', 'number')}</div>
     </div>
     <div class="ctl-row"><div><b>Instant KYC on</b><div class="sub">Customers see PAN / DigiLocker / Bank buttons in the app</div></div>${sw2('ks_on', c.enabled)}</div>
     <div class="ctl-row"><div><b>Auto-approve when PAN name matches</b><div class="sub">Mismatches go to the shop's KYC queue</div></div>${sw2('ks_auto', c.auto_approve)}</div>
     <div class="ctl-row"><div><b>Require Aadhaar (DigiLocker) before redemption</b><div class="sub">Turn on once DigiLocker is live</div></div>${sw2('ks_req_ad', c.require_aadhaar_redeem)}</div>
     <div class="ctl-row"><div><b>Require verified bank account before redemption</b><div class="sub">Turn on once Reverse Penny Drop is live</div></div>${sw2('ks_req_bank', c.require_bank_redeem)}</div>
     <div class="sub" style="margin-top:8px">Setu callback URL: <code>${location.origin}/api/kyc/setu/callback</code> · Webhook URL: <code>${location.origin}/api/kyc/setu/webhook</code></div>
-    ${(s.usage || []).length ? `<div class="table-wrap" style="margin-top:14px"><table><thead><tr><th>Shop (this month)</th><th class="r">PAN</th><th class="r">Aadhaar</th><th class="r">Bank</th><th class="r">Charge to shop</th></tr></thead><tbody>
-      ${s.usage.map((u) => `<tr><td><b>${esc(u.shop)}</b></td><td class="r num">${u.pan}</td><td class="r num">${u.digilocker}</td><td class="r num">${u.bank}</td><td class="r num"><b>${inr(u.charge)}</b></td></tr>`).join('')}
-      <tr><td><b>Total</b></td><td></td><td></td><td></td><td class="r num"><b>${inr(total)}</b></td></tr></tbody></table></div>` : '<div class="sub" style="margin-top:10px">No instant KYC checks yet this month.</div>'}
+    ${(s.usage || []).length ? `<div class="table-wrap" style="margin-top:14px"><table><thead><tr><th>Shop (this month)</th><th class="r">PAN</th><th class="r">Aadhaar</th><th class="r">Bank</th></tr></thead><tbody>
+      ${s.usage.map((u) => `<tr><td><b>${esc(u.shop)}</b></td><td class="r num">${u.pan}</td><td class="r num">${u.digilocker}</td><td class="r num">${u.bank}</td></tr>`).join('')}</tbody></table></div>` : '<div class="sub" style="margin-top:10px">No instant KYC checks yet this month.</div>'}
   </div>`;
 }
 async function kycSave() {
   const v = (id) => ($('#' + id)?.value || '').trim(); const on = (id) => !!$('#' + id)?.checked;
   const body = { enabled: on('ks_on'), mode: v('ks_mode'), client_id: v('ks_cid'), client_secret: v('ks_sec'), auto_approve: on('ks_auto'),
     require_aadhaar_redeem: on('ks_req_ad'), require_bank_redeem: on('ks_req_bank'),
-    products: { pan: v('ks_p_pan'), digilocker: v('ks_p_dl'), bank: v('ks_p_bank') },
-    charges: { pan: Number(v('ks_c_pan') || 0), digilocker: Number(v('ks_c_dl') || 0), bank: Number(v('ks_c_bank') || 0) } };
+    products: { pan: v('ks_p_pan'), digilocker: v('ks_p_dl'), bank: v('ks_p_bank') } };
   try { await api('/master/v3/kyc-settings', { method: 'PUT', body }); toast('KYC settings saved'); loadMKyc(); } catch (e) { toast(e.message, true); }
 }
 async function kycTest() { try { const r = await api('/master/v3/kyc-settings/test', { method: 'POST' }); toast(r.message, !r.ok); } catch (e) { toast(e.message, true); } }

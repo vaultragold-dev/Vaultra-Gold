@@ -364,18 +364,11 @@ function vCustomers() {
 }
 
 /* ── KYC ──────────────────────────────── */
-async function loadKyc() { try { const [q, u] = await Promise.all([api('/jeweller/kyc-queue'), api('/jeweller/v3/kyc-usage').catch(() => null)]); S.kyc = q; S.kycUsage = u; } catch (e) { toast(e.message, true); } if (S.tab === 'kyc') render(); }
+async function loadKyc() { try { S.kyc = await api('/jeweller/kyc-queue'); } catch (e) { toast(e.message, true); } if (S.tab === 'kyc') render(); }
 function vKyc() {
   const head = `<div class="page-head"><div><h2>KYC</h2><p>Customers verify PAN instantly in the app — matching names are approved automatically. Only mismatches and manual submissions wait here.</p></div></div>`;
   if (!S.kyc) return head + loading;
-  const u = S.kycUsage;
-  const usage = u ? `<div class="grid g4" style="margin-bottom:16px">
-      ${kpi('PAN checks (this month)', u.usage.pan || 0, inr(u.charges.pan) + ' each', 'kyc', 'green')}
-      ${kpi('Aadhaar (DigiLocker)', u.usage.digilocker || 0, inr(u.charges.digilocker) + ' each', 'shield', 'blue')}
-      ${kpi('Bank verifications', u.usage.bank || 0, inr(u.charges.bank) + ' each', 'wallet', 'gray')}
-      ${kpi('KYC charges this month', inr(u.usage.charge || 0), 'payable to Vaultra', 'invoice')}
-    </div>` : '';
-  return head + usage + `<div class="card"><div class="card-h"><h3>Pending review</h3><span class="badge amber">${S.kyc.length} waiting</span></div>
+  return head + `<div class="card"><div class="card-h"><h3>Pending review</h3><span class="badge amber">${S.kyc.length} waiting</span></div>
     <div class="table-wrap"><table><thead><tr><th>Customer</th><th>PAN</th><th>Aadhaar</th><th>Submitted details</th><th>Instant checks</th><th>Photo</th><th></th></tr></thead><tbody>
     ${S.kyc.length ? S.kyc.map((c) => { const k = c.kyc || {}; return `<tr><td><b>${esc(c.name)}</b><div class="sub">${phoneFmt(c.phone)}</div></td>
       <td><code>${esc(k.pan || '—')}</code></td><td><code>${esc(k.aadhaar ? 'XXXX XXXX ' + String(k.aadhaar).slice(-4) : '—')}</code></td>
