@@ -4426,7 +4426,15 @@ def _mt5_auth():
     return ({"X-API-Key": MT5_API_KEY}, {"key": MT5_API_KEY}) if MT5_API_KEY else ({}, {})
 
 
+async def mt5_trading_locked() -> bool:
+    """Hard safety lock for the REAL MT5 account. Locked unless the owner explicitly unlocks it
+    (app_settings mt5_trade_lock = 'unlocked'). The Master Panel cannot override this."""
+    return (await _setting("mt5_trade_lock") or "locked") != "unlocked"
+
+
 async def _mt5_place(metal, volume):
+    if await mt5_trading_locked():
+        return (MT5_SILVER_SYMBOL if metal == "silver" else MT5_GOLD_SYMBOL), {"success": False, "error": "MT5 trading is LOCKED by the owner - no orders are sent to the real account"}
     headers, params = _mt5_auth()
     symbol = MT5_SILVER_SYMBOL if metal == "silver" else MT5_GOLD_SYMBOL
     vol = round(float(volume), 2)
@@ -4447,7 +4455,7 @@ async def mt5_book(metal, add_grams=0.0, trigger="auto"):
         pend[metal] = r4(pend.get(metal, 0) + add_grams)
         await _setting("mt5_pending", json.dumps(pend))
         cfg = await mt5_cfg()
-        if not cfg["enabled"] or not MT5_RATES_URL:
+        if not cfg["enabled"] or not MT5_RATES_URL or await mt5_trading_locked():
             return None
         lot_g = cfg["silver_lot_g" if metal == "silver" else "gold_lot_g"]
         step = cfg.get("step") or 0.1
@@ -4503,7 +4511,7 @@ class Mt5Cfg(BaseModel):
 @api.get("/master/v3/mt5-bookings")
 async def mt5_list(admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
     rows = (await db.execute(select(Mt5Booking).order_by(desc(Mt5Booking.created_at)).limit(200))).scalars().all()
-    return {"config": await mt5_cfg(), "pending": await mt5_pending(), "configured": bool(MT5_RATES_URL),
+    return {"config": await mt5_cfg(), "pending": await mt5_pending(), "configured": bool(MT5_RATES_URL), "trading_locked": await mt5_trading_locked(),
             "symbols": {"gold": MT5_GOLD_SYMBOL, "silver": MT5_SILVER_SYMBOL},
             "bookings": [{"id": b.id, "metal": b.metal, "symbol": b.symbol, "volume": b.volume, "grams": r4(b.grams), "status": b.status,
                           "ticket": b.ticket, "price": b.price, "error": b.error, "trigger": b.trigger,
@@ -4514,6 +4522,8 @@ async def mt5_list(admin: MasterAdmin = Depends(get_master_admin), db: AsyncSess
 async def mt5_set_cfg(body: Mt5Cfg, admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
     if body.max_volume < body.min_volume:
         raise HTTPException(400, "Largest volume cannot be smaller than the smallest volume")
+    if body.enabled and await mt5_trading_locked():
+        raise HTTPException(423, "MT5 trading is locked by the owner for the real account. Auto-booking cannot be turned on until it is unlocked.")
     await _setting("mt5_booking_cfg", json.dumps(body.model_dump()))
     await audit(db, "master", admin, "mt5.config", "MT5 booking", body.model_dump())
     await db.commit()
