@@ -186,10 +186,10 @@ function mKycView(id) {
 /* MT5 bookings */
 const loadMt5 = () => safe(async () => { S.mt5 = await api('/master/v3/mt5-bookings'); }, 'mt5');
 function vMt5() {
-  const head = ph('MT5 Bookings', 'Every app purchase is added up. When the total reaches the minimum lot, a BUY order is placed on your MT5 account automatically.', `<button class="btn" onclick="mt5Positions()">${icon('eye')} Open positions</button> <button class="btn primary" onclick="mt5Retry()" id="mt5-retry">${icon('refresh')} Book now / retry</button>`);
+  const head = ph('MT5 Bookings', 'Every app purchase is added up. When the total reaches the minimum lot, a BUY order is placed on your MT5 account automatically.', `<button class="btn" onclick="mt5Positions()">${icon('eye')} Open positions</button> <button class="btn" onclick="mt5DryRun('gold')" id="mt5-dry-gold">Dry run: Gold (no order)</button> <button class="btn" onclick="mt5DryRun('silver')">Dry run: Silver (no order)</button> <button class="btn primary" onclick="mt5Retry()" id="mt5-retry">${icon('refresh')} Book now / retry</button>`);
   const m = S.mt5; if (!m) return head + loading; const c = m.config;
   const ok = m.bookings.filter((b) => b.status === 'booked'), bad = m.bookings.filter((b) => b.status === 'failed');
-  return head + `${!m.configured ? '<div class="note">MT5 server link is not set, so orders cannot be placed.</div>' : ''}
+  return head + `${m.trading_locked ? '<div class="card pad section" style="border-color:#FDA29B;background:#FEF3F2"><b>🔒 Real-account trading is LOCKED by the owner.</b><div class="sub">No order is sent to MT5 from the app. Use "Dry run" to see which account, symbol and volume would be used - the broker checks it without placing anything.</div></div>' : ''}${!m.configured ? '<div class="note">MT5 server link is not set, so orders cannot be placed.</div>' : ''}
     <div class="grid g4">${kpi('Gold waiting', g4(m.pending.gold), `books at ${g4(c.gold_lot_g * c.min_volume)} (${m.symbols.gold})`, 'coin')}${kpi('Silver waiting', g4(m.pending.silver), `books at ${g4(c.silver_lot_g * c.min_volume)} (${m.symbols.silver})`, 'coin', 'gray')}
       ${kpi('Orders booked', ok.length, g4(ok.reduce((a, b) => a + b.grams, 0)) + ' covered', 'orders', 'green')}${kpi('Failed attempts', bad.length, bad[0] ? esc(bad[0].error.slice(0, 60)) : 'none', 'shield', bad.length ? 'red' : '')}</div>
     <div class="card pad section"><div style="font-weight:600;margin-bottom:12px">Booking settings</div><div class="grid g4" style="align-items:end">
@@ -206,6 +206,35 @@ function vMt5() {
 }
 async function mt5Save() { try { await api('/master/v3/mt5-bookings/config', { method: 'PUT', body: { enabled: $('#m5e').checked, gold_lot_g: Number($('#m5g').value), silver_lot_g: Number($('#m5s').value), min_volume: Number($('#m5v').value), step: Number($('#m5t').value), max_volume: Number($('#m5x').value) } }); toast('Saved'); loadMt5(); } catch (e) { toast(e.message, true); } }
 async function mt5Retry() { const b = $('#mt5-retry'); b.disabled = true; try { const r = await api('/master/v3/mt5-bookings/retry', { method: 'POST' }); const v = Object.values(r.result); toast(v.includes(true) ? 'Order booked on MT5' : v.includes(false) ? 'MT5 refused the order — see details' : 'Not enough grams waiting for a full lot yet', v.includes(false)); loadMt5(); } catch (e) { toast(e.message, true); b.disabled = false; } }
+async function mt5DryRun(metal) {
+  try {
+    const r = await api('/master/v3/mt5-bookings/dry-run?metal=' + metal, { method: 'POST' });
+    const c = r.check || {}, a = c.account || {}, sp = c.spec || {};
+    const row = (l, v) => `<div class="kv"><span>${l}</span><b>${v}</b></div>`;
+    const yes = (v) => v ? '<span class="badge green">Yes</span>' : '<span class="badge red">No</span>';
+    openModal(`<div class="modal-h"><div><h3>Dry run - ${metal === 'silver' ? 'Silver' : 'Gold'} (no order placed)</h3><p>${c.ok ? '<span class="badge green">Broker would ACCEPT this order</span>' : '<span class="badge red">Broker would REJECT this order</span>'} ${esc(c.message || c.error || '')}</p></div><button class="x" onclick="closeModal()">×</button></div>
+      <div class="modal-b">
+        <div style="font-weight:700;margin-bottom:6px">Account the order would go to</div>
+        ${row('Login / Server', `${esc(a.login || '—')} · ${esc(a.server || '—')}`)}
+        ${row('Name / Broker', `${esc(a.name || '')} · ${esc(a.company || '')}`)}
+        ${row('Account type', a.account_type === 'REAL' ? '<span class="badge red">REAL</span>' : `<span class="badge amber">${esc(a.account_type || '—')}</span>`)}
+        ${row('Balance / Free margin', `${a.balance ?? '—'} / ${a.margin_free ?? '—'} ${esc(a.currency || '')}`)}
+        ${row('Trading allowed (not investor login)', yes(a.trade_allowed_by_broker))}
+        ${row('Algo Trading button ON', yes(a.algo_trading_button_on))}
+        ${row('Orders locked on RDP script', a.orders_locked_on_this_server ? '<span class="badge green">Locked</span>' : '<span class="badge red">Unlocked</span>')}
+        ${row('Orders locked on app server', r.trading_locked ? '<span class="badge green">Locked</span>' : '<span class="badge red">Unlocked</span>')}
+        <div style="font-weight:700;margin:12px 0 6px">The order that would be sent</div>
+        ${row('Symbol', `<code>${esc(r.symbol)}</code> ${esc(sp.description || '')}`)}
+        ${row('Side / Volume', `BUY · ${r.volume} lot (app counts 1 lot = ${r.lot_g} g → ${r.grams_covered} g)`)}
+        ${row('Broker contract size (1 lot)', `${sp.contract_size ?? '—'} · min ${sp.volume_min ?? '—'} · step ${sp.volume_step ?? '—'}`)}
+        ${row('Live bid / ask', `${sp.bid ?? '—'} / ${sp.ask ?? '—'}`)}
+        ${row('Margin needed', c.margin_required ?? '—')}
+        ${row('Free margin after', c.margin_free_after ?? '—')}
+        ${row('Pending in app', `${r.pending_grams} g`)}
+        <div class="note" style="margin-top:10px">Check that "1 lot" in the app (${r.lot_g} g) matches the broker contract size before unlocking. Nothing was sent to the market.</div>
+      </div>`);
+  } catch (e) { toast(e.message, true); }
+}
 async function mt5Positions() { try { const p = await api('/master/v3/mt5-positions'); openModal(`<div class="modal-h"><h3>Open MT5 positions</h3><button class="x" onclick="closeModal()">×</button></div><div class="modal-b">${Array.isArray(p) && p.length ? `<table><thead><tr><th>Ticket</th><th>Symbol</th><th>Type</th><th class="r">Volume</th><th class="r">Open price</th><th class="r">P/L</th></tr></thead><tbody>${p.map((x) => `<tr><td>${esc(x.ticket)}</td><td>${esc(x.symbol)}</td><td>${esc(x.type)}</td><td class="r">${x.volume}</td><td class="r">${x.price_open}</td><td class="r">${inr(x.profit)}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">No open positions</div>'}</div>`, true); } catch (e) { toast(e.message, true); } }
 
 /* Shop dues (what each shop owes Master) */

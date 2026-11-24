@@ -4549,6 +4549,36 @@ async def mt5_positions(admin: MasterAdmin = Depends(get_master_admin)):
         raise HTTPException(502, f"MT5 server not reachable ({type(e).__name__})")
 
 
+@api.post("/master/v3/mt5-bookings/dry-run")
+async def mt5_dry_run(metal: str = "gold", grams: float = 0.0, admin: MasterAdmin = Depends(get_master_admin)):
+    """DRY RUN - shows exactly which account / symbol / volume the next booking would use and asks the broker
+    (MT5 order_check) whether it would be accepted. NEVER places an order; works while trading is locked."""
+    if not MT5_RATES_URL:
+        raise HTTPException(400, "MT5 server is not configured")
+    metal = "silver" if metal == "silver" else "gold"
+    cfg, pend = await mt5_cfg(), await mt5_pending()
+    lot_g = cfg["silver_lot_g" if metal == "silver" else "gold_lot_g"]
+    step = cfg.get("step") or 0.1
+    want_g = grams if grams > 0 else pend.get(metal, 0)
+    volume = round(math.floor(want_g / lot_g / step + 1e-9) * step, 2)
+    volume = max(volume, cfg.get("min_volume", 0.1))
+    volume = min(volume, cfg["max_volume"])
+    symbol = MT5_SILVER_SYMBOL if metal == "silver" else MT5_GOLD_SYMBOL
+    headers, params = _mt5_auth()
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.get(_mt5_base() + "/order_check", params=params | {"symbol": symbol, "type": "BUY", "volume": volume}, headers=headers)
+        if r.status_code == 404:
+            raise HTTPException(502, "The MT5 server script is old - copy the new mt5_live_rates.py to the RDP and restart it")
+        d = r.json()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(502, f"MT5 server not reachable ({type(e).__name__})")
+    return {"metal": metal, "symbol": symbol, "volume": volume, "grams_covered": r4(volume * lot_g), "lot_g": lot_g,
+            "pending_grams": pend.get(metal, 0), "trading_locked": await mt5_trading_locked(), "auto_booking": cfg["enabled"], "check": d}
+
+
 # ─── KYC photo (private: only the customer's shop and Master can view) ────────
 @api.post("/kyc/photo")
 async def kyc_photo_upload(file: UploadFile = File(...), customer: Customer = Depends(get_current_customer), db: AsyncSession = Depends(get_db)):
