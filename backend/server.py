@@ -4401,7 +4401,13 @@ async def rr_act(rid: str, action: str, jeweller: Jeweller = Depends(get_current
 # ─── MT5 cover: customer buys are booked as BUY orders on the MT5 account ─────
 import httpx
 MT5_LOCK = asyncio.Lock()
-MT5_DEFAULT_CFG = {"enabled": True, "gold_lot_g": 100.0, "silver_lot_g": 100.0, "min_volume": 0.1, "step": 0.1, "max_volume": 10.0}
+MT5_DEFAULT_CFG = {"enabled": True, "gold_lot_g": 100.0, "silver_lot_g": 100.0, "min_volume": 0.1, "step": 0.1, "max_volume": 10.0,
+                   "gold_symbol": "", "silver_symbol": ""}  # empty symbol = same as the live-rate symbol
+
+
+def mt5_book_symbol(cfg, metal):
+    s = (cfg.get("silver_symbol" if metal == "silver" else "gold_symbol") or "").strip()
+    return s or (MT5_SILVER_SYMBOL if metal == "silver" else MT5_GOLD_SYMBOL)
 MT5_RETRY_AFTER = 300  # after a failed order, wait 5 min before auto-trying again (manual retry is immediate)
 MT5_LAST_FAIL = {"gold": 0.0, "silver": 0.0}
 MT5_TASKS = set()  # keep references so booking tasks are not garbage-collected
@@ -4433,10 +4439,10 @@ async def mt5_trading_locked() -> bool:
 
 
 async def _mt5_place(metal, volume):
+    symbol = mt5_book_symbol(await mt5_cfg(), metal)
     if await mt5_trading_locked():
-        return (MT5_SILVER_SYMBOL if metal == "silver" else MT5_GOLD_SYMBOL), {"success": False, "error": "MT5 trading is LOCKED by the owner - no orders are sent to the real account"}
+        return symbol, {"success": False, "error": "MT5 trading is LOCKED by the owner - no orders are sent to the real account"}
     headers, params = _mt5_auth()
-    symbol = MT5_SILVER_SYMBOL if metal == "silver" else MT5_GOLD_SYMBOL
     vol = round(float(volume), 2)
     async with httpx.AsyncClient(timeout=15) as client:
         r = await client.post(_mt5_base() + "/order", params=params, headers=headers,
@@ -4506,6 +4512,8 @@ class Mt5Cfg(BaseModel):
     min_volume: float = Field(gt=0, le=1000)
     step: float = Field(gt=0, le=1000)
     max_volume: float = Field(10, gt=0, le=1000)
+    gold_symbol: str = Field(default="", max_length=40)
+    silver_symbol: str = Field(default="", max_length=40)
 
 
 @api.get("/master/v3/mt5-bookings")
@@ -4513,6 +4521,7 @@ async def mt5_list(admin: MasterAdmin = Depends(get_master_admin), db: AsyncSess
     rows = (await db.execute(select(Mt5Booking).order_by(desc(Mt5Booking.created_at)).limit(200))).scalars().all()
     return {"config": await mt5_cfg(), "pending": await mt5_pending(), "configured": bool(MT5_RATES_URL), "trading_locked": await mt5_trading_locked(),
             "symbols": {"gold": MT5_GOLD_SYMBOL, "silver": MT5_SILVER_SYMBOL},
+            "book_symbols": {"gold": mt5_book_symbol(await mt5_cfg(), "gold"), "silver": mt5_book_symbol(await mt5_cfg(), "silver")},
             "bookings": [{"id": b.id, "metal": b.metal, "symbol": b.symbol, "volume": b.volume, "grams": r4(b.grams), "status": b.status,
                           "ticket": b.ticket, "price": b.price, "error": b.error, "trigger": b.trigger,
                           "created_at": b.created_at.isoformat() if b.created_at else ""} for b in rows]}
@@ -4563,7 +4572,7 @@ async def mt5_dry_run(metal: str = "gold", grams: float = 0.0, admin: MasterAdmi
     volume = round(math.floor(want_g / lot_g / step + 1e-9) * step, 2)
     volume = max(volume, cfg.get("min_volume", 0.1))
     volume = min(volume, cfg["max_volume"])
-    symbol = MT5_SILVER_SYMBOL if metal == "silver" else MT5_GOLD_SYMBOL
+    symbol = mt5_book_symbol(cfg, metal)
     headers, params = _mt5_auth()
     try:
         async with httpx.AsyncClient(timeout=15) as client:
