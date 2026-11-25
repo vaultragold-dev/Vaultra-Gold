@@ -144,6 +144,9 @@ jobs:
                   (assets_dir / name).write_bytes(zf.read(f"assets/{name}"))
               # The in-app brand splash shows this same image right after the native splash (seamless, same size)
               Path("frontend/assets/images/splash-image.png").write_bytes(zf.read("assets/splash.png"))
+              # Full-screen poster for the in-app splash (uploaded splash image), else the square splash
+              full = "assets/splash-original.png" if "assets/splash-original.png" in zf.namelist() else "assets/splash.png"
+              Path("frontend/assets/images/splash-full.png").write_bytes(zf.read(full))
           print("Successfully generated white-label branding for:", j.app_name, j.bundle_id)
           EOF
 
@@ -156,6 +159,7 @@ jobs:
             frontend/tenant.config.json
             frontend/tenant-assets/
             frontend/assets/images/splash-image.png
+            frontend/assets/images/splash-full.png
 
   build-android:
     name: "2. Build Android (.apk & .aab)"

@@ -58,6 +58,8 @@ export function SideMenu({ visible, onClose }: { visible: boolean; onClose: () =
             <X size={20} color={colors.mutedLight} />
           </Pressable>
 
+          {/* Whole drawer scrolls (menu was cut off on small phones / when Language was expanded) */}
+          <ScrollView style={{ flex: 1 }} contentContainerStyle={{ flexGrow: 1, paddingBottom: 8 }} showsVerticalScrollIndicator={false} nestedScrollEnabled keyboardShouldPersistTaps="handled" testID="side-menu-scroll">
           {/* Store Brand Header */}
           <View style={{ flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 16, marginBottom: 16 }}>
             <LogoMark size={40} />
@@ -120,7 +122,7 @@ export function SideMenu({ visible, onClose }: { visible: boolean; onClose: () =
             </View>
           ) : null}
 
-          <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingVertical: 8 }} showsVerticalScrollIndicator={false}>
+          <View style={{ paddingVertical: 8 }}>
             {items.filter((i) => !i.auth || token).map((it) => {
               const Icon = it.icon;
               return (
@@ -172,9 +174,9 @@ export function SideMenu({ visible, onClose }: { visible: boolean; onClose: () =
                 <Text style={[styles.itemLabel, { color: colors.error }]}>{t("logout")}</Text>
               </Pressable>
             ) : null}
-          </ScrollView>
+          </View>
 
-          <View style={styles.footer}>
+          <View style={[styles.footer, { marginTop: "auto" }]}>
             {tenantPhone ? (
               <Pressable onPress={() => Linking.openURL(`tel:${tenantPhone}`)} style={{ alignItems: "center" }} testID="side-menu-contact">
                 <Text style={styles.footMuted}>For any query contact on</Text>
@@ -188,6 +190,7 @@ export function SideMenu({ visible, onClose }: { visible: boolean; onClose: () =
               Powered by <Text style={styles.poweredBrand}>{tenantName || "Digital Gold"}</Text>
             </Text>
           </View>
+          </ScrollView>
         </Animated.View>
       </View>
     </Modal>

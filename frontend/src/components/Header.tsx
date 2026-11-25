@@ -34,7 +34,7 @@ export function LiveTicker({ testID = "live-gold-ticker" }: { testID?: string })
   const sUp = (price?.silver?.change_pct ?? 0) >= 0;
   const bad = priceError || price?.offline || price?.rates_hidden;
   const show = !!price && price.has_live !== false;
-  const fmt0 = (n?: number) => (n ? `₹${n.toLocaleString("en-IN", { maximumFractionDigits: 0 })}` : "—");
+
   const fmt2 = (n?: number) => (n ? `₹${n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "—");
   return (
     <View style={styles.ticker} testID={testID}>
@@ -46,13 +46,13 @@ export function LiveTicker({ testID = "live-gold-ticker" }: { testID?: string })
       ) : (
         <>
           <View style={styles.tickSeg}>
-            <Text style={styles.tickerLabel} numberOfLines={1}>24K</Text>
-            <Text style={styles.tickerPrice} numberOfLines={1} testID="live-gold-price">{show ? fmt0(price?.buy) : "—"}</Text>
+            <Text style={styles.tickerLabel} numberOfLines={1}>Gold 24K</Text>
+            <Text style={styles.tickerPrice} numberOfLines={1} testID="live-gold-price">{show ? fmt2(price?.buy) : "—"}</Text>
             <Text style={[styles.tickerArrow, { color: up ? colors.success : colors.error }]}>{up ? "▲" : "▼"}</Text>
           </View>
           <View style={styles.tickDivider} />
           <View style={styles.tickSeg}>
-            <Text style={styles.tickerLabel} numberOfLines={1}>Ag</Text>
+            <Text style={styles.tickerLabel} numberOfLines={1}>Silver</Text>
             <Text style={styles.tickerPrice} numberOfLines={1} testID="live-silver-price">{show ? fmt2(price?.silver?.buy) : "—"}</Text>
             <Text style={[styles.tickerArrow, { color: sUp ? colors.success : colors.error }]}>{sUp ? "▲" : "▼"}</Text>
           </View>
@@ -170,13 +170,15 @@ export function HomeHeader() {
       </View>
       <View style={styles.pillsRow}>
         <LiveTicker />
-        {token ? (
-          <Pressable testID="vault-balance-pill" onPress={() => router.push("/vault")} style={styles.balancePill}>
-            <Text style={styles.balanceGrams}>{grams(g)}</Text>
-            <Text style={styles.balanceInr}>{price?.has_live === false ? "Rates paused" : `≈ ${inr(vault?.current_value ?? 0)}`}</Text>
-          </Pressable>
-        ) : null}
       </View>
+      {token ? (
+        <Pressable testID="vault-balance-pill" onPress={() => router.push("/vault")} style={styles.balancePill}>
+          <Coins size={14} color={colors.brandPrimary} />
+          <Text style={styles.balanceLabel}>My vault</Text>
+          <Text style={styles.balanceGrams}>{grams(g)}</Text>
+          <Text style={styles.balanceInr} numberOfLines={1}>{price?.has_live === false ? "Rates paused" : `≈ ${inr(vault?.current_value ?? 0)}`}</Text>
+        </Pressable>
+      ) : null}
       <SideMenu visible={menu} onClose={() => setMenu(false)} />
     </View>
   );
@@ -243,8 +245,9 @@ const styles = themed(() => ({
     flex: 1,
     flexDirection: "row",
     alignItems: "center",
+    justifyContent: "space-between",
     gap: 6,
-    height: 36,
+    height: 38,
     paddingHorizontal: 12,
     borderRadius: radius.pill,
     backgroundColor: colors.brandTertiary,
@@ -252,23 +255,27 @@ const styles = themed(() => ({
     borderColor: colors.goldHairline,
     overflow: "hidden",
   },
-  tickerLabel: { fontFamily: fonts.medium, fontSize: 10, color: colors.muted },
-  tickerPrice: { fontFamily: fonts.bold, fontSize: 12.5, color: colors.onSurface, letterSpacing: -0.3, flexShrink: 1 },
+  tickerLabel: { fontFamily: fonts.medium, fontSize: 11, color: colors.muted },
+  tickerPrice: { fontFamily: fonts.bold, fontSize: 14, color: colors.onSurface, letterSpacing: -0.3, flexShrink: 1 },
   tickerArrow: { fontFamily: fonts.bold, fontSize: 9 },
-  tickSeg: { flexDirection: "row", alignItems: "center", gap: 3, flexShrink: 1 },
+  tickSeg: { flexDirection: "row", alignItems: "center", gap: 4, flexShrink: 1, flex: 1, justifyContent: "center" },
   tickDivider: { width: 1, height: 16, backgroundColor: colors.goldHairline, marginHorizontal: 2 },
   tickerLive: { fontFamily: fonts.bold, fontSize: 10, letterSpacing: 0.4 },
   balancePill: {
-    height: 36,
+    marginTop: 8,
+    height: 34,
     paddingHorizontal: 12,
     borderRadius: radius.pill,
     backgroundColor: colors.surfaceInverse,
     borderWidth: 1,
     borderColor: colors.goldHairline,
-    justifyContent: "center",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
   },
-  balanceGrams: { fontFamily: fonts.bold, fontSize: 12, color: colors.brandPrimary, letterSpacing: -0.2 },
-  balanceInr: { fontFamily: fonts.medium, fontSize: 10, color: colors.goldSheen },
+  balanceLabel: { fontFamily: fonts.medium, fontSize: 11, color: colors.goldSheen },
+  balanceGrams: { fontFamily: fonts.bold, fontSize: 13, color: colors.brandPrimary, letterSpacing: -0.2 },
+  balanceInr: { flex: 1, textAlign: "right", fontFamily: fonts.semibold, fontSize: 12, color: colors.goldSheen },
   screenTitle: { fontFamily: fonts.black, fontSize: 26, letterSpacing: -0.8, color: colors.onSurface },
   screenSub: { fontFamily: fonts.regular, fontSize: 13, color: colors.muted, marginTop: 2 },
   backBtn: { width: 44, height: 44, justifyContent: "center", alignItems: "center" },

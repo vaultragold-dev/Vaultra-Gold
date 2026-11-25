@@ -32,6 +32,7 @@ export type User = {
   referral_code?: string;
   referral_balance?: number;
   referred_by?: string | null;
+  mpin_reset_at?: string | null;
 };
 
 export type SilverPrice = { buy: number; sell: number; change: number; change_pct: number; direction: "up" | "down" };

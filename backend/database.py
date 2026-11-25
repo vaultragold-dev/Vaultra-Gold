@@ -48,6 +48,7 @@ async def init_db():
             "ALTER TABLE jewellers ADD COLUMN IF NOT EXISTS splash_url VARCHAR(500) DEFAULT ''",
             "ALTER TABLE jewellers ADD COLUMN IF NOT EXISTS accent_color VARCHAR(7) DEFAULT ''",
             "ALTER TABLE jewellers ADD COLUMN IF NOT EXISTS background_color VARCHAR(7) DEFAULT ''",
+            "ALTER TABLE customers ADD COLUMN IF NOT EXISTS mpin_reset_at TIMESTAMP WITH TIME ZONE",
             "ALTER TABLE jewellers ADD COLUMN IF NOT EXISTS text_color VARCHAR(7) DEFAULT ''",
             "ALTER TABLE jewellers ADD COLUMN IF NOT EXISTS store_lat DOUBLE PRECISION",
             "ALTER TABLE jewellers ADD COLUMN IF NOT EXISTS store_lng DOUBLE PRECISION",

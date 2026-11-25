@@ -43,7 +43,8 @@ export default function Profile() {
     } else if (!granted) setPhotoBlocked(true);
     if (!granted) return toast("info", "Permission needed", "Allow access to add your KYC photo, or open Settings");
     setPhotoBlocked(false);
-    const opts = { mediaTypes: ["images"] as ImagePicker.MediaType[], quality: 0.6, allowsEditing: true, aspect: [3, 4] as [number, number] };
+    // No forced crop step - picks / takes the photo and uploads it straight away
+    const opts = { mediaTypes: ["images"] as ImagePicker.MediaType[], quality: 0.6, allowsEditing: false };
     const res = useCamera ? await ImagePicker.launchCameraAsync(opts) : await ImagePicker.launchImageLibraryAsync(opts);
     if (res.canceled || !res.assets?.[0]) return;
     setPhotoBusy(true);
@@ -57,9 +58,11 @@ export default function Profile() {
     }
   };
 
+  // Pre-fill the name once (not on every keystroke - the field could not be cleared before)
+  const nameFilled = React.useRef(false);
   useEffect(() => {
-    if (user && !fullName) setFullName(user.name);
-  }, [user, fullName]);
+    if (user && !nameFilled.current) { nameFilled.current = true; setFullName(user.name); }
+  }, [user]);
 
   const submitKyc = async () => {
     if (!fullName.trim() || fullName.trim().length < 2) {
@@ -238,8 +241,8 @@ export default function Profile() {
                   {photo ? <Image source={{ uri: photo.uri }} style={{ width: "100%", height: "100%" }} contentFit="cover" /> : photoBusy ? <ActivityIndicator color={colors.brandPrimary} /> : <Camera size={22} color={colors.mutedLight} />}
                 </View>
                 <View style={{ flex: 1, gap: 8 }}>
-                  <Button title="Take photo" size="sm" variant="outline" onPress={() => pickPhoto(true)} disabled={photoBusy} testID="kyc-photo-camera" />
-                  <Button title="Choose from gallery" size="sm" variant="outline" onPress={() => pickPhoto(false)} disabled={photoBusy} testID="kyc-photo-gallery" />
+                  <Button title="Take a photo" size="sm" variant="outline" onPress={() => pickPhoto(true)} disabled={photoBusy} testID="kyc-photo-camera" />
+                  <Button title={photo ? "Change photo" : "Upload from gallery"} size="sm" variant="outline" onPress={() => pickPhoto(false)} disabled={photoBusy} testID="kyc-photo-gallery" />
                   {photoBlocked ? <Button title="Open Settings" size="sm" variant="gold" onPress={() => Linking.openSettings()} testID="kyc-photo-settings" /> : null}
                 </View>
               </View>

@@ -37,6 +37,21 @@ export function useKycSteps() {
   return { steps, setSteps, reload: load };
 }
 
+function Row({ icon, title, sub, ok, children }: { icon: React.ReactNode; title: string; sub: string; ok?: boolean; children?: React.ReactNode }) {
+  return (
+    <View style={[styles.step, ok && styles.stepOk]}>
+      <View style={styles.stepHead}>
+        <View style={[styles.icon, ok && { backgroundColor: colors.successTint }]}>{ok ? <CheckCircle2 size={18} color={colors.success} /> : icon}</View>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.title}>{title}</Text>
+          <Text style={styles.sub}>{sub}</Text>
+        </View>
+      </View>
+      {children}
+    </View>
+  );
+}
+
 export function InstantKyc({ steps, setSteps }: { steps: Steps; setSteps: (s: Steps) => void }) {
   const toast = useToast();
   const { refresh } = useApp();
@@ -111,19 +126,6 @@ export function InstantKyc({ steps, setSteps }: { steps: Steps; setSteps: (s: St
       toast("error", "Bank verification failed", e.message);
     }
   };
-
-  const Row = ({ icon, title, sub, ok, children }: { icon: React.ReactNode; title: string; sub: string; ok?: boolean; children?: React.ReactNode }) => (
-    <View style={[styles.step, ok && styles.stepOk]}>
-      <View style={styles.stepHead}>
-        <View style={[styles.icon, ok && { backgroundColor: colors.successTint }]}>{ok ? <CheckCircle2 size={18} color={colors.success} /> : icon}</View>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.title}>{title}</Text>
-          <Text style={styles.sub}>{sub}</Text>
-        </View>
-      </View>
-      {children}
-    </View>
-  );
 
   return (
     <View style={{ gap: 10, marginTop: 8 }} testID="instant-kyc">

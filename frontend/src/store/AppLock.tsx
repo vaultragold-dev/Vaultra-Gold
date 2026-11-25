@@ -18,6 +18,7 @@ import { storage } from "@/src/utils/storage";
 
 const PIN_KEY = "vdg_mpin";
 const BIO_KEY = "vdg_mpin_bio";
+const PIN_AT_KEY = "vdg_mpin_set_at";
 const LOCK_AFTER_MS = 60_000;
 const MAX_ATTEMPTS = 5;
 
@@ -63,7 +64,7 @@ export const useAppLock = () => useContext(Ctx);
 type Mode = "none" | "unlock" | "create" | "confirm";
 
 export function AppLockProvider({ children }: { children: React.ReactNode }) {
-  const { token, booting, signOut } = useApp();
+  const { token, booting, signOut, user } = useApp();
   const router = useRouter();
   const pathname = usePathname();
   const [pin, setPin] = useState<string | null>(null);
@@ -96,6 +97,7 @@ export function AppLockProvider({ children }: { children: React.ReactNode }) {
       if (prevToken.current) {
         storage.secureRemove(PIN_KEY);
         storage.removeItem(BIO_KEY);
+        storage.removeItem(PIN_AT_KEY);
         setPin(null);
         setBio(false);
       }
@@ -109,6 +111,23 @@ export function AppLockProvider({ children }: { children: React.ReactNode }) {
     }
     prevToken.current = token;
   }, [token, pin, loaded, pathname]);
+
+  // Shop / support pressed "Reset MPIN": forget the saved MPIN so the customer creates a new one
+  useEffect(() => {
+    const resetAt = (user as any)?.mpin_reset_at as string | null | undefined;
+    if (!loaded || !token || !pin || !resetAt) return;
+    (async () => {
+      const setAt = String((await storage.getItem(PIN_AT_KEY, "")) || "");
+      if (!setAt || new Date(resetAt).getTime() > new Date(setAt).getTime()) {
+        await storage.secureRemove(PIN_KEY);
+        await storage.removeItem(BIO_KEY);
+        setBio(false);
+        unlockedRef.current = false;
+        setPin(null);
+        setMode("create");
+      }
+    })();
+  }, [user, loaded, token, pin]);
 
   // Re-lock after the app was in the background for a while
   useEffect(() => {
@@ -175,6 +194,7 @@ export function AppLockProvider({ children }: { children: React.ReactNode }) {
                 return;
               }
               await storage.secureSet(PIN_KEY, value);
+              await storage.setItem(PIN_AT_KEY, new Date().toISOString());
               setPin(value);
               onUnlocked();
               // Offer biometric right after creating the MPIN

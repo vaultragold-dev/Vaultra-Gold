@@ -94,6 +94,7 @@ class Customer(Base):
     referred_by = Column(String, ForeignKey("customers.id"), nullable=True)
     kyc_status = Column(String(20), default="not_submitted")  # not_submitted, pending, approved, rejected
     kyc_data = Column(JSON, default=dict)
+    mpin_reset_at = Column(DateTime(timezone=True), nullable=True)  # shop/master asked the customer to set a new MPIN
     status = Column(String(20), default="active")
     created_at = Column(DateTime(timezone=True), default=utcnow)
     updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)

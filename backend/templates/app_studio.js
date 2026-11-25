@@ -350,13 +350,13 @@ function vStudio() {
           <div style="background:#fff;border:1px solid #cbd5e1;border-radius:8px;padding:12px;display:flex;flex-direction:column;justify-content:space-between">
             <div>
               <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
-                <label style="font-weight:700;font-size:12px;color:#0f172a">Launch Splash Screen Icon</label>
-                <span class="badge gold" style="font-size:10px">1024 x 1024 px</span>
+                <label style="font-weight:700;font-size:12px;color:#0f172a">Launch Splash Screen</label>
+                <span class="badge gold" style="font-size:10px">1080 x 1920 px poster</span>
               </div>
               <div style="font-size:11px;color:#64748b;line-height:1.45;margin-bottom:10px">
-                • <b>Recommended:</b> 1024×1024 px Square Splash Icon (PNG).<br>
-                • <b>Modern Android 12+ & iOS:</b> Renders centered splash emblem over the full-screen brand background color.<br>
-                • <b>Important:</b> Keep logo within the central <b>470px square</b> (Android 12+ shows only a circle) — the app shows it at the same size on every phone. Do not upload full vertical poster cards with edge text (Android 12+ shrinks posters into tiny central icons).<br>
+                • <b>Full-screen poster (recommended):</b> upload a 1080×1920 px (9:16) image. The app shows it edge to edge exactly like the preview on the right.<br>
+                • Keep logo and text inside the middle area (about 15% margin from every edge) - different phones crop the edges slightly.<br>
+                • For the first split second the phone shows its own small system splash (logo on the brand colour) - this is an Android/iOS rule and cannot be changed; the poster appears right after.<br>
                 • <b>Auto-Fallback:</b> If omitted, your App Icon is automatically used on luxury theme background.
               </div>
             </div>

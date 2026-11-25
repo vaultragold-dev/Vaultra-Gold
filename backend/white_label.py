@@ -112,6 +112,13 @@ def tenant_config(j, api_base, logo_bytes=None, splash_bytes=None):
                 adaptive_bg = _sample_bg_color(temp_logo)
         except Exception:
             pass
+    splash_mode = "icon"
+    try:
+        _sp0 = Image.open(io.BytesIO(splash_bytes)) if splash_bytes else None
+        if _sp0 is not None and _sp0.height > 1.2 * _sp0.width:
+            splash_mode = "poster"  # full-screen splash image, shown edge to edge by the app (matches App Studio preview)
+    except Exception:
+        pass
     try:
         _lg = Image.open(io.BytesIO(logo_bytes)) if logo_bytes else None
         _sp = Image.open(io.BytesIO(splash_bytes)) if splash_bytes else None
@@ -135,6 +142,7 @@ def tenant_config(j, api_base, logo_bytes=None, splash_bytes=None):
                   "font": p["font"], "cardRadius": p["cardRadius"]},
         "homeLayout": p["homeLayout"],
         "assets": {"logoUrl": abs_url(j.logo_url, api_base), "splashUrl": abs_url(j.splash_url, api_base),
+                   "splashMode": splash_mode,
                    "icon": "assets/icon.png", "adaptiveIcon": "assets/adaptive-icon.png", "splash": "assets/splash.png"},
         "support": {"phone": j.phone, "email": j.support_email or j.email},
         "storeInfo": {"name": j.business_name, "address": getattr(j, "address", "") or "", "city": getattr(j, "city", "") or "",

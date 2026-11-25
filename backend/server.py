@@ -208,7 +208,7 @@ def require_live_rates():
 
 
 # ─── Platform controls (Master → Security & Controls) ─────────────────────────
-CONTROLS = {"global": {"rates": True, "booking": True, "min_investment": 500.0, "max_investment": 200000.0, "daily_limit": 200000.0}, "shops": {}}
+CONTROLS = {"global": {"rates": True, "booking": True, "min_investment": 500.0, "max_investment": 500000.0, "daily_limit": 500000.0}, "shops": {}}
 
 
 def controls_for(jid):
@@ -217,8 +217,8 @@ def controls_for(jid):
     return {"rates": bool(g.get("rates", True) and s.get("rates", True)),
             "booking": bool(g.get("booking", True) and s.get("booking", True)),
             "min_investment": float(g.get("min_investment", 500.0)),
-            "max_investment": float(g.get("max_investment", 200000.0) or 200000.0),
-            "daily_limit": float(g.get("daily_limit", 200000.0) or 200000.0)}
+            "max_investment": float(g.get("max_investment", 500000.0) or 500000.0),
+            "daily_limit": float(g.get("daily_limit", 500000.0) or 500000.0)}
 
 
 def shown_gold_rate(jid):
@@ -569,6 +569,14 @@ def invoice_no():
     return "VDG" + now_utc().strftime("%y%m%d") + str(random.randint(10000, 99999))
 
 
+def cust_search(search: str):
+    s = (search or "").strip()
+    like = f"%{s}%"
+    return or_(Customer.phone.contains(s), Customer.first_name.ilike(like), Customer.last_name.ilike(like),
+               func.concat(Customer.first_name, " ", Customer.last_name).ilike(like),
+               Customer.email.ilike(like), Customer.wallet_id.ilike(like))
+
+
 def customer_dict(c: Customer):
     """Serialize customer for API response."""
     grams = c.gold_grams or 0
@@ -586,6 +594,7 @@ def customer_dict(c: Customer):
         "referral_balance": r2(c.referral_balance or 0),
         "wallet_balance": r2(c.wallet_balance or 0),
         "referred_by": c.referred_by,
+        "mpin_reset_at": c.mpin_reset_at.isoformat() if getattr(c, "mpin_reset_at", None) else None,
         "created_at": c.created_at.isoformat() if c.created_at else "",
     }
 
@@ -701,11 +710,16 @@ class GoalCreate(BaseModel):
 
 
 class KycSubmit(BaseModel):
+    # Customer may give PAN, Aadhaar or both (the app checks the format); empty values were rejected before
     full_name: str = Field(min_length=2)
-    aadhaar: str = Field(min_length=12, max_length=12)
-    pan: str = Field(min_length=10, max_length=10)
+    aadhaar: str = Field(default="", pattern=r"^(\d{12})?$")
+    pan: str = Field(default="", pattern=r"^([A-Z]{5}[0-9]{4}[A-Z])?$")
     dob: str = ""
     photo_id: str = ""
+
+    @property
+    def has_id(self):
+        return bool(self.aadhaar or self.pan)
 
 
 class WalletDeposit(BaseModel):
@@ -1415,6 +1429,8 @@ async def delete_me(
 async def kyc_submit(body: KycSubmit, customer: Customer = Depends(get_current_customer), db: AsyncSession = Depends(get_db)):
     if customer.kyc_status in ("pending", "approved"):
         raise HTTPException(400, f"KYC already {customer.kyc_status}")
+    if not body.has_id:
+        raise HTTPException(400, "Enter your PAN or Aadhaar number")
     customer.kyc_status = "pending"
     customer.kyc_data = {
         "full_name": body.full_name, "aadhaar": body.aadhaar,
@@ -2817,6 +2833,20 @@ async def mark_notifications_read(customer: Customer = Depends(get_current_custo
     return {"ok": True}
 
 
+@api.delete("/notifications")
+async def clear_notifications(customer: Customer = Depends(get_current_customer), db: AsyncSession = Depends(get_db)):
+    await db.execute(delete(Notification).where(Notification.customer_id == customer.id))
+    await db.commit()
+    return {"ok": True}
+
+
+@api.delete("/notifications/{nid}")
+async def delete_notification(nid: str, customer: Customer = Depends(get_current_customer), db: AsyncSession = Depends(get_db)):
+    await db.execute(delete(Notification).where(Notification.customer_id == customer.id, Notification.id == nid))
+    await db.commit()
+    return {"ok": True}
+
+
 # ═══════════════════ JEWELLER ADMIN ═══════════════════════════════════════════
 LOGIN_FAILS: dict = {}  # key -> [failure timestamps]; blocks password guessing on panel logins
 LOGIN_MAX_FAILS, LOGIN_WINDOW = 5, 15 * 60
@@ -2913,7 +2943,7 @@ async def jeweller_dashboard(jeweller: Jeweller = Depends(get_current_jeweller),
 async def jeweller_customers(search: str = "", jeweller: Jeweller = Depends(get_current_jeweller), db: AsyncSession = Depends(get_db)):
     q = select(Customer).where(Customer.jeweller_id == jeweller.id)
     if search:
-        q = q.where(or_(Customer.phone.contains(search), Customer.first_name.ilike(f"%{search}%")))
+        q = q.where(cust_search(search))
     result = await db.execute(q.order_by(desc(Customer.created_at)).limit(500))
     return [customer_dict(c) for c in result.scalars().all()]
 
@@ -3247,6 +3277,88 @@ async def master_toggle_jeweller(jeweller_id: str, admin: MasterAdmin = Depends(
     return {"id": j.id, "status": j.status}
 
 
+async def _delete_customers(db, where_sql: str, params: dict):
+    """Removes customers matched by where_sql and every row that belongs to them."""
+    ids = [r[0] for r in (await db.execute(text(f"SELECT id FROM customers WHERE {where_sql}"), params)).all()]
+    if not ids:
+        return 0
+    p = {"ids": ids}
+    for stmt in (
+        "DELETE FROM kyc_checks WHERE customer_id = ANY(:ids)",
+        "DELETE FROM pool_contributions WHERE customer_id = ANY(:ids) OR transaction_id IN (SELECT id FROM transactions WHERE customer_id = ANY(:ids))",
+        "DELETE FROM pickups WHERE customer_id = ANY(:ids) OR transaction_id IN (SELECT id FROM transactions WHERE customer_id = ANY(:ids))",
+        "DELETE FROM notifications WHERE customer_id = ANY(:ids)",
+        "DELETE FROM wallet_transactions WHERE customer_id = ANY(:ids)",
+        "DELETE FROM gifts WHERE sender_id = ANY(:ids) OR recipient_id = ANY(:ids)",
+        "DELETE FROM goals WHERE customer_id = ANY(:ids)",
+        "DELETE FROM alerts WHERE customer_id = ANY(:ids)",
+        "DELETE FROM sips WHERE customer_id = ANY(:ids)",
+        "DELETE FROM orders WHERE customer_id = ANY(:ids)",
+        "DELETE FROM transactions WHERE customer_id = ANY(:ids)",
+        "UPDATE customers SET referred_by = NULL WHERE referred_by = ANY(:ids)",
+        "DELETE FROM uploads WHERE owner = ANY(SELECT 'kyc:' || x FROM unnest(CAST(:ids AS varchar[])) AS x)",
+        "DELETE FROM customers WHERE id = ANY(:ids)",
+    ):
+        await db.execute(text(stmt), p)
+    return len(ids)
+
+
+class ShopDelete(BaseModel):
+    confirm_name: str
+
+
+@api.post("/master/jewellers/{jeweller_id}/delete")
+async def master_delete_jeweller(jeweller_id: str, body: ShopDelete, admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
+    """Permanently deletes a shop with its customers, orders, products, banners and settings."""
+    j = (await db.execute(select(Jeweller).where(Jeweller.id == jeweller_id))).scalar_one_or_none()
+    if not j:
+        raise HTTPException(404, "Shop not found")
+    if body.confirm_name.strip().lower() != (j.business_name or "").strip().lower():
+        raise HTTPException(400, "Type the exact shop name to confirm deletion")
+    n_cust = await _delete_customers(db, "jeweller_id = :jid", {"jid": jeweller_id})
+    p = {"jid": jeweller_id}
+    for stmt in (
+        "DELETE FROM kyc_checks WHERE jeweller_id = :jid", "DELETE FROM pool_contributions WHERE jeweller_id = :jid",
+        "DELETE FROM pickups WHERE jeweller_id = :jid", "DELETE FROM gifts WHERE jeweller_id = :jid",
+        "DELETE FROM alerts WHERE jeweller_id = :jid", "DELETE FROM sips WHERE jeweller_id = :jid",
+        "DELETE FROM orders WHERE jeweller_id = :jid", "DELETE FROM transactions WHERE jeweller_id = :jid",
+        "DELETE FROM quotes WHERE jeweller_id = :jid", "DELETE FROM otp_challenges WHERE jeweller_id = :jid",
+        "DELETE FROM products WHERE jeweller_id = :jid", "DELETE FROM banners WHERE jeweller_id = :jid",
+        "DELETE FROM faqs WHERE jeweller_id = :jid", "DELETE FROM shop_payments WHERE jeweller_id = :jid",
+        "DELETE FROM app_settings WHERE key LIKE '%' || :jid || '%'",
+        "DELETE FROM jewellers WHERE id = :jid",
+    ):
+        await db.execute(text(stmt), p)
+    CONTROLS["shops"].pop(jeweller_id, None)
+    await audit(db, "master", admin, "shop.delete", j.business_name, {"customers": n_cust}, None)
+    await db.commit()
+    return {"ok": True, "deleted": j.business_name, "customers_deleted": n_cust}
+
+
+async def _reset_mpin(db, c, by: str):
+    c.mpin_reset_at = now_utc()
+    db.add(Notification(id=str(uuid.uuid4()), customer_id=c.id, type="security", title="Set a new MPIN",
+                        message=f"{by} has reset your app MPIN. Please set a new 4-digit MPIN the next time you open the app."))
+    await db.commit()
+    return {"ok": True, "mpin_reset_at": c.mpin_reset_at.isoformat()}
+
+
+@api.post("/jeweller/customers/{cid}/reset-mpin")
+async def jeweller_reset_mpin(cid: str, jeweller: Jeweller = Depends(get_current_jeweller), db: AsyncSession = Depends(get_db)):
+    c = (await db.execute(select(Customer).where(Customer.id == cid, Customer.jeweller_id == jeweller.id))).scalar_one_or_none()
+    if not c:
+        raise HTTPException(404, "Customer not found")
+    return await _reset_mpin(db, c, jeweller.business_name or "Your jeweller")
+
+
+@api.post("/master/customers/{cid}/reset-mpin")
+async def master_reset_mpin(cid: str, admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
+    c = (await db.execute(select(Customer).where(Customer.id == cid))).scalar_one_or_none()
+    if not c:
+        raise HTTPException(404, "Customer not found")
+    return await _reset_mpin(db, c, "Support")
+
+
 @api.post("/master/jewellers/{jeweller_id}/impersonate-token")
 async def master_jeweller_impersonate(jeweller_id: str, admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Jeweller).where(Jeweller.id == jeweller_id))
@@ -3299,7 +3411,7 @@ async def master_customers(jeweller_id: str = "", search: str = "",
     if jeweller_id:
         q = q.where(Customer.jeweller_id == jeweller_id)
     if search:
-        q = q.where(or_(Customer.phone.contains(search), Customer.first_name.ilike(f"%{search}%")))
+        q = q.where(cust_search(search))
     result = await db.execute(q.order_by(desc(Customer.created_at)).limit(500))
     return [customer_dict(c) for c in result.scalars().all()]
 
@@ -3560,8 +3672,7 @@ async def jp_orders(side: str = "all", status: str = "all", metal: str = "all", 
     elif metal == "gold":
         q = q.where(Transaction.metal != "silver", Transaction.type != "buy_silver")
     if search:
-        q = q.where(or_(Customer.phone.contains(search), Customer.first_name.ilike(f"%{search}%"),
-                        Customer.last_name.ilike(f"%{search}%"), Transaction.invoice_no.ilike(f"%{search}%")))
+        q = q.where(or_(cust_search(search), Transaction.invoice_no.ilike(f"%{search}%")))
     if range:
         s_, e_ = _range_bounds(range, start, end)
         q = q.where(Transaction.created_at >= s_, Transaction.created_at < e_)
@@ -3607,8 +3718,7 @@ async def jp_bill(txn_id: str, jeweller: Jeweller = Depends(get_current_jeweller
 async def jp_holdings(search: str = "", jeweller: Jeweller = Depends(get_current_jeweller), db: AsyncSession = Depends(get_db)):
     q = select(Customer).where(Customer.jeweller_id == jeweller.id)
     if search:
-        q = q.where(or_(Customer.phone.contains(search), Customer.first_name.ilike(f"%{search}%"),
-                        Customer.last_name.ilike(f"%{search}%"), Customer.wallet_id.ilike(f"%{search}%")))
+        q = q.where(cust_search(search))
     customers = (await db.execute(q.order_by(desc(Customer.gold_grams)))).scalars().all()
     agg = {r[0]: r for r in (await db.execute(select(
         Transaction.customer_id,
@@ -4056,7 +4166,7 @@ async def _sips(db, jid=None, status="all", search=""):
     if status != "all":
         q = q.where(Sip.status == status)
     if search:
-        q = q.where(or_(Customer.phone.contains(search), Customer.first_name.ilike(f"%{search}%"), Customer.last_name.ilike(f"%{search}%")))
+        q = q.where(cust_search(search))
     rows = (await db.execute(q.order_by(desc(Sip.created_at)))).all()
     sip_col = text("(transactions.extra ->> 'sip_id')")
     paid = {r[0]: r[1:] for r in (await db.execute(select(
@@ -4129,7 +4239,7 @@ async def mp_orders(jeweller_id: str = "", side: str = "all", search: str = "", 
     if jeweller_id:
         q = q.where(Transaction.jeweller_id == jeweller_id)
     if search:
-        q = q.where(or_(Customer.phone.contains(search), Customer.first_name.ilike(f"%{search}%"), Transaction.invoice_no.ilike(f"%{search}%")))
+        q = q.where(or_(cust_search(search), Transaction.invoice_no.ilike(f"%{search}%")))
     return [_order_row(t, c) | {"shop": shop, "jeweller_id": t.jeweller_id} for t, c, shop in (await db.execute(q.order_by(desc(Transaction.created_at)).limit(500))).all()]
 
 
@@ -4249,8 +4359,8 @@ class ControlsUpdate(BaseModel):
     rates: bool = True
     booking: bool = True
     min_investment: float = Field(default=500, ge=10, le=100000)
-    max_investment: float = Field(default=200000, ge=100, le=10000000)
-    daily_limit: float = Field(default=200000, ge=100, le=50000000)
+    max_investment: float = Field(default=500000, ge=100, le=10000000)
+    daily_limit: float = Field(default=500000, ge=100, le=50000000)
     shops: dict = {}
 
 

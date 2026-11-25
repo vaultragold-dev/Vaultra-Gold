@@ -1,7 +1,7 @@
 import { useRouter } from "expo-router";
-import { ArrowLeft, Bell, Gift, TrendingUp, Users } from "lucide-react-native";
+import { ArrowLeft, Bell, Gift, Trash2, TrendingUp, Users, X } from "lucide-react-native";
 import React, { useEffect, useState } from "react";
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { GlassBackdrop } from "@/src/components/GlassBackdrop";
@@ -39,6 +39,18 @@ export default function NotificationsScreen() {
   const [notifs, setNotifs] = useState<Notification[]>([]);
   const [loading, setLoading] = useState(true);
 
+  const clearAll = () =>
+    Alert.alert("Clear all notifications?", "This removes every notification from your list.", [
+      { text: "Cancel", style: "cancel" },
+      { text: "Clear all", style: "destructive", onPress: async () => {
+        try { await api("/notifications", { method: "DELETE" }); setNotifs([]); reloadNotifs(); } catch {}
+      } },
+    ]);
+  const removeOne = async (id: string) => {
+    setNotifs((l) => l.filter((x) => x.id !== id));
+    try { await api(`/notifications/${id}`, { method: "DELETE" }); reloadNotifs(); } catch {}
+  };
+
   useEffect(() => {
     if (!token) { setLoading(false); return; }
     api<{ notifications: Notification[] }>("/notifications")
@@ -59,7 +71,12 @@ export default function NotificationsScreen() {
           <ArrowLeft size={22} color={colors.onSurface} />
         </Pressable>
         <Text style={styles.headerTitle}>Notifications</Text>
-        <View style={{ width: 44 }} />
+        {notifs.length ? (
+          <Pressable onPress={clearAll} style={styles.clearBtn} testID="notif-clear-all" hitSlop={6}>
+            <Trash2 size={16} color={colors.error} />
+            <Text style={styles.clearText}>Clear all</Text>
+          </Pressable>
+        ) : <View style={{ width: 44 }} />}
       </View>
 
       {loading ? (
@@ -87,6 +104,9 @@ export default function NotificationsScreen() {
                 <Text style={styles.notifTime}>{timeAgo(n.created_at)}</Text>
               </View>
               {!n.read && <View style={styles.unreadDot} />}
+              <Pressable onPress={() => removeOne(n.id)} hitSlop={10} testID={`notif-del-${n.id}`} style={{ padding: 2 }}>
+                <X size={16} color={colors.mutedLight} />
+              </Pressable>
             </View>
           ))}
         </ScrollView>
@@ -108,6 +128,8 @@ const styles = themed(() => ({
     borderBottomColor: colors.divider,
   },
   backBtn: { width: 44, height: 44, justifyContent: "center" },
+  clearBtn: { flexDirection: "row", alignItems: "center", gap: 4, height: 36, paddingHorizontal: 10, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.errorTint },
+  clearText: { fontFamily: fonts.semibold, fontSize: 12, color: colors.error },
   headerTitle: { fontFamily: fonts.bold, fontSize: 17, color: colors.onSurface },
   center: { flex: 1, alignItems: "center", justifyContent: "center", gap: 8 },
   emptyIcon: { width: 64, height: 64, borderRadius: 32, backgroundColor: colors.surfaceTertiary, alignItems: "center", justifyContent: "center", marginBottom: 8 },

@@ -126,8 +126,15 @@ function vJewellers() {
       <td>${esc(j.owner_name)}<div class="sub">${esc(j.email)}</div></td><td class="r num">${j.customer_count}</td><td class="r num">${g4(j.total_grams)}</td>
       <td class="num">${inr(j.gold_commission_per_g)}/g gold<div class="sub">${inr(j.silver_commission_per_g)}/g silver</div></td>
       <td style="font-size:13px">${esc(j.domain || '—')}<div class="sub">${esc(j.admin_domain || '')}</div></td><td>${statusBadge(j.status)}</td>
-      <td class="r" style="white-space:nowrap"><button class="btn sm primary" onclick="openShopAdmin('${j.id}')" title="1-Click Login to Shop Admin">🚀 Open Shop Admin ↗</button> <button class="btn sm" onclick="domains('${j.id}')" data-domains="${j.id}">${icon('globe')} Domains</button> <button class="btn sm ${j.status === 'active' ? 'danger' : ''}" onclick="toggleJ('${j.id}')">${j.status === 'active' ? 'Suspend' : 'Activate'}</button></td></tr>`).join('')}
+      <td class="r" style="white-space:nowrap"><button class="btn sm primary" onclick="openShopAdmin('${j.id}')" title="1-Click Login to Shop Admin">🚀 Open Shop Admin ↗</button> <button class="btn sm" onclick="domains('${j.id}')" data-domains="${j.id}">${icon('globe')} Domains</button> <button class="btn sm ${j.status === 'active' ? 'danger' : ''}" onclick="toggleJ('${j.id}')">${j.status === 'active' ? 'Suspend' : 'Activate'}</button> <button class="btn sm danger" onclick="deleteJ('${j.id}')" title="Delete permanently">Delete</button></td></tr>`).join('')}
     </tbody></table></div></div>`;
+}
+async function deleteJ(id) {
+  const j = S.jewellers.find((x) => x.id === id); if (!j) return;
+  const name = prompt(`PERMANENTLY delete "${j.business_name}"?\n\nThis removes the shop, its app settings, ALL its customers, orders, SIPs, products and banners. This cannot be undone.\n\nType the shop name exactly to confirm:`);
+  if (name === null) return;
+  if (name.trim().toLowerCase() !== (j.business_name || '').trim().toLowerCase()) return toast('Name did not match - nothing deleted', true);
+  await safe(async () => { const r = await api(`/master/jewellers/${id}/delete`, { method: 'POST', body: { confirm_name: name } }); S.jewellers = await api('/master/jewellers'); toast(`Deleted ${r.deleted} (${r.customers_deleted} customers)`); }, 'jewellers');
 }
 async function toggleJ(id) { const j = S.jewellers.find((x) => x.id === id); if (j.status === 'active' && !confirm(`Suspend ${j.business_name}? Their app and panel stop working.`)) return; await safe(async () => { await api(`/master/jewellers/${id}/toggle`, { method: 'POST' }); S.jewellers = await api('/master/jewellers'); toast('Updated'); }, 'jewellers'); }
 function onboard() {

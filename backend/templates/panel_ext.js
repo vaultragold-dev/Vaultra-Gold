@@ -224,6 +224,11 @@ function kycDetails(c, photoPath, tokenKey, actions = '') {
       </div></div></div>${actions ? `<div class="modal-f">${actions}</div>` : ''}`, true);
   photoInto('kyc-photo', photoPath, tokenKey);
 }
+async function resetMpin(cid, master) {
+  if (!confirm('Reset this customer\'s app MPIN? They will be asked to create a new 4-digit MPIN when they next open the app.')) return;
+  try { await api((master ? '/master/customers/' : '/jeweller/customers/') + cid + '/reset-mpin', { method: 'POST' }); toast('MPIN reset - customer will set a new one on next app open'); }
+  catch (e) { toast(e.message, true); }
+}
 function customerDrawer(d, showShop) {
   const c = d.customer;
   const evIc = (o) => o.side === 'redeem' ? '<div class="ic out">↗</div>' : '<div class="ic">+</div>';
@@ -236,7 +241,9 @@ function customerDrawer(d, showShop) {
         <div style="display:flex;gap:24px;margin-top:8px;flex-wrap:wrap">${big(g4(c.gold_grams), 'Gold 24K')}${big(inr0(d.gold_value), 'Gold value', 1)}${big(g4(c.silver_grams), 'Silver 999')}${big(inr0(d.silver_value), 'Silver value', 1)}</div></div>
       <div class="grid g2"><div class="card pad"><div style="font-size:12px;color:var(--mute)">Average buy price</div><div style="font-size:16px;font-weight:700;margin-top:4px" class="num">Gold ${inr(c.avg_buy_price)}/g</div><div style="font-size:13px;color:var(--mute)" class="num">Silver ${inr(d.avg_silver)}/g</div></div>
         <div class="card pad"><div style="font-size:12px;color:var(--mute)">Purchased · Redeemed</div><div style="font-size:16px;font-weight:700;margin-top:4px" class="num">${g4(d.purchased.gold_g)} gold · ${g4(d.purchased.silver_g)} silver</div><div style="font-size:13px;color:var(--mute)" class="num">${inr0(d.purchased.amount)} · ${d.purchased.count} orders · ${g4(d.redeemed.gold_g)} redeemed</div></div></div>
-      <div class="card pad"><div class="kv"><span>KYC</span><b>${statusBadge(c.kyc_status)}</b></div><div class="kv"><span>Email</span><b>${esc(c.email || '—')}</b></div><div class="kv"><span>Date of birth</span><b>${esc(c.dob || '—')}</b></div><div class="kv"><span>Gender</span><b style="text-transform:capitalize">${esc(c.gender || '—')}</b></div><div class="kv"><span>Referral code</span><b><code>${esc(c.referral_code)}</code></b></div><div class="kv"><span>Customer since</span><b>${dOnly(c.created_at)}</b></div></div>
+      <div class="card pad"><div class="kv"><span>KYC</span><b>${statusBadge(c.kyc_status)}</b></div><div class="kv"><span>Email</span><b>${esc(c.email || '—')}</b></div><div class="kv"><span>Date of birth</span><b>${esc(c.dob || '—')}</b></div><div class="kv"><span>Gender</span><b style="text-transform:capitalize">${esc(c.gender || '—')}</b></div><div class="kv"><span>Referral code</span><b><code>${esc(c.referral_code)}</code></b></div><div class="kv"><span>Customer since</span><b>${dOnly(c.created_at)}</b></div>
+        <div class="kv"><span>App MPIN</span><b>${c.mpin_reset_at ? '<span class="badge amber">Reset requested ' + dOnly(c.mpin_reset_at) + '</span> ' : ''}<button class="btn sm" onclick="resetMpin('${c.id}', ${showShop ? 'true' : 'false'})">Reset MPIN</button></b></div>
+        <div class="sub" style="margin-top:4px">For security the MPIN is never shown to anyone. "Reset MPIN" makes the customer set a new one the next time they open the app.</div></div>
       ${d.sips.length ? `<div class="card"><div class="card-h"><h3>SIPs</h3></div><div class="list">${d.sips.map((x) => `<div class="item"><div class="grow"><div class="t">${inr0(x.amount)} / ${esc(x.frequency)} · ${metalTag(x.metal)}</div><div class="s">${x.installments} paid</div></div>${statusBadge(x.status)}</div>`).join('')}</div></div>` : ''}
       ${d.pickups.length ? `<div class="card"><div class="card-h"><h3>Store pickups</h3></div><div class="list">${d.pickups.map((p) => `<div class="item"><div class="grow"><div class="t">${esc(p.item)}</div><div class="s">${g4(p.grams)} · ${dt(p.created_at)}</div></div>${statusBadge(p.status)}</div>`).join('')}</div></div>` : ''}
       <div class="card"><div class="card-h"><h3>Activity</h3><span style="font-size:12px;color:var(--mute)">${d.timeline.length} entries</span></div><div class="timeline">
@@ -264,3 +271,41 @@ function duesDetail(d, master) {
       ${t.length ? t.map((x) => `<tr><td>${dt(x.created_at)}</td><td><code>${esc(x.invoice_no)}</code></td><td>${esc(x.customer)}<div class="sub">${phoneFmt(x.phone)}</div></td><td><code>${esc(x.wallet_id)}</code></td><td>${x.type === 'sip' ? 'SIP' : 'Buy'}</td><td>${metalTag(x.metal)}</td>
         <td class="r num">${g4(x.grams)}</td><td class="r num">${inr(x.total)}</td><td class="r num">${inr(x.gst)}</td><td class="r num">${inr(x.commission)}</td><td class="r num"><b>${inr(x.payable)}</b></td></tr>`).join('') : emptyRow(11, 'No transactions yet')}</tbody></table></div></div>`;
 }
+
+
+/* ── Panel language (English / Hindi / Gujarati / Marathi) ─────────────
+   Uses Google's website translator so every page, table and popup is translated.
+   The choice is remembered per browser. */
+(function () {
+  const LANGS = [['en', 'English'], ['hi', 'हिन्दी'], ['gu', 'ગુજરાતી'], ['mr', 'मराठी']];
+  const cur = () => { const m = document.cookie.match(/(?:^|;\s*)googtrans=\/en\/(\w+)/); return m ? m[1] : 'en'; };
+  window.setPanelLang = function (code) {
+    const host = location.hostname;
+    const kill = 'googtrans=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/';
+    document.cookie = kill; document.cookie = kill + '; domain=' + host; document.cookie = kill + '; domain=.' + host;
+    if (code !== 'en') { document.cookie = `googtrans=/en/${code}; path=/`; document.cookie = `googtrans=/en/${code}; path=/; domain=${host}`; }
+    location.reload();
+  };
+  const css = document.createElement('style');
+  css.textContent = `.goog-te-banner-frame,.skiptranslate iframe,#goog-gt-tt,.goog-te-balloon-frame{display:none!important}body{top:0!important}
+    .lang-pick{height:30px;border:1px solid var(--line,#E7E2D6);border-radius:8px;padding:0 6px;font-size:12px;background:#fff;margin-right:10px;cursor:pointer}
+    font{background:transparent!important;box-shadow:none!important}`;
+  document.head.appendChild(css);
+  const boot = () => {
+    if (cur() === 'en' || document.getElementById('google_translate_element')) return;
+    const holder = document.createElement('div'); holder.id = 'google_translate_element'; holder.style.display = 'none'; document.body.appendChild(holder);
+    window.gtInit = function () { try { new google.translate.TranslateElement({ pageLanguage: 'en', autoDisplay: false }, 'google_translate_element'); } catch (e) {} };
+    const s = document.createElement('script'); s.src = 'https://translate.google.com/translate_a/element.js?cb=gtInit'; document.body.appendChild(s);
+  };
+  if (document.body) boot(); else document.addEventListener('DOMContentLoaded', boot);
+  const pick = () => `<select class="lang-pick notranslate" translate="no" title="Language" onchange="setPanelLang(this.value)">${LANGS.map(([c, l]) => `<option value="${c}" ${cur() === c ? 'selected' : ''}>${l}</option>`).join('')}</select>`;
+  setInterval(() => {
+    const top = document.querySelector('.top');
+    if (top && !top.querySelector('.lang-pick')) {
+      const sp = top.querySelector('.spacer');
+      (sp || top).insertAdjacentHTML(sp ? 'afterend' : 'beforeend', pick());
+    }
+    const auth = document.querySelector('.auth-box');
+    if (auth && !auth.querySelector('.lang-pick')) auth.insertAdjacentHTML('afterbegin', `<div style="text-align:right;margin-bottom:8px">${pick()}</div>`);
+  }, 700);
+})();
