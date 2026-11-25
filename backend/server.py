@@ -178,12 +178,12 @@ def price_payload(jid: Optional[str] = None):
     if not ctl["rates"]:  # rates hidden by Master for this shop / all shops: never send numbers
         return {"purity": "24K (99.9%)", "buy": 0, "sell": 0, "change": 0, "change_pct": 0, "direction": "up",
                 "gst_rate": GST_RATE, "updated_at": now_iso(), "source": "hidden", "live": False, "offline": False,
-                "has_live": False, "rates_hidden": True, "booking_enabled": ctl["booking"], "min_investment": ctl["min_investment"], "max_investment": ctl["max_investment"], "daily_limit": ctl["daily_limit"],
+                "has_live": False, "rates_hidden": True, "booking_enabled": ctl["booking"], "min_investment": ctl["min_investment"], "max_investment": ctl["max_investment"], "daily_limit": ctl["daily_limit"], "kyc_required_to_buy": ctl["kyc_buy"],
                 "base_rate": 0, "karats": {"24K": 0, "22K": 0, "18K": 0},
                 "silver": {"buy": 0, "sell": 0, "change": 0, "change_pct": 0, "direction": "up", "base_rate": 0}}
     return {
         "purity": "24K (99.9%)", "buy": buy, "sell": sell,
-        "rates_hidden": False, "booking_enabled": ctl["booking"], "min_investment": ctl["min_investment"], "max_investment": ctl["max_investment"], "daily_limit": ctl["daily_limit"],
+        "rates_hidden": False, "booking_enabled": ctl["booking"], "min_investment": ctl["min_investment"], "max_investment": ctl["max_investment"], "daily_limit": ctl["daily_limit"], "kyc_required_to_buy": ctl["kyc_buy"],
         "change": change, "change_pct": r2(change / PRICE["open"] * 100) if PRICE["open"] else 0,
         "direction": "up" if PRICE["base"] >= PRICE["open"] else "down",
         "gst_rate": GST_RATE, "updated_at": PRICE["updated_at"] or now_iso(),
@@ -216,6 +216,7 @@ def controls_for(jid):
     s = CONTROLS["shops"].get(jid or "", {})
     return {"rates": bool(g.get("rates", True) and s.get("rates", True)),
             "booking": bool(g.get("booking", True) and s.get("booking", True)),
+            "kyc_buy": bool(s.get("kyc_buy", True)),  # False = this shop's customers may buy without KYC (testing only)
             "min_investment": float(g.get("min_investment", 500.0)),
             "max_investment": float(g.get("max_investment", 500000.0) or 500000.0),
             "daily_limit": float(g.get("daily_limit", 500000.0) or 500000.0)}
@@ -1925,7 +1926,8 @@ async def order_status(order_id: str, customer: Customer = Depends(get_current_c
 @api.post("/orders/buy")
 async def buy(body: BuyRequest, request: Request, customer: Customer = Depends(get_current_customer), db: AsyncSession = Depends(get_db)):
     if customer.kyc_status != "approved":
-        raise HTTPException(403, "KYC verification is required before purchasing gold or silver. Please submit your KYC in your profile.")
+        if controls_for(customer.jeweller_id)["kyc_buy"]:
+            raise HTTPException(403, "KYC verification is required before purchasing gold or silver. Please submit your KYC in your profile.")
     result = await db.execute(select(Quote).where(Quote.id == body.quote_id))
     q = result.scalar_one_or_none()
     if not q:
@@ -4385,6 +4387,7 @@ async def mc_get(admin: MasterAdmin = Depends(get_master_admin), db: AsyncSessio
     js = (await db.execute(select(Jeweller).order_by(Jeweller.created_at))).scalars().all()
     return {"global": CONTROLS["global"], "shops": [{"id": j.id, "name": j.business_name, "status": j.status,
             "rates": CONTROLS["shops"].get(j.id, {}).get("rates", True), "booking": CONTROLS["shops"].get(j.id, {}).get("booking", True),
+            "kyc_buy": CONTROLS["shops"].get(j.id, {}).get("kyc_buy", True),
             "effective": controls_for(j.id)} for j in js]}
 
 
@@ -4396,7 +4399,7 @@ async def mc_put(body: ControlsUpdate, admin: MasterAdmin = Depends(get_master_a
         raise HTTPException(400, "Daily limit must be at least the maximum purchase per order")
     CONTROLS["global"] = {"rates": body.rates, "booking": body.booking, "min_investment": r2(body.min_investment),
                           "max_investment": r2(body.max_investment), "daily_limit": r2(body.daily_limit)}
-    CONTROLS["shops"] = {k: {"rates": bool(v.get("rates", True)), "booking": bool(v.get("booking", True))} for k, v in body.shops.items()}
+    CONTROLS["shops"] = {k: {"rates": bool(v.get("rates", True)), "booking": bool(v.get("booking", True)), "kyc_buy": bool(v.get("kyc_buy", True))} for k, v in body.shops.items()}
     await _setting("platform_controls", json.dumps(CONTROLS))
     await audit(db, "master", admin, "controls.update", "platform", CONTROLS, None)
     await db.commit()

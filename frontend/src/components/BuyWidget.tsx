@@ -41,7 +41,7 @@ export function BuyWidget() {
 
   const proceedToBuy = async () => {
     if (!token) { router.push("/login"); return; }
-    if (user?.kyc_status !== "approved") {
+    if (user?.kyc_status !== "approved" && price?.kyc_required_to_buy !== false) {
       toast("info", "KYC Required", "Please complete and submit your KYC in Profile before buying Gold or Silver");
       router.push("/profile");
       return;

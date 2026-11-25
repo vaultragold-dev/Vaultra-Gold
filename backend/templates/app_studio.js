@@ -777,12 +777,12 @@ function vSecurity() {
     <div class="ctl-row"><div><b>Maximum purchase per order</b><div class="sub">Largest single buy a customer can place (gold & silver)</div></div><div class="prefix" style="width:160px"><span>₹</span><input class="input num" id="g_max" type="number" min="100" step="1000" value="${g.max_investment || 200000}"></div></div>
     <div class="ctl-row"><div><b>Daily purchase limit per customer</b><div class="sub">Total a customer can buy in one day across all orders</div></div><div class="prefix" style="width:160px"><span>₹</span><input class="input num" id="g_daily" type="number" min="100" step="1000" value="${g.daily_limit || 200000}"></div></div>
     <div style="margin-top:12px"><button class="btn primary" onclick="ctlSave()" id="ctl-save">Save controls</button></div></div>
-    <div class="card section"><div class="card-h"><h3>Per shop <span class="sub" style="font-weight:400">only that shop's customers are affected</span></h3></div><div class="table-wrap"><table><thead><tr><th>Shop</th><th>Live rates</th><th>Booking</th><th>Customers see</th></tr></thead><tbody>
-    ${c.shops.map((s) => `<tr><td><b>${esc(s.name)}</b><div class="sub">${statusBadge(s.status)}</div></td><td>${sw('r_' + s.id, s.rates, 'ctlSet()')}</td><td>${sw('b_' + s.id, s.booking, 'ctlSet()')}</td>
+    <div class="card section"><div class="card-h"><h3>Per shop <span class="sub" style="font-weight:400">only that shop's customers are affected</span></h3></div><div class="table-wrap"><table><thead><tr><th>Shop</th><th>Live rates</th><th>Booking</th><th>KYC needed to buy</th><th>Customers see</th></tr></thead><tbody>
+    ${c.shops.map((s) => `<tr><td><b>${esc(s.name)}</b><div class="sub">${statusBadge(s.status)}</div></td><td>${sw('r_' + s.id, s.rates, 'ctlSet()')}</td><td>${sw('b_' + s.id, s.booking, 'ctlSet()')}</td><td>${sw('k_' + s.id, s.kyc_buy !== false, 'ctlSet()')}${s.kyc_buy === false ? ' <span class="badge amber">Testing: no KYC</span>' : ''}</td>
       <td>${s.effective.rates ? '<span class="badge green">Rates on</span>' : '<span class="badge red">Rates hidden</span>'} ${s.effective.booking && s.effective.rates ? '<span class="badge green">Booking on</span>' : '<span class="badge red">Booking off</span>'}</td></tr>`).join('')}</tbody></table></div></div>`;
 }
 function ctlSet() { const b = $('#ctl-save'); if (b) b.textContent = 'Save controls · unsaved changes'; }
 async function ctlSave() {
-  const shops = {}; S.ctl.shops.forEach((s) => { shops[s.id] = { rates: $('#r_' + s.id).checked, booking: $('#b_' + s.id).checked }; });
+  const shops = {}; S.ctl.shops.forEach((s) => { shops[s.id] = { rates: $('#r_' + s.id).checked, booking: $('#b_' + s.id).checked, kyc_buy: $('#k_' + s.id).checked }; });
   try { await api('/master/v3/controls', { method: 'PUT', body: { rates: $('#g_rates').checked, booking: $('#g_booking').checked, min_investment: Number($('#g_min').value || 500), max_investment: Number($('#g_max').value || 200000), daily_limit: Number($('#g_daily').value || 200000), shops } }); toast('Controls saved'); loadCtl(); } catch (e) { toast(e.message, true); }
 }
