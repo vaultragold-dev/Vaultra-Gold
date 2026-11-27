@@ -72,7 +72,7 @@ export default function Jewellery() {
               <Text style={styles.count} testID="jewellery-count">
                 {list.length} {list.length === 1 ? "piece" : "pieces"}
               </Text>
-              <View style={{ flexShrink: 1 }}>
+              <View style={{ flex: 1 }}>
                 <LiveTicker testID="jewellery-ticker" />
               </View>
             </View>

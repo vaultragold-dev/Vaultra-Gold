@@ -24,8 +24,8 @@ export function TxnRow({ t, onPress, dark }: { t: any; onPress?: () => void; dar
   const fg = dark ? colors.adminOnSurface : colors.onSurface;
   return (
     <Pressable testID={`txn-row-${t.id}`} onPress={onPress} style={[styles.row, { borderBottomColor: dark ? colors.adminBorder : colors.divider }]}>
-      <View style={[styles.icon, { backgroundColor: dark ? colors.adminGoldTint : credit ? colors.brandTertiary : colors.surfaceTertiary }]}>
-        <Icon size={18} color={credit ? colors.brandSecondary : dark ? colors.adminOnSurfaceTertiary : colors.onSurfaceTertiary} />
+      <View style={[styles.icon, { backgroundColor: dark ? colors.adminGoldTint : colors.layer3Fill, borderWidth: 1, borderColor: dark ? colors.adminBorder : colors.layer3Border }]}>
+        <Icon size={17} color="#FFFFFF" strokeWidth={1.8} />
       </View>
       <View style={{ flex: 1, gap: 2 }}>
         <Text style={[styles.title, { color: fg }]} numberOfLines={1}>
@@ -50,10 +50,10 @@ export function TxnRow({ t, onPress, dark }: { t: any; onPress?: () => void; dar
 }
 
 const styles = themed(() => ({
-  row: { flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 12, borderBottomWidth: 1 },
-  icon: { width: 40, height: 40, borderRadius: 12, alignItems: "center", justifyContent: "center" },
+  row: { flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 12, borderBottomWidth: StyleSheet.hairlineWidth },
+  icon: { width: 40, height: 40, borderRadius: 14, alignItems: "center", justifyContent: "center" },
   title: { fontFamily: fonts.semibold, fontSize: 14 },
   sub: { fontFamily: fonts.regular, fontSize: 11 },
-  grams: { fontFamily: fonts.bold, fontSize: 14, letterSpacing: -0.2 },
+  grams: { fontFamily: fonts.displayBold, fontSize: 15.5, letterSpacing: -0.1 },
   amt: { fontFamily: fonts.medium, fontSize: 12 },
 }));

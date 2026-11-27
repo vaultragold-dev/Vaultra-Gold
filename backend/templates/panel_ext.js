@@ -1,10 +1,25 @@
 /* Shop panel: Catalogue (making %), App Content, SIP, Gold Goals */
 async function uploadImage(file, tokenKey, path) {
+  const tok = localStorage.getItem(tokenKey);
+  if (!tok) {
+    if (typeof logout === 'function') logout();
+    const err = new Error('Session expired — please sign in again');
+    err.status = 401;
+    throw err;
+  }
   const fd = new FormData();
   fd.append('file', file);
-  const r = await fetch(API + path, { method: 'POST', headers: { Authorization: 'Bearer ' + localStorage.getItem(tokenKey) }, body: fd });
+  const r = await fetch(API + path, { method: 'POST', headers: { Authorization: 'Bearer ' + tok }, body: fd });
   const d = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(d.detail || 'Upload failed');
+  if (!r.ok) {
+    if (r.status === 401) {
+      localStorage.removeItem(tokenKey);
+      if (typeof logout === 'function') logout();
+    }
+    const err = new Error(r.status === 401 ? 'Session expired — please sign in again' : (d.detail || 'Upload failed'));
+    err.status = r.status;
+    throw err;
+  }
   return d.url;
 }
 
@@ -212,7 +227,7 @@ function kycDetails(c, photoPath, tokenKey, actions = '') {
         <div class="kv"><span>Name on PAN</span><b>${esc(k.full_name || k.name || c.name)}</b></div>
         <div class="kv"><span>PAN</span><b><code>${esc(k.pan || '—')}</code></b></div>
         <div class="kv"><span>Aadhaar</span><b><code>${esc(k.aadhaar ? 'XXXX XXXX ' + String(k.aadhaar).slice(-4) : '—')}</code></b></div>
-        <div class="kv"><span>Date of birth</span><b>${esc(k.dob || c.dob || '—')}</b></div>
+        <div class="kv"><span>Date of birth</span><b>${(k.dob || c.dob) ? (isDob(k.dob || c.dob) ? esc(dobFmt(k.dob || c.dob)) : `<span style="color:#B42318">${esc(k.dob || c.dob)} (invalid)</span>`) : '—'}</b></div>
         <div class="kv"><span>Gender</span><b style="text-transform:capitalize">${esc(c.gender || '—')}</b></div>
         <div class="kv"><span>Mobile</span><b>${phoneFmt(c.phone)}</b></div>
         <div class="kv"><span>Email</span><b>${esc(c.email || '—')}</b></div>
@@ -241,7 +256,7 @@ function customerDrawer(d, showShop) {
         <div style="display:flex;gap:24px;margin-top:8px;flex-wrap:wrap">${big(g4(c.gold_grams), 'Gold 24K')}${big(inr0(d.gold_value), 'Gold value', 1)}${big(g4(c.silver_grams), 'Silver 999')}${big(inr0(d.silver_value), 'Silver value', 1)}</div></div>
       <div class="grid g2"><div class="card pad"><div style="font-size:12px;color:var(--mute)">Average buy price</div><div style="font-size:16px;font-weight:700;margin-top:4px" class="num">Gold ${inr(c.avg_buy_price)}/g</div><div style="font-size:13px;color:var(--mute)" class="num">Silver ${inr(d.avg_silver)}/g</div></div>
         <div class="card pad"><div style="font-size:12px;color:var(--mute)">Purchased · Redeemed</div><div style="font-size:16px;font-weight:700;margin-top:4px" class="num">${g4(d.purchased.gold_g)} gold · ${g4(d.purchased.silver_g)} silver</div><div style="font-size:13px;color:var(--mute)" class="num">${inr0(d.purchased.amount)} · ${d.purchased.count} orders · ${g4(d.redeemed.gold_g)} redeemed</div></div></div>
-      <div class="card pad"><div class="kv"><span>KYC</span><b>${statusBadge(c.kyc_status)}</b></div><div class="kv"><span>Email</span><b>${esc(c.email || '—')}</b></div><div class="kv"><span>Date of birth</span><b>${esc(c.dob || '—')}</b></div><div class="kv"><span>Gender</span><b style="text-transform:capitalize">${esc(c.gender || '—')}</b></div><div class="kv"><span>Referral code</span><b><code>${esc(c.referral_code)}</code></b></div><div class="kv"><span>Customer since</span><b>${dOnly(c.created_at)}</b></div>
+      <div class="card pad"><div class="kv"><span>KYC</span><b>${statusBadge(c.kyc_status)}</b></div><div class="kv"><span>Email</span><b>${esc(c.email || '—')}</b></div><div class="kv"><span>Date of birth</span><b>${c.dob ? (isDob(c.dob) ? esc(dobFmt(c.dob)) : `<span style="color:#B42318">${esc(c.dob)} (invalid)</span>`) : '—'}</b></div><div class="kv"><span>Gender</span><b style="text-transform:capitalize">${esc(c.gender || '—')}</b></div><div class="kv"><span>Referral code</span><b><code>${esc(c.referral_code)}</code></b></div><div class="kv"><span>Customer since</span><b>${dOnly(c.created_at)}</b></div>
         <div class="kv"><span>App MPIN</span><b>${c.mpin_reset_at ? '<span class="badge amber">Reset requested ' + dOnly(c.mpin_reset_at) + '</span> ' : ''}<button class="btn sm" onclick="resetMpin('${c.id}', ${showShop ? 'true' : 'false'})">Reset MPIN</button></b></div>
         <div class="sub" style="margin-top:4px">For security the MPIN is never shown to anyone. "Reset MPIN" makes the customer set a new one the next time they open the app.</div></div>
       ${d.sips.length ? `<div class="card"><div class="card-h"><h3>SIPs</h3></div><div class="list">${d.sips.map((x) => `<div class="item"><div class="grow"><div class="t">${inr0(x.amount)} / ${esc(x.frequency)} · ${metalTag(x.metal)}</div><div class="s">${x.installments} paid</div></div>${statusBadge(x.status)}</div>`).join('')}</div></div>` : ''}
@@ -278,34 +293,181 @@ function duesDetail(d, master) {
    The choice is remembered per browser. */
 (function () {
   const LANGS = [['en', 'English'], ['hi', 'हिन्दी'], ['gu', 'ગુજરાતી'], ['mr', 'मराठी']];
-  const cur = () => { const m = document.cookie.match(/(?:^|;\s*)googtrans=\/en\/(\w+)/); return m ? m[1] : 'en'; };
-  window.setPanelLang = function (code) {
-    const host = location.hostname;
-    const kill = 'googtrans=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/';
-    document.cookie = kill; document.cookie = kill + '; domain=' + host; document.cookie = kill + '; domain=.' + host;
-    if (code !== 'en') { document.cookie = `googtrans=/en/${code}; path=/`; document.cookie = `googtrans=/en/${code}; path=/; domain=${host}`; }
-    location.reload();
+  const VALID = LANGS.map((l) => l[0]);
+  const isIp = (h) => /^(\d{1,3}\.){3}\d{1,3}$/.test(h) || h.includes(':');
+  // Every googtrans cookie the browser sends (Google may write several: host, .parent-domain, ...)
+  const cookieLangs = () => (document.cookie.match(/(?:^|;\s*)googtrans=[^;]*/g) || []).map((c) => {
+    const m = c.match(/googtrans=\/[\w-]+\/([\w-]+)/);
+    return m ? m[1] : 'en';
+  });
+  const stored = () => { try { const v = localStorage.getItem('panel_lang'); return VALID.includes(v) ? v : null; } catch (e) { return null; } };
+  // The user's own choice (localStorage) is the source of truth; cookies only drive Google's translator.
+  const cur = () => stored() || (cookieLangs().find((l) => l !== 'en') || 'en');
+  // Google's translator writes its cookie on the host AND on parent domains (.vaultragold.com) and sometimes
+  // on subpaths (/master, /admin) - clear every combination, otherwise switching back to English does nothing.
+  const domains = () => {
+    const h = location.hostname;
+    const out = [''];
+    if (!h) return out;
+    out.push(h);
+    if (!isIp(h) && h.includes('.')) {
+      const parts = h.split('.');
+      for (let i = 0; i < parts.length - 1; i++) {
+        const d = parts.slice(i).join('.');
+        out.push('.' + d, d);
+      }
+    }
+    return [...new Set(out)];
   };
+  const paths = () => {
+    const out = ['/', '/master', '/master/', '/admin', '/admin/'];
+    const p = location.pathname || '/';
+    out.push(p, p.replace(/\/+$/, '') || '/');
+    const segs = p.split('/').filter(Boolean);
+    let acc = '';
+    for (const s of segs) { acc += '/' + s; out.push(acc, acc + '/'); }
+    return [...new Set(out)];
+  };
+  const clearAllCookies = () => {
+    const past = 'expires=Thu, 01 Jan 1970 00:00:00 GMT; max-age=0';
+    const sec = location.protocol === 'https:' ? '; Secure' : '';
+    domains().forEach((d) => {
+      const dom = d ? `; domain=${d}` : '';
+      paths().forEach((p) => {
+        document.cookie = `googtrans=; ${past}; path=${p}${dom}`;
+        document.cookie = `googtrans=; ${past}; path=${p}${dom}; SameSite=Lax`;
+        if (sec) document.cookie = `googtrans=; ${past}; path=${p}${dom}; SameSite=None${sec}`;
+      });
+    });
+  };
+  const writeCookies = (code) => {
+    clearAllCookies();
+    if (code === 'en') {
+      // Only if a stale non-English cookie survived (e.g. parent-domain/HttpOnly edge case), override with /en/en
+      if (cookieLangs().some((l) => l !== 'en')) {
+        domains().forEach((d) => {
+          document.cookie = `googtrans=/en/en; path=/${d ? '; domain=' + d : ''}`;
+        });
+      }
+      return;
+    }
+    domains().forEach((d) => {
+      document.cookie = `googtrans=/en/${code}; path=/${d ? '; domain=' + d : ''}`;
+    });
+  };
+  const cleanUrl = () => {
+    const h = location.hash || '';
+    return /googtrans/i.test(h) ? (location.pathname + location.search) : (location.pathname + location.search + h);
+  };
+  const clearCookieStore = async () => {
+    try {
+      if (window.cookieStore && typeof window.cookieStore.getAll === 'function') {
+        const list = await window.cookieStore.getAll('googtrans');
+        for (const ck of (list || [])) {
+          try {
+            await window.cookieStore.delete({ name: 'googtrans', domain: ck.domain || undefined, path: ck.path || '/' });
+          } catch (e) {}
+        }
+      }
+    } catch (e) {}
+  };
+  window.setPanelLang = async function (code) {
+    if (!VALID.includes(code)) code = 'en';
+    try { localStorage.setItem('panel_lang', code); } catch (e) {}
+    writeCookies(code);
+    if (code === 'en') {
+      await clearCookieStore();
+      // Re-clear via document.cookie right before navigation so Google Translate cannot re-apply on reload
+      writeCookies('en');
+    }
+    const target = cleanUrl();
+    if (target !== location.pathname + location.search + location.hash) location.replace(target);
+    else location.reload();
+  };
+  // Cookies / URL hash out of sync with saved choice: fix immediately on load
+  (function sync() {
+    const want = stored();
+    if (!want) return;
+    if (want === 'en' && /googtrans/i.test(location.hash || '')) {
+      writeCookies('en');
+      clearCookieStore();
+      location.replace(location.pathname + location.search);
+      return;
+    }
+    const have = cookieLangs();
+    const bad = want === 'en' ? have.some((l) => l !== 'en') : !have.length || have.some((l) => l !== want);
+    if (!bad) return;
+    writeCookies(want);
+    if (want === 'en') clearCookieStore();
+    if (document.documentElement.className.match(/translated-/)) location.reload();
+  })();
+  // Handle back/forward cache (bfcache) restoring a translated page after user switched back to English
+  window.addEventListener('pageshow', (ev) => {
+    if (ev.persisted && cur() === 'en' && document.documentElement.className.match(/translated-/)) {
+      writeCookies('en');
+      clearCookieStore();
+      location.reload();
+    }
+  });
   const css = document.createElement('style');
   css.textContent = `.goog-te-banner-frame,.skiptranslate iframe,#goog-gt-tt,.goog-te-balloon-frame{display:none!important}body{top:0!important}
     .lang-pick{height:30px;border:1px solid var(--line,#E7E2D6);border-radius:8px;padding:0 6px;font-size:12px;background:#fff;margin-right:10px;cursor:pointer}
     font{background:transparent!important;box-shadow:none!important}`;
   document.head.appendChild(css);
   const boot = () => {
-    if (cur() === 'en' || document.getElementById('google_translate_element')) return;
+    const c = cur();
+    if (c === 'en') {
+      // Never load Google Translate in English; wipe any leftover cookies
+      if (cookieLangs().some((l) => l !== 'en')) { writeCookies('en'); clearCookieStore(); }
+      return;
+    }
+    if (document.getElementById('google_translate_element')) return;
     const holder = document.createElement('div'); holder.id = 'google_translate_element'; holder.style.display = 'none'; document.body.appendChild(holder);
     window.gtInit = function () { try { new google.translate.TranslateElement({ pageLanguage: 'en', autoDisplay: false }, 'google_translate_element'); } catch (e) {} };
     const s = document.createElement('script'); s.src = 'https://translate.google.com/translate_a/element.js?cb=gtInit'; document.body.appendChild(s);
   };
   if (document.body) boot(); else document.addEventListener('DOMContentLoaded', boot);
-  const pick = () => `<select class="lang-pick notranslate" translate="no" title="Language" onchange="setPanelLang(this.value)">${LANGS.map(([c, l]) => `<option value="${c}" ${cur() === c ? 'selected' : ''}>${l}</option>`).join('')}</select>`;
-  setInterval(() => {
+  const makePicker = () => {
+    const sel = document.createElement('select');
+    sel.className = 'lang-pick notranslate';
+    sel.setAttribute('translate', 'no');
+    sel.title = 'Language';
+    const active = cur();
+    LANGS.forEach(([c, l]) => {
+      const opt = document.createElement('option');
+      opt.value = c;
+      opt.textContent = l;
+      opt.className = 'notranslate';
+      opt.setAttribute('translate', 'no');
+      if (c === active) opt.selected = true;
+      sel.appendChild(opt);
+    });
+    sel.addEventListener('change', () => window.setPanelLang(sel.value));
+    return sel;
+  };
+  const ensurePicker = () => {
+    const active = cur();
     const top = document.querySelector('.top');
-    if (top && !top.querySelector('.lang-pick')) {
-      const sp = top.querySelector('.spacer');
-      (sp || top).insertAdjacentHTML(sp ? 'afterend' : 'beforeend', pick());
+    if (top) {
+      let existing = top.querySelector('.lang-pick');
+      if (!existing) {
+        const sp = top.querySelector('.spacer');
+        const el = makePicker();
+        if (sp && sp.parentNode) sp.parentNode.insertBefore(el, sp.nextSibling);
+        else top.appendChild(el);
+      } else if (document.activeElement !== existing && existing.value !== active) {
+        existing.value = active;
+      }
     }
     const auth = document.querySelector('.auth-box');
-    if (auth && !auth.querySelector('.lang-pick')) auth.insertAdjacentHTML('afterbegin', `<div style="text-align:right;margin-bottom:8px">${pick()}</div>`);
-  }, 700);
+    if (auth && !auth.querySelector('.lang-pick')) {
+      const wrap = document.createElement('div');
+      wrap.style.textAlign = 'right';
+      wrap.style.marginBottom = '8px';
+      wrap.appendChild(makePicker());
+      auth.insertBefore(wrap, auth.firstChild);
+    }
+  };
+  ensurePicker();
+  setInterval(ensurePicker, 500);
 })();

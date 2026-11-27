@@ -13,7 +13,7 @@ import { uploadForm } from "@/src/utils/upload";
 import { LogoMark } from "@/src/components/Header";
 import { useToast } from "@/src/components/Toast";
 import { Button, Card, Row, StatusBadge } from "@/src/components/ui";
-import { grams, maskPhone, shortDate } from "@/src/format";
+import { displayDob, formatDobInput, grams, isValidDob, maskPhone, shortDate } from "@/src/format";
 import { InstantKyc, useKycSteps } from "@/src/components/InstantKyc";
 import { useApp } from "@/src/store/AppContext";
 import { colors, fonts, radius, useTheme, themed } from "@/src/theme";
@@ -58,10 +58,14 @@ export default function Profile() {
     }
   };
 
-  // Pre-fill the name once (not on every keystroke - the field could not be cleared before)
+  // Pre-fill the name & DOB once (not on every keystroke - the field could not be cleared before)
   const nameFilled = React.useRef(false);
   useEffect(() => {
-    if (user && !nameFilled.current) { nameFilled.current = true; setFullName(user.name); }
+    if (user && !nameFilled.current) {
+      nameFilled.current = true;
+      setFullName(user.name);
+      if (user.dob) setDob(displayDob(user.dob));
+    }
   }, [user]);
 
   const submitKyc = async () => {
@@ -81,6 +85,10 @@ export default function Profile() {
     }
     if (cleanAadhaar && cleanAadhaar.length !== 12) {
       toast("info", "Invalid Aadhaar", "Aadhaar number must be exactly 12 digits");
+      return;
+    }
+    if (dob.trim() && !isValidDob(dob)) {
+      toast("info", "Invalid date of birth", "Enter your date of birth as DD/MM/YYYY");
       return;
     }
     setBusy(true);
@@ -187,6 +195,7 @@ export default function Profile() {
             {user?.wallet_id ? <Row label="Wallet ID" value={user.wallet_id} bold /> : null}
             <Row label="Gold balance" value={grams(user?.gold_grams)} />
             {(user?.silver_grams ?? 0) > 0 ? <Row label="Silver balance" value={grams(user?.silver_grams)} /> : null}
+            {user?.dob ? <Row label="Date of birth" value={displayDob(user.dob)} /> : null}
             <Row label="Member since" value={shortDate(user?.created_at)} />
           </View>
         </Card>
@@ -233,7 +242,12 @@ export default function Profile() {
               <Text style={styles.label}>PAN</Text>
               <TextInput testID="kyc-pan-input" value={pan} onChangeText={(t) => setPan(t.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 10))} autoCapitalize="characters" style={styles.input} placeholder="ABCDE1234F" placeholderTextColor={colors.mutedLight} />
               <Text style={styles.label}>Date of birth</Text>
-              <TextInput testID="kyc-dob-input" value={dob} onChangeText={setDob} style={styles.input} placeholder="YYYY-MM-DD" placeholderTextColor={colors.mutedLight} />
+              <TextInput testID="kyc-dob-input" value={dob} onChangeText={(t) => setDob(formatDobInput(t))} keyboardType="number-pad" maxLength={10} style={styles.input} placeholder="DD/MM/YYYY" placeholderTextColor={colors.mutedLight} />
+              {dob.trim().length > 0 && !isValidDob(dob) && (
+                dob.length === 10 ||
+                (dob.length >= 2 && (Number(dob.slice(0, 2)) < 1 || Number(dob.slice(0, 2)) > 31)) ||
+                (dob.length >= 5 && (Number(dob.slice(3, 5)) < 1 || Number(dob.slice(3, 5)) > 12))
+              ) ? <Text style={[styles.meta, { color: colors.error, marginTop: 4 }]}>Enter a valid date of birth (DD/MM/YYYY)</Text> : null}
               <Text style={styles.label}>Your photo</Text>
               <Text style={styles.meta}>A clear face photo helps the store confirm it is you when you collect gold.</Text>
               <View style={styles.photoRow}>
@@ -284,24 +298,24 @@ const styles = themed(() => ({
   root: { flex: 1, backgroundColor: "transparent" },
   header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 16, paddingBottom: 8, backgroundColor: "transparent", borderBottomWidth: 1, borderBottomColor: colors.divider },
   back: { width: 44, height: 44, justifyContent: "center" },
-  headerTitle: { fontFamily: fonts.bold, fontSize: 17, color: colors.onSurface },
+  headerTitle: { fontFamily: fonts.displayBold, fontSize: 20, color: colors.onSurface },
   guestContainer: { flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 32, gap: 8 },
-  guestTitle: { fontFamily: fonts.black, fontSize: 26, letterSpacing: -1, color: colors.onSurface, textAlign: "center", marginTop: 20 },
+  guestTitle: { fontFamily: fonts.displayBold, fontSize: 28, letterSpacing: -0.3, color: colors.onSurface, textAlign: "center", marginTop: 20 },
   guestSub: { fontFamily: fonts.regular, fontSize: 15, color: colors.muted, textAlign: "center", lineHeight: 22 },
   guestHint: { fontFamily: fonts.regular, fontSize: 12, color: colors.mutedLight, textAlign: "center", marginTop: 12 },
   userRow: { flexDirection: "row", alignItems: "center", gap: 12 },
   avatar: { width: 48, height: 48, borderRadius: 24, backgroundColor: colors.brandPrimary, alignItems: "center", justifyContent: "center" },
-  name: { fontFamily: fonts.bold, fontSize: 17, color: colors.onSurface },
+  name: { fontFamily: fonts.displayBold, fontSize: 19, color: colors.onSurface },
   meta: { fontFamily: fonts.regular, fontSize: 13, color: colors.muted, marginTop: 2 },
   kycHead: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 6 },
-  section: { fontFamily: fonts.bold, fontSize: 16, color: colors.onSurface },
+  section: { fontFamily: fonts.displayBold, fontSize: 18, color: colors.onSurface },
   label: { fontFamily: fonts.semibold, fontSize: 12, color: colors.onSurfaceTertiary, marginTop: 12, marginBottom: 6 },
-  input: { height: 48, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, paddingHorizontal: 14, fontFamily: fonts.medium, fontSize: 15, color: colors.onSurface, backgroundColor: colors.surface },
+  input: { height: 48, borderRadius: 16, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.liquidRimMid, paddingHorizontal: 14, fontFamily: fonts.medium, fontSize: 15, color: colors.onSurface, backgroundColor: colors.liquidPillBg },
   themeRow: { flexDirection: "row", alignItems: "center", gap: 12 },
   photoRow: { flexDirection: "row", gap: 12, marginTop: 10, alignItems: "center" },
-  photoBox: { width: 84, height: 108, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surfaceTertiary, alignItems: "center", justifyContent: "center", overflow: "hidden" },
+  photoBox: { width: 84, height: 108, borderRadius: 18, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.liquidRimMid, backgroundColor: colors.liquidPillBg, alignItems: "center", justifyContent: "center", overflow: "hidden" },
   themeLabel: { flex: 1, fontFamily: fonts.semibold, fontSize: 15, color: colors.onSurface },
-  links: { backgroundColor: colors.surface, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border },
+  links: { backgroundColor: colors.glassCard, borderRadius: 22, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.glassCardBorder, overflow: "hidden" },
   link: { flexDirection: "row", alignItems: "center", gap: 12, padding: 16, borderBottomWidth: 1, borderBottomColor: colors.divider, minHeight: 56 },
   linkText: { flex: 1, fontFamily: fonts.semibold, fontSize: 14, color: colors.onSurface },
 }));

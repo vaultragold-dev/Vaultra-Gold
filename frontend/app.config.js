@@ -16,6 +16,10 @@ module.exports = ({ config }) => {
   const bg = (t.theme && t.theme.accentColor) || "#000000";
   const iconBg = (t.theme && (t.theme.adaptiveIconBackground || t.theme.primaryColor)) || bg;
   const splashBg = (t.theme && (t.theme.splashBackground || t.theme.accentColor)) || bg;
+  // Every branded app shows ONE clean splash in BrandSplash.tsx (full-screen custom poster if uploaded, or
+  // crisp brand logo fallback). Using a transparent native splash icon with the exact splashBg colour prevents
+  // Android 12+ / iOS from flashing a small native logo splash before the app's own splash.
+  const blankSplash = "./assets/images/splash-blank.png";
 
   const plugins = (config.plugins || []).map((p) => {
     if (Array.isArray(p) && p[0] === "expo-splash-screen") {
@@ -23,11 +27,9 @@ module.exports = ({ config }) => {
         "expo-splash-screen",
         {
           ...p[1],
-          image: asset("splash.png", p[1]?.image),
+          image: blankSplash,
           backgroundColor: splashBg,
           resizeMode: "contain",
-          // ONE splash definition for every phone. The old per-platform "splash" keys drew the image
-          // full-screen on some devices (huge logo) and as a small icon on others — they are removed.
           imageWidth: 240,
         },
       ];

@@ -3,6 +3,7 @@ import React, { useState } from "react";
 import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 
 import { api } from "@/src/api";
+import { LiquidGlass } from "@/src/components/Glass";
 import { useToast } from "@/src/components/Toast";
 import { Button, Sheet } from "@/src/components/ui";
 import { inr } from "@/src/format";
@@ -81,10 +82,10 @@ export function PriceAlertCard() {
 
   return (
     <>
-      <View style={styles.card} testID="price-alerts-card">
+      <LiquidGlass layer={2} radius={22} style={styles.cardWrap} innerStyle={styles.card} testID="price-alerts-card">
         <View style={styles.cardRow}>
           <View style={styles.alertIcon}>
-            <Bell size={18} color={colors.brandSecondary} />
+            <Bell size={18} color="#FFFFFF" strokeWidth={1.8} />
           </View>
           <View style={{ flex: 1 }}>
             <Text style={styles.cardTitle}>Price Alerts</Text>
@@ -98,7 +99,7 @@ export function PriceAlertCard() {
             <Text style={styles.manageBtnText}>Manage</Text>
           </Pressable>
         </View>
-      </View>
+      </LiquidGlass>
 
       <Sheet visible={open} onClose={() => setOpen(false)} title="Price Alerts" testID="alert-sheet">
         {/* Alert Type Tabs */}
@@ -196,29 +197,22 @@ const styles = themed(() => ({
     marginHorizontal: 16,
     marginTop: 8,
     padding: 12,
-    borderRadius: 12,
-    backgroundColor: colors.successTint,
+    borderRadius: 18,
+    backgroundColor: colors.notifPillBg,
     borderWidth: 1,
-    borderColor: "#BBF7D0",
+    borderColor: colors.notifPillBorder,
   },
-  bannerIcon: { width: 42, height: 42, borderRadius: 21, backgroundColor: colors.surface, alignItems: "center", justifyContent: "center" },
-  bannerTitle: { fontFamily: fonts.bold, fontSize: 14, color: colors.onSurface },
-  bannerSub: { fontFamily: fonts.regular, fontSize: 12, color: colors.muted, marginTop: 2 },
-  card: {
-    marginHorizontal: 16,
-    marginTop: 16,
-    backgroundColor: colors.surface,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: colors.border,
-    padding: 16,
-  },
+  bannerIcon: { width: 40, height: 40, borderRadius: 13, backgroundColor: colors.layer3ActiveFill, borderWidth: 1, borderColor: colors.layer3ActiveBorder, alignItems: "center", justifyContent: "center" },
+  bannerTitle: { fontFamily: fonts.bold, fontSize: 14, color: "#FFFFFF" },
+  bannerSub: { fontFamily: fonts.regular, fontSize: 12, color: "rgba(255,255,255,0.85)", marginTop: 2 },
+  cardWrap: { marginHorizontal: 16, marginTop: 14 },
+  card: { padding: 16 },
   cardRow: { flexDirection: "row", alignItems: "center", gap: 12 },
-  alertIcon: { width: 44, height: 44, borderRadius: 22, backgroundColor: colors.brandTertiary, alignItems: "center", justifyContent: "center" },
-  cardTitle: { fontFamily: fonts.bold, fontSize: 16, color: colors.onSurface },
+  alertIcon: { width: 42, height: 42, borderRadius: 14, backgroundColor: colors.layer3Fill, borderWidth: 1, borderColor: colors.layer3Border, alignItems: "center", justifyContent: "center" },
+  cardTitle: { fontFamily: fonts.displayBold, fontSize: 17, color: "#FFFFFF" },
   cardSub: { fontFamily: fonts.regular, fontSize: 12, color: colors.muted, marginTop: 2 },
-  manageBtn: { backgroundColor: colors.surfaceInverse, borderRadius: radius.pill, paddingHorizontal: 16, height: 36, justifyContent: "center" },
-  manageBtnText: { fontFamily: fonts.semibold, fontSize: 13, color: colors.onSurfaceInverse },
+  manageBtn: { backgroundColor: colors.layer3ActiveFill, borderWidth: 1, borderColor: colors.layer3ActiveBorder, borderRadius: 13, paddingHorizontal: 14, height: 36, justifyContent: "center" },
+  manageBtnText: { fontFamily: fonts.semibold, fontSize: 12.5, color: "#FFFFFF" },
   tabRow: { flexDirection: "row", gap: 8, marginBottom: 12 },
   tab: {
     flex: 1,

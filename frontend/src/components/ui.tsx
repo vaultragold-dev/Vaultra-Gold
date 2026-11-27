@@ -65,12 +65,12 @@ export function Button({ title, variant = "gold", loading, icon, style, textStyl
 }
 
 const BTN = (): Record<string, { bg: string; fg: string; border: string; pressed?: string }> => ({
-  gold: { bg: colors.brandPrimary, fg: colors.onBrandPrimary, border: colors.brandPrimary, pressed: colors.brandSecondary },
-  dark: { bg: colors.surfaceInverse, fg: colors.onSurfaceInverse, border: colors.surfaceInverse },
-  outline: { bg: colors.surface, fg: colors.onSurface, border: colors.border, pressed: colors.surfaceTertiary },
-  ghost: { bg: "transparent", fg: colors.onSurface, border: "transparent" },
-  danger: { bg: colors.error, fg: colors.onError, border: colors.error },
-  success: { bg: colors.success, fg: colors.onSuccess, border: colors.success },
+  gold: { bg: colors.layer3ActiveFill, fg: "#FFFFFF", border: colors.layer3ActiveBorder, pressed: "rgba(255,255,255,0.24)" },
+  dark: { bg: colors.layer3ActiveFill, fg: "#FFFFFF", border: colors.layer3ActiveBorder, pressed: "rgba(255,255,255,0.24)" },
+  outline: { bg: colors.layer3Fill, fg: "#FFFFFF", border: colors.layer3Border, pressed: colors.layer3ActiveFill },
+  ghost: { bg: "transparent", fg: "#FFFFFF", border: "transparent" },
+  danger: { bg: "rgba(225,29,72,0.78)", fg: "#FFFFFF", border: "rgba(253,164,175,0.6)" },
+  success: { bg: "rgba(16,185,129,0.72)", fg: "#FFFFFF", border: "rgba(110,231,183,0.6)" },
   adminOutline: { bg: colors.adminSurfaceSecondary, fg: colors.adminOnSurface, border: colors.adminBorder },
 });
 
@@ -84,15 +84,15 @@ export function Card({ style, children, testID }: { style?: StyleProp<ViewStyle>
 
 const STATUS = (): Record<string, { bg: string; fg: string; label: string }> => ({
   completed: { bg: colors.successTint, fg: colors.success, label: "Completed" },
-  processing: { bg: colors.warningTint, fg: "#B45309", label: "Processing" },
-  pending: { bg: colors.warningTint, fg: "#B45309", label: "Pending" },
+  processing: { bg: colors.warningTint, fg: colors.warning, label: "Processing" },
+  pending: { bg: colors.warningTint, fg: colors.warning, label: "Pending" },
   reversed: { bg: colors.errorTint, fg: colors.error, label: "Reversed" },
   failed: { bg: colors.errorTint, fg: colors.error, label: "Failed" },
   approved: { bg: colors.successTint, fg: colors.success, label: "KYC Approved" },
   rejected: { bg: colors.errorTint, fg: colors.error, label: "KYC Rejected" },
-  not_submitted: { bg: colors.surfaceTertiary, fg: colors.muted, label: "KYC Not Submitted" },
+  not_submitted: { bg: colors.layer3Fill, fg: colors.muted, label: "KYC Not Submitted" },
   active: { bg: colors.successTint, fg: colors.success, label: "Active" },
-  paused: { bg: colors.surfaceTertiary, fg: colors.muted, label: "Paused" },
+  paused: { bg: colors.layer3Fill, fg: colors.muted, label: "Paused" },
   collected: { bg: colors.successTint, fg: colors.success, label: "Collected" },
 });
 
@@ -128,9 +128,9 @@ export function Chip({
   testID?: string;
   dark?: boolean;
 }) {
-  const bg = dark ? (selected ? colors.adminGoldTint : colors.adminSurfaceSecondary) : selected ? colors.surfaceInverse : colors.surface;
-  const fg = dark ? (selected ? colors.brandPrimary : colors.adminOnSurfaceTertiary) : selected ? colors.onSurfaceInverse : colors.onSurfaceTertiary;
-  const bc = dark ? (selected ? colors.brandPrimary : colors.adminBorder) : selected ? colors.surfaceInverse : colors.border;
+  const bg = dark ? (selected ? colors.adminGoldTint : colors.adminSurfaceSecondary) : selected ? colors.layer3ActiveFill : colors.layer3Fill;
+  const fg = dark ? (selected ? colors.brandPrimary : colors.adminOnSurfaceTertiary) : "#FFFFFF";
+  const bc = dark ? (selected ? colors.brandPrimary : colors.adminBorder) : selected ? colors.layer3ActiveBorder : colors.layer3Border;
   return (
     <Pressable
       testID={testID}
@@ -187,7 +187,7 @@ export function Sheet({
             testID={testID}
             style={[
               styles.sheet,
-              { paddingBottom: insets.bottom + 16, backgroundColor: dark ? colors.adminSurfaceSecondary : colors.surface },
+              { paddingBottom: insets.bottom + 16, backgroundColor: dark ? colors.adminSurfaceSecondary : colors.sheetSurface },
             ]}
           >
             <View style={[styles.grabber, { backgroundColor: dark ? colors.adminBorder : colors.borderStrong }]} />
@@ -227,7 +227,7 @@ export function Row({ label, value, bold, dark, testID }: { label: string; value
 
 const styles = themed(() => ({
   btn: {
-    borderRadius: radius.md,
+    borderRadius: 16,
     borderWidth: 1,
     flexDirection: "row",
     alignItems: "center",
@@ -237,26 +237,25 @@ const styles = themed(() => ({
   },
   btnText: { fontFamily: fonts.semibold, letterSpacing: -0.2 },
   card: {
-    // Android draws the elevation shadow *through* a translucent card, which showed up as a heavy grey frame.
-    // Use a solid surface + hairline border there; iOS/web keep the frosted glass look.
-    backgroundColor: Platform.OS === "android" ? colors.surface : colors.glassCard,
-    borderRadius: 22,
-    borderWidth: Platform.OS === "android" ? StyleSheet.hairlineWidth : 1,
-    borderColor: Platform.OS === "android" ? colors.border : colors.glassCardBorder,
+    // Layer 2 transparent glass card (9% white, 24% border, elevation: 0 on Android to avoid muddy shadows).
+    backgroundColor: colors.layer2FillB,
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: colors.layer2Border,
     padding: 16,
     ...(Platform.OS === "android" ? { elevation: 0 } : cardShadow),
-    ...(Platform.OS === "web" ? ({ backdropFilter: "blur(18px) saturate(160%)" } as any) : null),
+    ...(Platform.OS === "web" ? ({ backdropFilter: "blur(20px) saturate(135%)" } as any) : null),
   },
   badge: { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 8, height: 24, borderRadius: radius.pill, alignSelf: "flex-start" },
   badgeDot: { width: 6, height: 6, borderRadius: 3 },
   badgeText: { fontFamily: fonts.semibold, fontSize: 11 },
-  chip: { height: 36, paddingHorizontal: 16, borderRadius: radius.pill, borderWidth: 1, justifyContent: "center", flexShrink: 0 },
+  chip: { height: 36, paddingHorizontal: 16, borderRadius: 14, borderWidth: 1, justifyContent: "center", flexShrink: 0 },
   chipText: { fontFamily: fonts.semibold, fontSize: 13 },
   sheetRoot: { flex: 1, justifyContent: "flex-end" },
-  sheet: { borderTopLeftRadius: 28, borderTopRightRadius: 28, maxHeight: "92%", paddingTop: 8, width: "100%", maxWidth: 640, alignSelf: "center", borderWidth: StyleSheet.hairlineWidth * 1.5, borderColor: colors.glassBorder, overflow: "hidden" },
+  sheet: { borderTopLeftRadius: 30, borderTopRightRadius: 30, maxHeight: "92%", paddingTop: 8, width: "100%", maxWidth: 640, alignSelf: "center", borderWidth: StyleSheet.hairlineWidth, borderColor: colors.glassBorder, overflow: "hidden" },
   grabber: { width: 40, height: 4, borderRadius: 2, alignSelf: "center", marginBottom: 8 },
   sheetHead: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 20, paddingVertical: 8 },
-  sheetTitle: { fontFamily: fonts.bold, fontSize: 20, letterSpacing: -0.4 },
+  sheetTitle: { fontFamily: fonts.displayBold, fontSize: 22, letterSpacing: -0.2 },
   closeBtn: { width: 44, height: 44, alignItems: "flex-end", justifyContent: "center" },
   row: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 6 },
   rowLabel: { fontFamily: fonts.regular, fontSize: 14 },

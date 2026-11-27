@@ -511,6 +511,8 @@ def decode_token(creds: Optional[HTTPAuthorizationCredentials], role: str):
         raise HTTPException(401, "Not authenticated")
     try:
         p = jwt.decode(creds.credentials, JWT_SECRET, algorithms=["HS256"])
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(401, "Session expired — please sign in again")
     except jwt.InvalidTokenError:
         raise HTTPException(401, "Invalid token")
     if p.get("role") != role:
@@ -558,6 +560,66 @@ def norm_phone(p: str):
     return d[-10:]
 
 
+# ─── Basic form validation (same rules as the app & panels) ──────────────────
+EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$")
+
+
+def clean_phone10(p: str, label: str = "Mobile number") -> str:
+    """Indian mobile: exactly 10 digits (+91 / 0 prefix allowed and removed)."""
+    d = "".join(c for c in (p or "") if c.isdigit())
+    if len(d) == 12 and d.startswith("91"):
+        d = d[2:]
+    elif len(d) == 11 and d.startswith("0"):
+        d = d[1:]
+    if len(d) != 10:
+        raise HTTPException(400, f"{label} must be exactly 10 digits")
+    return d
+
+
+def clean_email(v: Optional[str], required: bool = False, label: str = "Email") -> str:
+    v = (v or "").strip().lower()
+    if not v:
+        if required:
+            raise HTTPException(400, f"{label} is required")
+        return ""
+    if not EMAIL_RE.match(v):
+        raise HTTPException(400, f"Enter a valid {label.lower()} (e.g. name@gmail.com)")
+    return v
+
+
+def clean_dob(v: Optional[str]) -> str:
+    """Accepts 28042002, 28/04/2002, 28-04-2002 or 2002-04-28 and always stores DD/MM/YYYY."""
+    s = (v or "").strip()
+    if not s:
+        return ""
+    digits = re.sub(r"\D", "", s)
+    m_iso = re.match(r"^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})", s)
+    m_dmy = re.match(r"^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})$", s)
+    if m_iso:
+        y, mo, d = m_iso.groups()
+    elif m_dmy:
+        d, mo, y = m_dmy.groups()
+    elif len(digits) == 8:
+        d, mo, y = digits[:2], digits[2:4], digits[4:]
+    else:
+        raise HTTPException(400, "Date of birth must be in DD/MM/YYYY format")
+    try:
+        when = datetime(int(y), int(mo), int(d))
+    except ValueError:
+        raise HTTPException(400, "Enter a valid date of birth (DD/MM/YYYY)")
+    if when > datetime.now() or when.year < 1900:
+        raise HTTPException(400, "Enter a valid date of birth (DD/MM/YYYY)")
+    return when.strftime("%d/%m/%Y")
+
+
+def dob_display(v: Optional[str]) -> str:
+    """Old records were saved as typed (28042002 / 2002-04-28) - show them as DD/MM/YYYY."""
+    try:
+        return clean_dob(v)
+    except HTTPException:
+        return v or ""
+
+
 def gen_wallet_id():
     return "VW" + secrets.token_hex(4).upper()
 
@@ -581,16 +643,21 @@ def cust_search(search: str):
 def customer_dict(c: Customer):
     """Serialize customer for API response."""
     grams = c.gold_grams or 0
+    kyc = dict(c.kyc_data) if isinstance(c.kyc_data, dict) else {}
+    if kyc.get("dob"):
+        kyc["dob"] = dob_display(kyc["dob"])
+    if isinstance(kyc.get("aadhaar"), dict) and kyc["aadhaar"].get("dob"):
+        kyc["aadhaar"] = {**kyc["aadhaar"], "dob": dob_display(kyc["aadhaar"]["dob"])}
     return {
         "id": c.id, "phone": c.phone, "wallet_id": c.wallet_id, "tenant": c.jeweller_id,
         "first_name": c.first_name, "last_name": c.last_name,
         "name": f"{c.first_name} {c.last_name}".strip() or "Gold Saver",
-        "email": c.email, "dob": c.dob, "gender": c.gender,
+        "email": c.email, "dob": dob_display(c.dob), "gender": c.gender,
         "jeweller_id": c.jeweller_id,
         "gold_grams": r4(grams), "silver_grams": r4(c.silver_grams or 0),
         "invested": r2(c.invested or 0),
         "avg_buy_price": r2(c.invested / grams) if grams > 0 else 0,
-        "kyc_status": c.kyc_status, "kyc": c.kyc_data or {},
+        "kyc_status": c.kyc_status, "kyc": kyc,
         "referral_code": c.referral_code,
         "referral_balance": r2(c.referral_balance or 0),
         "wallet_balance": r2(c.wallet_balance or 0),
@@ -1198,7 +1265,7 @@ async def ms_otp_referral(body: OtpReferralBody, admin: MasterAdmin = Depends(ge
 
 @api.post("/auth/otp/request")
 async def otp_request(body: OtpRequest, request: Request, db: AsyncSession = Depends(get_db)):
-    phone = norm_phone(body.phone)
+    phone = clean_phone10(body.phone, "Mobile number")
     if len(phone) != 10:
         raise HTTPException(400, "Enter a valid 10-digit mobile number")
 
@@ -1290,7 +1357,7 @@ async def otp_verify(body: OtpVerify, db: AsyncSession = Depends(get_db)):
         customer = Customer(
             id=str(uuid.uuid4()), jeweller_id=jeweller_id, phone=c.phone,
             first_name=fname or "Gold", last_name=lname,
-            email=(body.email or "").strip(), dob=(body.dob or "").strip(),
+            email=clean_email(body.email), dob=clean_dob(body.dob),
             gender=(body.gender or "").strip(),
             wallet_id=gen_wallet_id(), referral_code=gen_referral_code(),
         )
@@ -1326,9 +1393,9 @@ async def otp_verify(body: OtpVerify, db: AsyncSession = Depends(get_db)):
             if body.last_name:
                 customer.last_name = body.last_name.strip()
             if body.email:
-                customer.email = body.email.strip()
+                customer.email = clean_email(body.email)
             if body.dob:
-                customer.dob = body.dob.strip()
+                customer.dob = clean_dob(body.dob)
             if body.gender:
                 customer.gender = body.gender.strip()
             is_new = False
@@ -1366,9 +1433,9 @@ async def update_me(
     if ln is not None:
         customer.last_name = ln.strip()
     if em is not None:
-        customer.email = em.strip()
+        customer.email = clean_email(em)
     if db_dob is not None:
-        customer.dob = db_dob.strip()
+        customer.dob = clean_dob(db_dob)
     if gn is not None:
         customer.gender = gn.strip()
     if ref and not customer.referred_by:
@@ -1435,7 +1502,7 @@ async def kyc_submit(body: KycSubmit, customer: Customer = Depends(get_current_c
     customer.kyc_status = "pending"
     customer.kyc_data = {
         "full_name": body.full_name, "aadhaar": body.aadhaar,
-        "pan": body.pan, "dob": body.dob, "submitted_at": now_iso(), "photo_id": body.photo_id,
+        "pan": body.pan, "dob": clean_dob(body.dob), "submitted_at": now_iso(), "photo_id": body.photo_id,
     }
     if body.photo_id:  # the photo must be one this customer uploaded
         u = (await db.execute(select(Upload).where(Upload.id == body.photo_id, Upload.owner == f"kyc:{customer.id}"))).scalar_one_or_none()
@@ -1610,7 +1677,7 @@ async def _digilocker_finish(db, chk, customer):
     if st not in ("authenticated", "success", "completed"):
         return False
     a = await ks.digilocker_aadhaar(KYC_CFG, chk.ref)
-    info = {"verified": True, "name": a["name"], "dob": a["dob"], "gender": a["gender"], "aadhaar_last4": a["aadhaar_last4"],
+    info = {"verified": True, "name": a["name"], "dob": dob_display(a["dob"]), "gender": a["gender"], "aadhaar_last4": a["aadhaar_last4"],
             "city": a["city"], "state": a["state"], "pincode": a["pincode"], "at": now_iso()}
     _kyc_mark(chk, "success", info)
     _kyc_set(customer, "aadhaar", info)
@@ -2894,7 +2961,7 @@ async def jeweller_login(body: JewellerLogin, request: Request, db: AsyncSession
     LOGIN_FAILS.pop(f"jeweller:{email}", None)
     if j.status != "active":
         raise HTTPException(403, "Account suspended")
-    return {"access_token": make_token(j.id, "jeweller", days=1), "jeweller": jeweller_dict(j)}
+    return {"access_token": make_token(j.id, "jeweller", days=14), "jeweller": jeweller_dict(j)}
 
 
 @api.get("/jeweller/me")
@@ -3181,7 +3248,7 @@ async def master_login(body: MasterAdminLogin, request: Request, db: AsyncSessio
         _login_failed("master", body.username, ip)
         raise HTTPException(401, "Invalid credentials")
     LOGIN_FAILS.pop(f"master:{body.username}", None)
-    return {"access_token": make_token(admin.id, "master_admin", days=1), "admin": {"id": admin.id, "name": admin.name}}
+    return {"access_token": make_token(admin.id, "master_admin", days=14), "admin": {"id": admin.id, "name": admin.name}}
 
 
 @api.get("/master/dashboard")
@@ -3226,6 +3293,12 @@ async def master_jewellers(admin: MasterAdmin = Depends(get_master_admin), db: A
 
 @api.post("/master/jewellers")
 async def master_onboard_jeweller(body: JewellerOnboard, admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
+    body.phone = clean_phone10(body.phone, "Phone")
+    body.email = clean_email(body.email, required=True, label="Login email")
+    if len((body.password or "").strip()) < 6:
+        raise HTTPException(400, "Password must be at least 6 characters")
+    if body.pincode and not re.fullmatch(r"\d{6}", body.pincode.strip()):
+        raise HTTPException(400, "Pincode must be 6 digits")
     # Check uniqueness
     existing = await db.execute(select(Jeweller).where(or_(Jeweller.email == body.email.lower(), Jeweller.phone == norm_phone(body.phone))))
     if existing.scalar_one_or_none():
@@ -4934,7 +5007,7 @@ async def ms_update(jid: str, body: AppStudioUpdate, request: Request, admin: Ma
     j.store_lat, j.store_lng = body.store_lat, body.store_lng
     j.store_hours = (body.store_hours or "").strip()
     j.logo_url, j.splash_url, j.app_version = body.logo_url, body.splash_url, body.app_version
-    j.support_email, j.store_short, j.store_long, j.store_keywords = body.support_email.strip(), body.store_short.strip(), body.store_long.strip(), body.store_keywords.strip()
+    j.support_email, j.store_short, j.store_long, j.store_keywords = clean_email(body.support_email, label="Support email"), body.store_short.strip(), body.store_long.strip(), body.store_keywords.strip()
     if body.domain is not None:
         try:
             j.domain = normalize_domain(body.domain)

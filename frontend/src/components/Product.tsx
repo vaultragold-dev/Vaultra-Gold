@@ -1,4 +1,5 @@
 import { Image } from "expo-image";
+import { LinearGradient } from "expo-linear-gradient";
 import { useRouter } from "expo-router";
 import { Coins, ShieldCheck, Store } from "lucide-react-native";
 import React, { useState } from "react";
@@ -6,51 +7,82 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 
 import { api } from "@/src/api";
 import { IMAGES } from "@/src/assets";
+import { LiquidGlass } from "@/src/components/Glass";
 import { useToast } from "@/src/components/Toast";
 import { Button, Row, Sheet } from "@/src/components/ui";
 import { grams, inr, TENANT_NAME } from "@/src/format";
 import { useApp } from "@/src/store/AppContext";
-import { cardShadow, colors, fonts, radius, themed } from "@/src/theme";
+import { colors, fonts, radius, themed } from "@/src/theme";
 
 export type Product = { id: string; name: string; category: string; grams: number; making_charges: number; image: string; tag: string; image_url?: string; total_price?: number; making_pct?: number };
 
 export function ProductCard({ p, width, onRedeem }: { p: Product; width: number; onRedeem: (p: Product) => void }) {
-  const { price } = useApp();
   const router = useRouter();
+  const purity = (p as any).purity || "22K";
+  const imgSrc = p.image_url
+    ? { uri: p.image_url.startsWith("/") ? (process.env.EXPO_PUBLIC_BACKEND_URL || "") + p.image_url : p.image_url }
+    : IMAGES[p.image];
+
   return (
     <Pressable
-      style={[styles.card, { width }]}
+      style={({ pressed }) => [{ width }, pressed && styles.cardPressed]}
       testID={`product-card-${p.id}`}
       onPress={() => router.push({ pathname: "/product-detail", params: { id: p.id } })}
     >
-      <View style={styles.imgWrap}>
-        <Image source={p.image_url ? { uri: p.image_url.startsWith("/") ? (process.env.EXPO_PUBLIC_BACKEND_URL || "") + p.image_url : p.image_url } : IMAGES[p.image]} style={{ width: "100%", height: "100%" }} contentFit="contain" transition={200} />
-        {p.tag ? (
-          <View style={styles.tag}>
-            <Text style={styles.tagText}>{p.tag}</Text>
+      <LiquidGlass
+        layer={2}
+        radius={24}
+        innerStyle={styles.cardInner}
+      >
+        {/* Full-bleed 4-side-curved jewellery showcase (zero white padding/border) */}
+        <View style={styles.imgFrame}>
+          <Image
+            source={imgSrc}
+            style={StyleSheet.absoluteFill}
+            contentFit="cover"
+            transition={220}
+          />
+          <LinearGradient
+            pointerEvents="none"
+            colors={["transparent", "rgba(0,0,0,0.48)"]}
+            start={{ x: 0.5, y: 0.45 }}
+            end={{ x: 0.5, y: 1 }}
+            style={styles.imgVignette}
+          />
+          {p.tag ? (
+            <View style={styles.tag}>
+              <Text style={styles.tagText} numberOfLines={1}>{p.tag}</Text>
+            </View>
+          ) : null}
+          <View style={styles.weightBadge}>
+            <Text style={styles.weightBadgeText} numberOfLines={1}>
+              {p.grams}g · {purity}
+            </Text>
           </View>
-        ) : null}
-      </View>
-      <View style={styles.body2}>
-        <Text style={styles.name} numberOfLines={2}>
-          {p.name}
-        </Text>
-        <Text style={styles.meta} numberOfLines={1}>
-          {p.grams}g · {(p as any).purity || "22K"} · Making {p.making_pct ?? 12}%
-        </Text>
-        <View style={styles.valueRow}>
-          <Text style={styles.valueLabel}>Price</Text>
-          <Text style={styles.value} numberOfLines={1}>
-            {p.total_price ? inr(p.total_price, 0) : "—"}
-          </Text>
         </View>
-        <View style={styles.cta}>
-          {width >= 190 ? <Coins size={14} color={colors.onBrandPrimary} /> : null}
-          <Text style={styles.ctaText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}>
-            View Details
+
+        {/* Product Info + Liquid Gradient CTA */}
+        <View style={styles.body2}>
+          <Text style={styles.name} numberOfLines={2}>
+            {p.name}
           </Text>
+          <Text style={styles.meta} numberOfLines={1}>
+            Making {p.making_pct ?? 12}% · Hallmarked
+          </Text>
+          <View style={styles.valueRow}>
+            <Text style={styles.valueLabel}>Price</Text>
+            <Text style={styles.value} numberOfLines={1} adjustsFontSizeToFit>
+              {p.total_price ? inr(p.total_price, 0) : "—"}
+            </Text>
+          </View>
+          <View style={styles.cta}>
+            {width >= 190 ? <Coins size={13} color="#FFFFFF" strokeWidth={1.8} /> : null}
+            <Text style={styles.ctaText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.85}>
+              View Details →
+            </Text>
+          </View>
         </View>
-      </View>
+      </LiquidGlass>
     </Pressable>
   );
 }
@@ -141,18 +173,58 @@ export function RedeemSheet({ target, onClose }: { target: Target | null; onClos
 }
 
 const styles = themed(() => ({
-  card: { backgroundColor: colors.surface, borderRadius: radius.md, borderWidth: 1, borderColor: colors.goldHairline, overflow: "hidden", ...cardShadow },
-  imgWrap: { width: "100%", aspectRatio: 1, padding: 8, backgroundColor: colors.brandTertiary, overflow: "hidden" },
-  tag: { position: "absolute", top: 8, left: 8, backgroundColor: colors.surfaceInverse, borderRadius: radius.pill, paddingHorizontal: 8, paddingVertical: 3 },
-  tagText: { fontFamily: fonts.bold, fontSize: 10, color: colors.brandPrimary, letterSpacing: 0.6 },
-  body2: { padding: 12, flex: 1 },
-  name: { fontFamily: fonts.bold, fontSize: 14, lineHeight: 18, height: 36, color: colors.onSurface, letterSpacing: -0.3 },
-  meta: { fontFamily: fonts.regular, fontSize: 11, lineHeight: 16, color: colors.muted, marginTop: 6 },
-  valueRow: { flexDirection: "row", alignItems: "baseline", justifyContent: "space-between", marginTop: 8, marginBottom: 12, gap: 4 },
-  valueLabel: { fontFamily: fonts.medium, fontSize: 11, color: colors.muted },
-  value: { flexShrink: 1, fontFamily: fonts.bold, fontSize: 15, color: colors.onSurface, textAlign: "right" },
-  cta: { marginTop: "auto", flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, height: 40, paddingHorizontal: 4, borderRadius: 10, backgroundColor: colors.brandPrimary },
-  ctaText: { flexShrink: 1, fontFamily: fonts.semibold, fontSize: 11, letterSpacing: -0.2, color: colors.onBrandPrimary, textAlign: "center" },
+  cardPressed: { opacity: 0.93, transform: [{ scale: 0.975 }] },
+  cardInner: { padding: 6, flex: 1 },
+  imgFrame: {
+    width: "100%",
+    aspectRatio: 1.04,
+    borderRadius: 18,
+    overflow: "hidden",
+    backgroundColor: colors.surfaceInverse,
+  },
+  imgVignette: { position: "absolute", left: 0, right: 0, bottom: 0, height: "46%" },
+  tag: {
+    position: "absolute",
+    top: 8,
+    left: 8,
+    backgroundColor: "rgba(15,18,28,0.62)",
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "rgba(255,243,196,0.34)",
+    borderRadius: radius.pill,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  tagText: { fontFamily: fonts.bold, fontSize: 9.5, color: colors.goldSheen, letterSpacing: 0.5 },
+  weightBadge: {
+    position: "absolute",
+    bottom: 8,
+    right: 8,
+    backgroundColor: "rgba(0,0,0,0.48)",
+    borderRadius: radius.pill,
+    paddingHorizontal: 7,
+    paddingVertical: 2.5,
+  },
+  weightBadgeText: { fontFamily: fonts.bold, fontSize: 9.5, color: "#FFFFFF", letterSpacing: 0.2 },
+  body2: { paddingHorizontal: 8, paddingTop: 10, paddingBottom: 6, flex: 1 },
+  name: { fontFamily: fonts.displayBold, fontSize: 14.5, lineHeight: 19, height: 38, color: colors.onSurface, letterSpacing: -0.1 },
+  meta: { fontFamily: fonts.medium, fontSize: 10.5, lineHeight: 15, color: colors.muted, marginTop: 3 },
+  valueRow: { flexDirection: "row", alignItems: "baseline", justifyContent: "space-between", marginTop: 8, marginBottom: 10, gap: 4 },
+  valueLabel: { fontFamily: fonts.medium, fontSize: 10.5, color: colors.muted },
+  value: { flexShrink: 1, fontFamily: fonts.displayBold, fontSize: 16, color: colors.onSurface, textAlign: "right", letterSpacing: -0.2 },
+  cta: {
+    marginTop: "auto",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 5,
+    height: 36,
+    paddingHorizontal: 8,
+    borderRadius: 13,
+    backgroundColor: colors.layer3ActiveFill,
+    borderWidth: 1,
+    borderColor: colors.layer3ActiveBorder,
+  },
+  ctaText: { flexShrink: 1, fontFamily: fonts.semibold, fontSize: 11.5, letterSpacing: -0.1, color: "#FFFFFF", textAlign: "center" },
   itemRow: { flexDirection: "row", gap: 12, alignItems: "center", marginBottom: 12 },
   itemIcon: { width: 48, height: 48, borderRadius: 14, backgroundColor: colors.brandTertiary, alignItems: "center", justifyContent: "center" },
   itemName: { fontFamily: fonts.bold, fontSize: 16, color: colors.onSurface },

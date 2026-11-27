@@ -6,6 +6,7 @@ import Animated, { FadeInDown } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { GlassBackdrop } from "@/src/components/GlassBackdrop";
+import { LiquidGlass } from "@/src/components/Glass";
 import { api } from "@/src/api";
 import { CATEGORIES } from "@/src/assets";
 import { BannerCarousel } from "@/src/components/BannerCarousel";
@@ -25,7 +26,7 @@ const CAT_ICONS: Record<string, any> = { CircleDot, Disc3, Gem, Link2, Crown, Di
 
 function CatIcon({ name }: { name: string }) {
   const Icon = CAT_ICONS[name] || Gem;
-  return <Icon size={26} color={colors.brandDeep} strokeWidth={1.6} />;
+  return <Icon size={24} color="#FFFFFF" strokeWidth={1.7} />;
 }
 
 export default function Home() {
@@ -39,6 +40,12 @@ export default function Home() {
   const scrollRef = useRef<ScrollViewInstance>(null);
   const buyY = useRef(0);
   const scrollToBuy = () => scrollRef.current?.scrollTo({ y: Math.max(0, buyY.current - 12), animated: true });
+  // Gold / Silver rate card tapped -> open the Buy box with that metal selected
+  const [buySel, setBuySel] = useState<{ metal: "gold" | "silver"; n: number } | undefined>(undefined);
+  const buyMetal = (metal: "gold" | "silver") => {
+    setBuySel((s) => ({ metal, n: (s?.n ?? 0) + 1 }));
+    scrollToBuy();
+  };
 
   // Gold & silver rates first, then offers (banners), then trending jewellery; the rest follows the theme's order.
   const TOP: HomeSection[] = ["prices", "banners", "trending"];
@@ -55,23 +62,22 @@ export default function Home() {
   };
 
   const sections: Record<HomeSection, React.ReactNode> = {
-    prices: (
-      <Animated.View entering={FadeInDown.duration(300)}>
-        <PriceCards />
-      </Animated.View>
-    ),
+    prices: <PriceCards onSelect={buyMetal} />,
     karats: <KaratRates />,
     sip: (
-      <Pressable style={styles.sipPromo} onPress={() => router.push("/sip")} testID="home-sip-promo">
-        <View style={styles.sipGlow} />
-        <View style={{ flex: 1, zIndex: 1 }}>
-          <Text style={styles.sipEyebrow}>{t("sip_eyebrow")}</Text>
-          <Text style={styles.sipTitle}>{t("sip_title")}</Text>
-          <Text style={styles.sipSub}>{t("sip_sub")}</Text>
-        </View>
-        <View style={styles.sipArrow}>
-          <ArrowRight size={20} color={colors.onBrandPrimary} />
-        </View>
+      <Pressable onPress={() => router.push("/sip")} testID="home-sip-promo" style={({ pressed }) => [styles.sipWrap, pressed && { opacity: 0.92, transform: [{ scale: 0.985 }] }]}>
+        <LiquidGlass layer={1} radius={26} innerStyle={styles.sipOuter}>
+          <LiquidGlass layer={2} radius={20} innerStyle={styles.sipPromo}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.sipEyebrow}>{t("sip_eyebrow")}</Text>
+              <Text style={styles.sipTitle}>{t("sip_title")}</Text>
+              <Text style={styles.sipSub}>{t("sip_sub")}</Text>
+            </View>
+            <View style={styles.sipArrow}>
+              <ArrowRight size={19} color="#FFFFFF" strokeWidth={1.9} />
+            </View>
+          </LiquidGlass>
+        </LiquidGlass>
       </Pressable>
     ),
     banners: (
@@ -85,7 +91,7 @@ export default function Home() {
     buy: (
       <>
         <Animated.View entering={FadeInDown.delay(100).duration(400)} style={{ marginTop: 20 }} onLayout={(e) => { buyY.current = e.nativeEvent.layout.y; }}>
-          <BuyWidget />
+          <BuyWidget select={buySel} />
         </Animated.View>
         <PriceAlertCard />
         <HomeGoalCard />
@@ -116,37 +122,43 @@ export default function Home() {
       </>
     ),
     trending: (
-      <>
-        <View style={[styles.sectionHead, { marginTop: 20 }]}>
+      <LiquidGlass layer={1} radius={26} style={styles.trendingWrap} innerStyle={styles.trendingInner}>
+        <View style={styles.trendingHead}>
           <Text style={styles.sectionTitle}>{t("trending_jewellery")}</Text>
           <Pressable onPress={() => router.push("/jewellery")} style={styles.seeAll} testID="see-all-jewellery">
             <Text style={styles.seeAllText}>{t("see_all")}</Text>
-            <ArrowRight size={14} color={colors.brandSecondary} />
+            <ArrowRight size={14} color="#FFFFFF" strokeWidth={1.8} />
           </Pressable>
         </View>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 16, gap: 12 }}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 10, gap: 10, paddingBottom: 4 }}>
           {products.slice(0, 4).map((p) => (
-            <ProductCard key={p.id} p={p} width={196} onRedeem={(x) => setTarget({ kind: "product", product: x })} />
+            <ProductCard key={p.id} p={p} width={186} onRedeem={(x) => setTarget({ kind: "product", product: x })} />
           ))}
         </ScrollView>
-      </>
+      </LiquidGlass>
     ),
     promos: (
       <>
-        <Pressable style={styles.referPromo} onPress={() => router.push("/referral")} testID="home-refer-promo">
-          <View style={styles.referIcon}>
-            <Users size={22} color={colors.brandPrimary} />
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.referTitle}>{t("refer_title")}</Text>
-            <Text style={styles.referSub}>{t("refer_sub")}</Text>
-          </View>
-          <ArrowRight size={18} color={colors.brandPrimary} />
+        <Pressable onPress={() => router.push("/referral")} testID="home-refer-promo" style={({ pressed }) => [{ marginHorizontal: 16, marginTop: 14 }, pressed && { opacity: 0.92, transform: [{ scale: 0.985 }] }]}>
+          <LiquidGlass layer={2} radius={22} innerStyle={styles.referPromo}>
+            <View style={styles.referIcon}>
+              <Users size={19} color="#FFFFFF" strokeWidth={1.8} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.referTitle}>{t("refer_title")}</Text>
+              <Text style={styles.referSub}>{t("refer_sub")}</Text>
+            </View>
+            <ArrowRight size={18} color="#FFFFFF" strokeWidth={1.8} />
+          </LiquidGlass>
         </Pressable>
-        <Pressable style={styles.faqRow} onPress={() => router.push("/faq")} testID="home-faq-link">
-          <HelpCircle size={20} color={colors.onSurfaceTertiary} />
-          <Text style={styles.faqText}>{t("faq")}</Text>
-          <ArrowRight size={16} color={colors.muted} />
+        <Pressable onPress={() => router.push("/faq")} testID="home-faq-link" style={({ pressed }) => [{ marginHorizontal: 16, marginTop: 10 }, pressed && { opacity: 0.92 }]}>
+          <LiquidGlass layer={2} radius={20} innerStyle={styles.faqRow}>
+            <View style={styles.faqIcon}>
+              <HelpCircle size={18} color="#FFFFFF" strokeWidth={1.8} />
+            </View>
+            <Text style={styles.faqText}>{t("faq")}</Text>
+            <ArrowRight size={16} color="rgba(255,255,255,0.72)" strokeWidth={1.8} />
+          </LiquidGlass>
         </Pressable>
       </>
     ),
@@ -155,7 +167,7 @@ export default function Home() {
   return (
     <View style={styles.root} testID="home-screen">
       <GlassBackdrop />
-      <HomeHeader />
+      <HomeHeader onSelectMetal={buyMetal} />
       <ScrollView
         ref={scrollRef}
         contentContainerStyle={{ paddingTop: 16, paddingBottom: bottomChrome + 24 }}
@@ -174,69 +186,43 @@ export default function Home() {
 
 const styles = themed(() => ({
   root: { flex: 1, backgroundColor: "transparent" },
-  sectionHead: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 16, marginTop: 32, marginBottom: 14 },
-  sectionTitle: { fontFamily: fonts.bold, fontSize: 20, letterSpacing: -0.4, color: colors.onSurface },
-  seeAll: { flexDirection: "row", alignItems: "center", gap: 4, minHeight: 44 },
-  seeAllText: { fontFamily: fonts.semibold, fontSize: 13, color: colors.brandDeep },
-  cat: { alignItems: "center", width: 76 },
-  catImg: { width: 64, height: 64, borderRadius: 18, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: colors.goldHairline, backgroundColor: colors.brandTertiary },
-  catLabel: { fontFamily: fonts.medium, fontSize: 12, color: colors.onSurface, marginTop: 8 },
+  sectionHead: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 16, marginTop: 22, marginBottom: 12 },
+  trendingWrap: { marginHorizontal: 16, marginTop: 18 },
+  trendingInner: { paddingTop: 12, paddingBottom: 10 },
+  trendingHead: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 12, marginBottom: 10 },
+  sectionTitle: { fontFamily: fonts.displayBold, fontSize: 20, letterSpacing: -0.2, color: "#FFFFFF" },
+  seeAll: { flexDirection: "row", alignItems: "center", gap: 4, minHeight: 36 },
+  seeAllText: { fontFamily: fonts.semibold, fontSize: 12.5, color: "rgba(255,255,255,0.85)" },
+  cat: { alignItems: "center", width: 74 },
+  catImg: { width: 62, height: 62, borderRadius: 18, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: colors.layer3Border, backgroundColor: colors.layer3Fill },
+  catLabel: { fontFamily: fonts.semibold, fontSize: 11.5, color: "#FFFFFF", marginTop: 7 },
+  sipWrap: { marginHorizontal: 16, marginTop: 16 },
+  sipOuter: { padding: 8 },
   sipPromo: {
-    marginHorizontal: 16,
-    marginTop: 16,
-    backgroundColor: colors.surfaceInverse,
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: colors.goldHairline,
-    padding: 20,
+    padding: 16,
     flexDirection: "row",
     alignItems: "center",
     gap: 12,
-    overflow: "hidden",
   },
-  sipGlow: {
-    position: "absolute",
-    right: -30,
-    top: -30,
-    width: 120,
-    height: 120,
-    borderRadius: 60,
-    backgroundColor: "rgba(212,175,55,0.15)",
-  },
-  sipEyebrow: { fontFamily: fonts.bold, fontSize: 11, color: colors.brandPrimary, letterSpacing: 1 },
-  sipTitle: { fontFamily: fonts.black, fontSize: 18, color: colors.onSurfaceInverse, letterSpacing: -0.4, marginTop: 4 },
-  sipSub: { fontFamily: fonts.regular, fontSize: 12, color: colors.mutedLight, marginTop: 4 },
-  sipArrow: { width: 44, height: 44, borderRadius: 22, backgroundColor: colors.brandPrimary, alignItems: "center", justifyContent: "center" },
-  giftPromo: { marginHorizontal: 16, marginTop: 12, flexDirection: "row", alignItems: "center", gap: 12, padding: 16, borderRadius: 14, backgroundColor: colors.giftDiwali },
-  giftIcon: { width: 44, height: 44, borderRadius: 22, backgroundColor: colors.overlayLight, alignItems: "center", justifyContent: "center" },
-  giftTitle: { fontFamily: fonts.black, fontSize: 17, color: colors.onSurfaceInverse, letterSpacing: -0.4 },
-  giftSub: { fontFamily: fonts.regular, fontSize: 12, color: colors.giftDiwaliAccent, marginTop: 2 },
+  sipEyebrow: { fontFamily: fonts.bold, fontSize: 10, color: colors.muted, letterSpacing: 1.5 },
+  sipTitle: { fontFamily: fonts.displayBold, fontSize: 19, color: "#FFFFFF", letterSpacing: -0.2, marginTop: 3 },
+  sipSub: { fontFamily: fonts.regular, fontSize: 12, color: colors.muted, marginTop: 4 },
+  sipArrow: { width: 42, height: 42, borderRadius: 14, backgroundColor: colors.layer3ActiveFill, borderWidth: 1, borderColor: colors.layer3ActiveBorder, alignItems: "center", justifyContent: "center" },
   referPromo: {
-    marginHorizontal: 16,
-    marginTop: 12,
     flexDirection: "row",
     alignItems: "center",
     gap: 12,
-    padding: 16,
-    borderRadius: 14,
-    backgroundColor: colors.brandTertiary,
-    borderWidth: 1,
-    borderColor: "#F0E2B0",
+    padding: 14,
   },
-  referIcon: { width: 44, height: 44, borderRadius: 22, backgroundColor: colors.surface, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: colors.border },
-  referTitle: { fontFamily: fonts.black, fontSize: 17, color: colors.onSurface, letterSpacing: -0.4 },
-  referSub: { fontFamily: fonts.regular, fontSize: 12, color: colors.onBrandTertiary, marginTop: 2 },
+  referIcon: { width: 42, height: 42, borderRadius: 14, backgroundColor: colors.layer3Fill, borderWidth: 1, borderColor: colors.layer3Border, alignItems: "center", justifyContent: "center" },
+  referTitle: { fontFamily: fonts.displayBold, fontSize: 17.5, color: "#FFFFFF" },
+  referSub: { fontFamily: fonts.regular, fontSize: 12, color: colors.muted, marginTop: 2 },
   faqRow: {
-    marginHorizontal: 16,
-    marginTop: 12,
     flexDirection: "row",
     alignItems: "center",
     gap: 12,
-    padding: 16,
-    borderRadius: 14,
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
+    padding: 14,
   },
-  faqText: { flex: 1, fontFamily: fonts.semibold, fontSize: 14, color: colors.onSurface },
+  faqIcon: { width: 38, height: 38, borderRadius: 13, backgroundColor: colors.layer3Fill, borderWidth: 1, borderColor: colors.layer3Border, alignItems: "center", justifyContent: "center" },
+  faqText: { flex: 1, fontFamily: fonts.semibold, fontSize: 14, color: "#FFFFFF" },
 }));

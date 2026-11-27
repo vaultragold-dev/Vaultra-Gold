@@ -356,12 +356,12 @@ function vStudio() {
               <div style="font-size:11px;color:#64748b;line-height:1.45;margin-bottom:10px">
                 • <b>Full-screen poster (recommended):</b> upload a 1080×1920 px (9:16) image. The app shows it edge to edge exactly like the preview on the right.<br>
                 • Keep logo and text inside the middle area (about 15% margin from every edge) - different phones crop the edges slightly.<br>
-                • For the first split second the phone shows its own small system splash (logo on the brand colour) - this is an Android/iOS rule and cannot be changed; the poster appears right after.<br>
+                • Any splash image you upload is shown <b>full screen</b> - there is no small logo splash before it (the phone only shows the poster's background colour for a split second while the app starts).<br>
                 • <b>Auto-Fallback:</b> If omitted, your App Icon is automatically used on luxury theme background.
               </div>
             </div>
             <div>
-              <input type="file" accept="image/png,image/jpeg" onchange="studioUpload(this,'splash_url')" id="st_splash">
+              <input type="file" accept="image/png,image/jpeg,image/webp" onchange="studioUpload(this,'splash_url')" id="st_splash">
               ${d.splash_url ? `
                 <div style="margin-top:10px;display:flex;align-items:center;gap:10px;background:#f1f5f9;padding:8px;border-radius:8px">
                   <div style="width:36px;height:36px;border-radius:9px;background:#1e293b;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 6px rgba(0,0,0,0.18);overflow:hidden">
@@ -379,7 +379,7 @@ function vStudio() {
       
       <div class="grid g2">
         <div class="field"><label>App Release Version</label><input class="input" value="${esc(d.app_version)}" oninput="dset('app_version',this.value)"></div>
-        <div class="field"><label>Customer Support Email *</label><input class="input" value="${esc(d.support_email)}" oninput="dset('support_email',this.value)"></div>
+        <div class="field"><label>Customer Support Email *</label><input class="input" type="email" data-fmt="email" placeholder="support@yourstore.com" value="${esc(d.support_email)}" oninput="dset('support_email',this.value)"></div>
       </div>
 
       <div style="margin-top:16px;padding-top:16px;border-top:1px solid #e2e8f0">
@@ -705,9 +705,13 @@ async function studioUpload(inp, key) {
     S.draft[key] = url;
     if (key === 'logo_url') S.phonePreviewTab = 'icon';
     else if (key === 'splash_url') S.phonePreviewTab = 'splash';
-    toast(key === 'logo_url' ? 'App Icon uploaded (1024x1024) · save to keep it' : 'Splash Screen uploaded (1284x2778) · save to keep it');
+    toast(key === 'logo_url' ? 'App Icon uploaded (1024x1024) · save to keep it' : 'Splash Screen uploaded (1080x1920) · save to keep it');
     render();
-  } catch (e) { toast(e.message, true); }
+  } catch (e) {
+    toast(e.message, true);
+  } finally {
+    try { inp.value = ''; } catch (_) {}
+  }
 }
 
 async function studioSave() {
@@ -754,8 +758,12 @@ async function studioDownload(id, kind) {
     }
     toast(`Preparing ${kind.toUpperCase()} download…`);
     const tok = localStorage.getItem('master_token') || '';
+    if (!tok) { if (typeof logout === 'function') logout(); throw new Error('Session expired — please sign in again'); }
     const r = await fetch(API + `/master/app-studio/${id}/download/${kind}`, { headers: { Authorization: 'Bearer ' + tok } });
-    if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.detail || 'Download failed'); }
+    if (!r.ok) {
+      if (r.status === 401) { localStorage.removeItem('master_token'); if (typeof logout === 'function') logout(); throw new Error('Session expired — please sign in again'); }
+      const d = await r.json().catch(() => ({})); throw new Error(d.detail || 'Download failed');
+    }
     const blob = await r.blob(); const cd = r.headers.get('Content-Disposition') || ''; const fn = (cd.match(/filename="([^"]+)"/) || [])[1] || `app.${kind}`;
     const u = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = u; a.download = fn; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(u);
     toast(`Downloaded ${fn}`);

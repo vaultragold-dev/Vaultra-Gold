@@ -1,6 +1,8 @@
 /**
- * Brand splash shown right after the phone's own (system) splash.
- *  - "poster" mode: the full splash image uploaded in App Studio, edge to edge - same as the App Studio preview.
+ * Brand splash - the ONLY splash the customer sees.
+ *  - "poster" mode (shop uploaded a splash image): that image FULL SCREEN, same as the App Studio preview.
+ *    The native splash before it shows just the same background colour (transparent icon), so there is
+ *    no small-logo splash first.
  *  - "icon" mode: the logo on the brand colour, smoothly growing from the system-splash size to a large size.
  * It stays until the app is ready, so there is no blank frame and no sudden size jump.
  */
@@ -16,28 +18,37 @@ export const SPLASH_IMAGE_WIDTH = 240;
 const theme = (tenantConfig.theme || {}) as { splashBackground?: string; accentColor?: string };
 const SPLASH_BG = theme.splashBackground || theme.accentColor || "#000000";
 const MODE = ((tenantConfig.assets as any)?.splashMode === "poster" ? "poster" : "icon") as "poster" | "icon";
+// Tall poster fills the whole screen; a square / wide upload is shown whole on its own background colour.
+const FIT = ((tenantConfig.assets as any)?.splashFit === "contain" ? "contain" : "cover") as "cover" | "contain";
 const MIN_VISIBLE_MS = MODE === "poster" ? 1400 : 900;
 
 // Keep the system splash until our copy is on screen
 SplashScreen.preventAutoHideAsync().catch(() => {});
 
 export function BrandSplash({ ready }: { ready: boolean }) {
-  const { width: W, height: H } = useWindowDimensions();
+  const { width: W } = useWindowDimensions();
   const [gone, setGone] = useState(false);
   const opacity = useRef(new Animated.Value(1)).current;
-  const target = Math.min(W * 1.2, 560); // logo ends at ~55% of the screen width
-  const grow = useRef(new Animated.Value(SPLASH_IMAGE_WIDTH / target)).current;
-  const posterIn = useRef(new Animated.Value(MODE === "poster" ? 0 : 1)).current;
+  const target = Math.min(W * 0.62, 300);
+  const grow = useRef(new Animated.Value(0.92)).current;
+  const hiddenNative = useRef(false);
   const shownAt = useRef(Date.now());
 
-  const onShown = () => {
+  const reveal = () => {
+    if (hiddenNative.current) return;
+    hiddenNative.current = true;
     shownAt.current = Date.now();
     SplashScreen.hideAsync().catch(() => {});
-    Animated.parallel([
-      Animated.timing(grow, { toValue: 1, duration: 420, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
-      Animated.timing(posterIn, { toValue: 1, duration: 280, useNativeDriver: true }),
-    ]).start();
+    if (MODE === "icon") {
+      Animated.timing(grow, { toValue: 1, duration: 380, easing: Easing.out(Easing.cubic), useNativeDriver: true }).start();
+    }
   };
+
+  // Safety fallback in case onLoad doesn't fire quickly on web/cold boot
+  useEffect(() => {
+    const id = setTimeout(reveal, 250);
+    return () => clearTimeout(id);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!ready) return;
@@ -53,16 +64,27 @@ export function BrandSplash({ ready }: { ready: boolean }) {
     <Animated.View
       pointerEvents={ready ? "none" : "auto"}
       style={[StyleSheet.absoluteFill, { backgroundColor: SPLASH_BG, alignItems: "center", justifyContent: "center", zIndex: 9999, elevation: 9999, opacity }]}
-      onLayout={onShown}
       testID="brand-splash"
     >
       {MODE === "poster" ? (
-        <Animated.View style={[StyleSheet.absoluteFill, { opacity: posterIn }]}>
-          <Image source={require("../../assets/images/splash-full.png")} style={{ width: W, height: H }} resizeMode="cover" fadeDuration={0} />
-        </Animated.View>
+        <Image
+          source={require("../../assets/images/splash-full.png")}
+          style={[StyleSheet.absoluteFill, { width: "100%", height: "100%" }]}
+          resizeMode={FIT}
+          fadeDuration={0}
+          onLoad={reveal}
+          onError={reveal}
+        />
       ) : (
         <Animated.View style={{ transform: [{ scale: grow }] }}>
-          <Image source={require("../../assets/images/splash-image.png")} style={{ width: target, height: target }} resizeMode="contain" fadeDuration={0} />
+          <Image
+            source={require("../../assets/images/splash-image.png")}
+            style={{ width: target, height: target }}
+            resizeMode="contain"
+            fadeDuration={0}
+            onLoad={reveal}
+            onError={reveal}
+          />
         </Animated.View>
       )}
     </Animated.View>

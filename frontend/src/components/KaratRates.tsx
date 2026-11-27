@@ -1,6 +1,7 @@
 import React from "react";
 import { StyleSheet, Text, View } from "react-native";
 
+import { LiquidGlass } from "@/src/components/Glass";
 import { useApp } from "@/src/store/AppContext";
 import { colors, fonts, themed } from "@/src/theme";
 
@@ -16,10 +17,11 @@ export function KaratRates() {
   const noRate = !price || price.has_live === false;
   const fmt = (n?: number) => (noRate || !n ? "—" : `₹${n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
   return (
-    <View style={styles.card} testID="karat-rates">
+    <LiquidGlass layer={1} radius={26} style={styles.cardWrap} innerStyle={styles.outerPad} testID="karat-rates">
+      <LiquidGlass layer={2} radius={20} innerStyle={styles.card}>
       <View style={styles.head}>
         <Text style={styles.title}>Today&apos;s Rates</Text>
-        <Text style={styles.sub}>{price?.offline ? "Paused" : price?.live ? "Live · per gram" : "Per gram"}</Text>
+        <Text style={styles.sub}>{price?.offline ? "Paused" : price?.live ? "LIVE · PER GRAM" : "PER GRAM"}</Text>
       </View>
       {ROWS.map((r) => (
         <View key={r.key} style={styles.row} testID={`karat-rate-${r.key}`}>
@@ -32,27 +34,30 @@ export function KaratRates() {
         </View>
       ))}
       <View style={[styles.row, { borderBottomWidth: 0 }]} testID="karat-rate-silver">
-        <View style={[styles.badge, { backgroundColor: colors.surfaceTertiary }]}><Text style={[styles.badgeText, { color: colors.muted }]}>Ag</Text></View>
+        <View style={styles.badge}><Text style={styles.badgeText}>Ag</Text></View>
         <View style={{ flex: 1 }}>
           <Text style={styles.label}>Silver 999</Text>
           <Text style={styles.purity}>99.9% fine</Text>
         </View>
         <Text style={styles.value}>{fmt(price?.silver?.buy)}<Text style={styles.per}>/g</Text></Text>
       </View>
-    </View>
+      </LiquidGlass>
+    </LiquidGlass>
   );
 }
 
 const styles = themed(() => ({
-  card: { marginHorizontal: 16, marginTop: 16, backgroundColor: colors.glassCard, borderRadius: 18, borderWidth: 1, borderColor: colors.goldHairline, paddingHorizontal: 16, paddingTop: 14 },
+  cardWrap: { marginHorizontal: 16, marginTop: 16 },
+  outerPad: { padding: 8 },
+  card: { paddingHorizontal: 16, paddingTop: 14, paddingBottom: 4 },
   head: { flexDirection: "row", alignItems: "baseline", justifyContent: "space-between", marginBottom: 4 },
-  title: { fontFamily: fonts.bold, fontSize: 16, color: colors.onSurface, letterSpacing: -0.2 },
-  sub: { fontFamily: fonts.medium, fontSize: 11, color: colors.muted },
-  row: { flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: colors.divider },
-  badge: { width: 40, height: 40, borderRadius: 12, backgroundColor: colors.brandTertiary, alignItems: "center", justifyContent: "center" },
-  badgeText: { fontFamily: fonts.bold, fontSize: 12, color: colors.brandDeep },
-  label: { fontFamily: fonts.semibold, fontSize: 14, color: colors.onSurface },
+  title: { fontFamily: fonts.displayBold, fontSize: 18, color: "#FFFFFF", letterSpacing: -0.2 },
+  sub: { fontFamily: fonts.bold, fontSize: 9.5, color: colors.muted, letterSpacing: 1.1 },
+  row: { flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 11, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.divider },
+  badge: { width: 40, height: 40, borderRadius: 13, backgroundColor: colors.layer3Fill, borderWidth: 1, borderColor: colors.layer3Border, alignItems: "center", justifyContent: "center" },
+  badgeText: { fontFamily: fonts.bold, fontSize: 12, color: "#FFFFFF" },
+  label: { fontFamily: fonts.semibold, fontSize: 14, color: "#FFFFFF" },
   purity: { fontFamily: fonts.regular, fontSize: 11, color: colors.muted, marginTop: 1 },
-  value: { fontFamily: fonts.bold, fontSize: 15, color: colors.onSurface },
+  value: { fontFamily: fonts.displayBold, fontSize: 16.5, color: "#FFFFFF" },
   per: { fontFamily: fonts.regular, fontSize: 11, color: colors.muted },
 }));

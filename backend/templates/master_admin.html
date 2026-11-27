@@ -182,10 +182,14 @@ function autoDoms(val) {
 }
 async function saveOnboard() {
   const v = (id) => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
-  if (!v('ob_b') || !v('ob_o') || !v('ob_p') || !v('ob_e') || !document.getElementById('ob_pw').value) {
+  const pw = document.getElementById('ob_pw')?.value || '';
+  if (!v('ob_b') || !v('ob_o') || !v('ob_p') || !v('ob_e') || !pw || !v('ob_c') || !v('ob_s')) {
     toast('Please fill all required fields (*)', true);
     return;
   }
+  if (!isPhone10(v('ob_p'))) { toast('Phone must be exactly 10 digits', true); return; }
+  if (!isEmail(v('ob_e'))) { toast('Enter a valid login email (e.g. owner@gmail.com)', true); return; }
+  if (pw.length < 6) { toast('Password must be at least 6 characters', true); return; }
   try {
     const res = await api('/master/jewellers', {
       method: 'POST',

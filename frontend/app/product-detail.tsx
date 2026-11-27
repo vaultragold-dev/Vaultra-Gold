@@ -1,4 +1,5 @@
 import { Image } from "expo-image";
+import { LinearGradient } from "expo-linear-gradient";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { ArrowLeft, Check, Coins, Shield, Star, Truck } from "lucide-react-native";
 import React, { useEffect, useState } from "react";
@@ -6,6 +7,7 @@ import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View, useWi
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { GlassBackdrop } from "@/src/components/GlassBackdrop";
+import { LiquidGlass } from "@/src/components/Glass";
 import { api } from "@/src/api";
 import { IMAGES } from "@/src/assets";
 import { useToast } from "@/src/components/Toast";
@@ -96,19 +98,33 @@ export default function ProductDetailScreen() {
       </View>
 
       <ScrollView contentContainerStyle={{ paddingBottom: insets.bottom + 100 }} showsVerticalScrollIndicator={false}>
-        {/* Image Gallery */}
-        <View style={[styles.imageContainer, { height: imgW * 0.9 }]}>
-          <Image
-            source={imgSrc(product.image)}
-            style={{ position: "absolute", top: 16, left: 16, right: 16, bottom: 16 }}
-            contentFit="contain"
-            transition={300}
-          />
-          {product.tag ? (
-            <View style={styles.tagBadge}>
-              <Text style={styles.tagText}>{product.tag}</Text>
+        {/* Full-bleed 4-side-curved Liquid Glass Image Showcase (no white padding/border) */}
+        <View style={styles.heroWrap}>
+          <LiquidGlass radius={26} intensity={68} showArc={false} innerStyle={{ padding: 6 }}>
+            <View style={[styles.imageContainer, { height: Math.min(imgW - 44, 380) }]}>
+              <Image
+                source={imgSrc(product.image)}
+                style={StyleSheet.absoluteFill}
+                contentFit="cover"
+                transition={300}
+              />
+              <LinearGradient
+                pointerEvents="none"
+                colors={["transparent", "rgba(0,0,0,0.45)"]}
+                start={{ x: 0.5, y: 0.55 }}
+                end={{ x: 0.5, y: 1 }}
+                style={styles.heroVignette}
+              />
+              {product.tag ? (
+                <View style={styles.tagBadge}>
+                  <Text style={styles.tagText}>{product.tag}</Text>
+                </View>
+              ) : null}
+              <View style={styles.heroWeight}>
+                <Text style={styles.heroWeightText}>{grams(product.grams, 1)} · {purity}</Text>
+              </View>
             </View>
-          ) : null}
+          </LiquidGlass>
         </View>
 
         {/* Product Info */}
@@ -125,8 +141,8 @@ export default function ProductDetailScreen() {
 
           <Text style={styles.description}>{product.description}</Text>
 
-          {/* Pricing Card */}
-          <View style={styles.priceCard}>
+          {/* Liquid Glass Pricing Card */}
+          <LiquidGlass radius={22} intensity={64} style={{ marginBottom: 24 }} innerStyle={styles.priceCard}>
             <View style={styles.priceRow}>
               <Text style={styles.priceLabel}>Weight</Text>
               <Text style={styles.priceValue}>{grams(product.grams, 1)}</Text>
@@ -147,7 +163,7 @@ export default function ProductDetailScreen() {
             <Text style={styles.rateHint}>
               Live {purity} rate: {karatRate ? inr(karatRate) : "—"}/g
             </Text>
-          </View>
+          </LiquidGlass>
 
           {/* Features */}
           <Text style={styles.featuresTitle}>Product Highlights</Text>
@@ -219,24 +235,39 @@ const styles = themed(() => ({
     borderBottomColor: colors.divider,
   },
   backBtn: { width: 44, height: 44, justifyContent: "center" },
-  headerTitle: { flex: 1, fontFamily: fonts.bold, fontSize: 17, color: colors.onSurface, textAlign: "center" },
+  headerTitle: { flex: 1, fontFamily: fonts.displayBold, fontSize: 18, color: colors.onSurface, textAlign: "center" },
+  heroWrap: { paddingHorizontal: 16, paddingTop: 12, marginBottom: 16 },
   imageContainer: {
     width: "100%",
-    backgroundColor: colors.brandTertiary,
+    borderRadius: 20,
+    backgroundColor: colors.surfaceInverse,
     overflow: "hidden",
   },
+  heroVignette: { position: "absolute", left: 0, right: 0, bottom: 0, height: "38%" },
   tagBadge: {
     position: "absolute",
-    top: 16,
-    left: 16,
-    backgroundColor: colors.brandPrimary,
+    top: 12,
+    left: 12,
+    backgroundColor: "rgba(15,18,28,0.62)",
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "rgba(255,243,196,0.35)",
     borderRadius: radius.pill,
     paddingHorizontal: 12,
     paddingVertical: 5,
   },
-  tagText: { fontFamily: fonts.bold, fontSize: 11, color: colors.onBrandPrimary, letterSpacing: 0.5 },
+  tagText: { fontFamily: fonts.bold, fontSize: 11, color: colors.goldSheen, letterSpacing: 0.5 },
+  heroWeight: {
+    position: "absolute",
+    bottom: 12,
+    right: 12,
+    backgroundColor: "rgba(0,0,0,0.5)",
+    borderRadius: radius.pill,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  heroWeightText: { fontFamily: fonts.bold, fontSize: 11, color: "#FFFFFF", letterSpacing: 0.2 },
   info: { paddingHorizontal: 16 },
-  productName: { fontFamily: fonts.black, fontSize: 24, letterSpacing: -0.8, color: colors.onSurface, marginBottom: 8 },
+  productName: { fontFamily: fonts.displayBold, fontSize: 26, letterSpacing: -0.3, color: colors.onSurface, marginBottom: 8 },
   categoryRow: { flexDirection: "row", gap: 8, marginBottom: 16 },
   categoryBadge: {
     backgroundColor: colors.brandTertiary,
@@ -254,22 +285,16 @@ const styles = themed(() => ({
   purityText: { fontFamily: fonts.bold, fontSize: 11, color: colors.success, letterSpacing: 0.3 },
   description: { fontFamily: fonts.regular, fontSize: 14, lineHeight: 22, color: colors.muted, marginBottom: 20 },
   priceCard: {
-    backgroundColor: colors.surfaceSecondary,
-    borderRadius: radius.md,
     padding: 16,
-    marginBottom: 24,
-    borderWidth: 1,
-    borderColor: colors.border,
-    ...cardShadow,
   },
   priceRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 8 },
   priceLabel: { fontFamily: fonts.regular, fontSize: 14, color: colors.muted },
   priceValue: { fontFamily: fonts.semibold, fontSize: 14, color: colors.onSurface },
   divider: { height: 1, backgroundColor: colors.border, marginVertical: 8 },
   totalLabel: { fontFamily: fonts.bold, fontSize: 16, color: colors.onSurface },
-  totalValue: { fontFamily: fonts.black, fontSize: 22, color: colors.brandSecondary, letterSpacing: -0.5 },
+  totalValue: { fontFamily: fonts.displayBold, fontSize: 24, color: colors.brandDeep, letterSpacing: -0.2 },
   rateHint: { fontFamily: fonts.regular, fontSize: 11, color: colors.muted, marginTop: 8, textAlign: "center" },
-  featuresTitle: { fontFamily: fonts.bold, fontSize: 18, color: colors.onSurface, marginBottom: 12 },
+  featuresTitle: { fontFamily: fonts.displayBold, fontSize: 19, color: colors.onSurface, marginBottom: 12 },
   featureRow: { flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 6 },
   featureIcon: {
     width: 24,
@@ -297,11 +322,11 @@ const styles = themed(() => ({
     gap: 12,
     paddingHorizontal: 16,
     paddingTop: 12,
-    backgroundColor: colors.surface,
+    backgroundColor: colors.sheetSurface,
     borderTopWidth: 1,
-    borderTopColor: colors.divider,
+    borderTopColor: colors.layer1Border,
     ...cardShadow,
   },
-  ctaPrice: { fontFamily: fonts.black, fontSize: 22, color: colors.onSurface, letterSpacing: -0.5 },
+  ctaPrice: { fontFamily: fonts.displayBold, fontSize: 24, color: colors.onSurface, letterSpacing: -0.2 },
   ctaSub: { fontFamily: fonts.regular, fontSize: 12, color: colors.muted },
 }));

@@ -2,33 +2,24 @@ import { useRouter } from "expo-router";
 import { Image } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
 import { ArrowLeft, Bell, Coins, Menu, User } from "lucide-react-native";
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
-import Animated, { useAnimatedStyle, useSharedValue, withRepeat, withTiming, Easing } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { Glass } from "@/src/components/Glass";
+import { Glass, LiquidGlass } from "@/src/components/Glass";
 import { SideMenu } from "@/src/components/SideMenu";
 import { grams, inr } from "@/src/format";
 import { t } from "@/src/i18n";
 import { useApp } from "@/src/store/AppContext";
-import { colors, fonts, radius, themed } from "@/src/theme";
+import { colors, fonts, themed } from "@/src/theme";
 
-export function PulseDot({ color = colors.success, size = 8 }: { color?: string; size?: number }) {
-  const s = useSharedValue(1);
-  useEffect(() => {
-    s.value = withRepeat(withTiming(2.4, { duration: 1100, easing: Easing.out(Easing.quad) }), -1, false);
-  }, [s]);
-  const ring = useAnimatedStyle(() => ({ transform: [{ scale: s.value }], opacity: 2.4 - s.value > 0 ? (2.4 - s.value) / 1.4 : 0 }));
+export function PulseDot({ color = colors.success, size = 7 }: { color?: string; size?: number }) {
   return (
-    <View style={{ width: size, height: size, alignItems: "center", justifyContent: "center" }}>
-      <Animated.View style={[{ position: "absolute", width: size, height: size, borderRadius: size / 2, backgroundColor: color }, ring]} />
-      <View style={{ width: size, height: size, borderRadius: size / 2, backgroundColor: color }} />
-    </View>
+    <View style={{ width: size, height: size, borderRadius: size / 2, backgroundColor: color }} />
   );
 }
 
-export function LiveTicker({ testID = "live-gold-ticker" }: { testID?: string }) {
+export function LiveTicker({ testID = "live-gold-ticker", onSelect }: { testID?: string; onSelect?: (metal: "gold" | "silver") => void }) {
   const { price, priceError } = useApp();
   const up = (price?.change_pct ?? 0) >= 0;
   const sUp = (price?.silver?.change_pct ?? 0) >= 0;
@@ -37,7 +28,13 @@ export function LiveTicker({ testID = "live-gold-ticker" }: { testID?: string })
 
   const fmt2 = (n?: number) => (n ? `₹${n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "—");
   return (
-    <View style={styles.ticker} testID={testID}>
+    <LiquidGlass
+      testID={testID}
+      layer={1}
+      radius={999}
+      style={styles.tickerWrap}
+      innerStyle={styles.ticker}
+    >
       <PulseDot color={bad ? colors.error : colors.success} />
       {bad ? (
         <Text numberOfLines={1} style={[styles.tickerLive, { color: colors.error, flex: 1 }]}>
@@ -45,20 +42,20 @@ export function LiveTicker({ testID = "live-gold-ticker" }: { testID?: string })
         </Text>
       ) : (
         <>
-          <View style={styles.tickSeg}>
+          <Pressable style={styles.tickSeg} onPress={() => onSelect?.("gold")} disabled={!onSelect} hitSlop={4}>
             <Text style={styles.tickerLabel} numberOfLines={1}>Gold 24K</Text>
             <Text style={styles.tickerPrice} numberOfLines={1} testID="live-gold-price">{show ? fmt2(price?.buy) : "—"}</Text>
             <Text style={[styles.tickerArrow, { color: up ? colors.success : colors.error }]}>{up ? "▲" : "▼"}</Text>
-          </View>
+          </Pressable>
           <View style={styles.tickDivider} />
-          <View style={styles.tickSeg}>
+          <Pressable style={styles.tickSeg} onPress={() => onSelect?.("silver")} disabled={!onSelect} hitSlop={4}>
             <Text style={styles.tickerLabel} numberOfLines={1}>Silver</Text>
             <Text style={styles.tickerPrice} numberOfLines={1} testID="live-silver-price">{show ? fmt2(price?.silver?.buy) : "—"}</Text>
             <Text style={[styles.tickerArrow, { color: sUp ? colors.success : colors.error }]}>{sUp ? "▲" : "▼"}</Text>
-          </View>
+          </Pressable>
         </>
       )}
-    </View>
+    </LiquidGlass>
   );
 }
 
@@ -74,16 +71,11 @@ export function LogoMark({ size = 36 }: { size?: number }) {
           {
             width: size,
             height: size,
-            borderRadius: Math.max(8, size * 0.28),
+            borderRadius: Math.max(10, size * 0.30),
             overflow: "hidden",
-            backgroundColor: "#FFFFFF",
+            backgroundColor: "rgba(255,255,255,0.12)",
             borderWidth: 1,
-            borderColor: colors.goldHairline,
-            shadowColor: "#000",
-            shadowOffset: { width: 0, height: 1 },
-            shadowOpacity: 0.12,
-            shadowRadius: 3,
-            elevation: 2,
+            borderColor: colors.layer3Border,
           },
         ]}
       >
@@ -102,19 +94,28 @@ export function LogoMark({ size = 36 }: { size?: number }) {
 
   return (
     <LinearGradient
-      colors={[colors.goldSheen, colors.brandPrimary, colors.brandDeep]}
+      colors={["rgba(255,255,255,0.24)", "rgba(255,255,255,0.10)"]}
       start={{ x: 0, y: 0 }}
       end={{ x: 1, y: 1 }}
-      style={[styles.logoMark, { width: size, height: size, borderRadius: Math.max(8, size * 0.28) }]}
+      style={[
+        styles.logoMark,
+        {
+          width: size,
+          height: size,
+          borderRadius: Math.max(10, size * 0.30),
+          borderWidth: 1,
+          borderColor: colors.layer3ActiveBorder,
+        },
+      ]}
     >
-      <Text style={{ fontFamily: fonts.bold, fontSize: size * 0.42, color: colors.onBrandPrimary }}>
+      <Text style={{ fontFamily: fonts.displayBold, fontSize: size * 0.42, color: "#FFFFFF" }}>
         {initials}
       </Text>
     </LinearGradient>
   );
 }
 
-export function HomeHeader() {
+export function HomeHeader({ onSelectMetal }: { onSelectMetal?: (metal: "gold" | "silver") => void } = {}) {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { token, vault, user, unreadNotifs, tenantName, price } = useApp();
@@ -125,9 +126,10 @@ export function HomeHeader() {
   return (
     <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
       <View style={styles.headRow}>
+        {/* Layer 3 Transparent White-Icon Squircle Menu Button */}
         <Pressable onPress={() => setMenu(true)} hitSlop={6} testID="header-menu-button">
-          <Glass radius={22} intensity={70} style={styles.menuBtn}>
-            <Menu size={20} color={colors.onSurface} strokeWidth={2} />
+          <Glass layer={3} radius={14} style={styles.iconSquircle}>
+            <Menu size={19} color="#FFFFFF" strokeWidth={1.8} />
           </Glass>
         </Pressable>
         <LogoMark size={34} />
@@ -135,21 +137,23 @@ export function HomeHeader() {
           {token && user ? <Text style={styles.eyebrow} numberOfLines={1}>{tenantName || "Digital Gold"}</Text> : null}
           <Text style={styles.brand} numberOfLines={2}>
             {token && user ? (
-              <>{t("hi")}, <Text style={{ color: colors.brandDeep }}>{displayName}</Text></>
+              <>{t("hi")}, {displayName}</>
             ) : (
               <>{tenantName || "Digital Gold"}</>
             )}
           </Text>
         </View>
-        {/* Notification Bell */}
+        {/* Layer 3 Transparent White-Icon Notification Squircle */}
         {token ? (
           <Pressable
             testID="header-notification-bell"
             onPress={() => router.push("/notifications")}
-            style={styles.bellBtn}
-            hitSlop={8}
+            hitSlop={6}
+            style={{ position: "relative" }}
           >
-            <Bell size={20} color={colors.onSurface} />
+            <Glass layer={3} radius={14} style={styles.iconSquircle}>
+              <Bell size={18} color="#FFFFFF" strokeWidth={1.8} />
+            </Glass>
             {unreadNotifs > 0 && (
               <View style={styles.badge}>
                 <Text style={styles.badgeText}>{unreadNotifs > 9 ? "9+" : unreadNotifs}</Text>
@@ -157,26 +161,30 @@ export function HomeHeader() {
             )}
           </Pressable>
         ) : null}
+        {/* Layer 3 Active Transparent White-Icon Profile Pill */}
         <Pressable
           testID="header-profile-button"
           onPress={() => router.push(token ? "/profile" : "/login")}
-          style={[styles.profileBtn, token ? styles.profileOn : null]}
         >
-          <User size={16} color={token ? colors.onSurfaceInverse : colors.onSurface} />
-          <Text style={[styles.profileText, token ? { color: colors.onSurfaceInverse } : null]} numberOfLines={1}>
-            {token ? displayName : t("sign_in")}
-          </Text>
+          <Glass layer={token ? "3active" : 3} radius={14} style={styles.profileWrap} contentStyle={styles.profileContent}>
+            <User size={15} color="#FFFFFF" strokeWidth={1.9} />
+            <Text style={styles.profileText} numberOfLines={1}>
+              {token ? displayName : t("sign_in")}
+            </Text>
+          </Glass>
         </Pressable>
       </View>
       <View style={styles.pillsRow}>
-        <LiveTicker />
+        <LiveTicker onSelect={onSelectMetal} />
       </View>
       {token ? (
-        <Pressable testID="vault-balance-pill" onPress={() => router.push("/vault")} style={styles.balancePill}>
-          <Coins size={14} color={colors.brandPrimary} />
-          <Text style={styles.balanceLabel}>My vault</Text>
-          <Text style={styles.balanceGrams}>{grams(g)}</Text>
-          <Text style={styles.balanceInr} numberOfLines={1}>{price?.has_live === false ? "Rates paused" : `≈ ${inr(vault?.current_value ?? 0)}`}</Text>
+        <Pressable testID="vault-balance-pill" onPress={() => router.push("/vault")} style={({ pressed }) => [{ marginTop: 8 }, pressed && { opacity: 0.9, transform: [{ scale: 0.985 }] }]}>
+          <LiquidGlass layer={1} radius={999} style={{ height: 38 }} innerStyle={styles.balancePill}>
+            <Coins size={14} color="#FFFFFF" strokeWidth={1.8} />
+            <Text style={styles.balanceLabel}>My vault</Text>
+            <Text style={styles.balanceGrams}>{grams(g)}</Text>
+            <Text style={styles.balanceInr} numberOfLines={1}>{price?.has_live === false ? "Rates paused" : `≈ ${inr(vault?.current_value ?? 0)}`}</Text>
+          </LiquidGlass>
         </Pressable>
       ) : null}
       <SideMenu visible={menu} onClose={() => setMenu(false)} />
@@ -192,8 +200,8 @@ export function ScreenHeader({ title, subtitle, right, showBack = false }: { tit
       <View style={styles.headRow}>
         {showBack ? (
           <Pressable onPress={() => (router.canGoBack() ? router.back() : router.replace("/"))} testID="screen-back-button">
-            <Glass radius={22} intensity={70} style={styles.backBtn}>
-              <ArrowLeft size={20} color={colors.onSurface} />
+            <Glass layer={3} radius={14} style={styles.iconSquircle}>
+              <ArrowLeft size={19} color="#FFFFFF" strokeWidth={1.8} />
             </Glass>
           </Pressable>
         ) : null}
@@ -209,76 +217,55 @@ export function ScreenHeader({ title, subtitle, right, showBack = false }: { tit
 
 const styles = themed(() => ({
   headRow: { flexDirection: "row", alignItems: "center", gap: 10 },
-  menuBtn: { width: 44, height: 44, alignItems: "center", justifyContent: "center" },
+  iconSquircle: { width: 42, height: 42 },
   logoMark: { alignItems: "center", justifyContent: "center" },
-  eyebrow: { fontFamily: fonts.semibold, fontSize: 10, letterSpacing: 1.2, color: colors.brandDeep, textTransform: "uppercase" },
-  brand: { fontFamily: fonts.bold, fontSize: 16, lineHeight: 20, letterSpacing: -0.3, color: colors.onSurface },
-  profileBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    height: 40,
-    paddingHorizontal: 12,
-    borderRadius: radius.pill,
-    borderWidth: 1,
-    borderColor: colors.border,
-    maxWidth: 120,
-  },
-  profileOn: { backgroundColor: colors.surfaceInverse, borderColor: colors.surfaceInverse },
-  profileText: { fontFamily: fonts.semibold, fontSize: 13, color: colors.onSurface },
-  bellBtn: { width: 44, height: 44, alignItems: "center", justifyContent: "center" },
+  eyebrow: { fontFamily: fonts.semibold, fontSize: 9.5, letterSpacing: 1.8, color: colors.muted, textTransform: "uppercase" },
+  brand: { fontFamily: fonts.displayBold, fontSize: 18, lineHeight: 22, letterSpacing: -0.2, color: "#FFFFFF" },
+  profileWrap: { height: 42, maxWidth: 124 },
+  profileContent: { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 12 },
+  profileText: { fontFamily: fonts.semibold, fontSize: 12.5, color: "#FFFFFF" },
   badge: {
     position: "absolute",
-    top: 6,
-    right: 6,
+    top: -3,
+    right: -3,
     minWidth: 18,
     height: 18,
     borderRadius: 9,
-    backgroundColor: colors.error,
+    backgroundColor: "#E11D48",
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 4,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.45)",
   },
   badgeText: { fontFamily: fonts.bold, fontSize: 10, color: "#FFFFFF" },
   pillsRow: { flexDirection: "row", gap: 8, marginTop: 10, alignItems: "center" },
+  tickerWrap: { flex: 1, height: 40 },
   ticker: {
     flex: 1,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
     gap: 6,
-    height: 38,
     paddingHorizontal: 12,
-    borderRadius: radius.pill,
-    backgroundColor: colors.brandTertiary,
-    borderWidth: 1,
-    borderColor: colors.goldHairline,
-    overflow: "hidden",
   },
   tickerLabel: { fontFamily: fonts.medium, fontSize: 11, color: colors.muted },
-  tickerPrice: { fontFamily: fonts.bold, fontSize: 14, color: colors.onSurface, letterSpacing: -0.3, flexShrink: 1 },
+  tickerPrice: { fontFamily: fonts.bold, fontSize: 13.5, color: "#FFFFFF", letterSpacing: -0.2, flexShrink: 1, fontVariant: ["tabular-nums"] },
   tickerArrow: { fontFamily: fonts.bold, fontSize: 9 },
   tickSeg: { flexDirection: "row", alignItems: "center", gap: 4, flexShrink: 1, flex: 1, justifyContent: "center" },
-  tickDivider: { width: 1, height: 16, backgroundColor: colors.goldHairline, marginHorizontal: 2 },
+  tickDivider: { width: 1, height: 16, backgroundColor: colors.divider, marginHorizontal: 2 },
   tickerLive: { fontFamily: fonts.bold, fontSize: 10, letterSpacing: 0.4 },
   balancePill: {
-    marginTop: 8,
-    height: 34,
-    paddingHorizontal: 12,
-    borderRadius: radius.pill,
-    backgroundColor: colors.surfaceInverse,
-    borderWidth: 1,
-    borderColor: colors.goldHairline,
+    flex: 1,
+    paddingHorizontal: 14,
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
   },
-  balanceLabel: { fontFamily: fonts.medium, fontSize: 11, color: colors.goldSheen },
-  balanceGrams: { fontFamily: fonts.bold, fontSize: 13, color: colors.brandPrimary, letterSpacing: -0.2 },
-  balanceInr: { flex: 1, textAlign: "right", fontFamily: fonts.semibold, fontSize: 12, color: colors.goldSheen },
-  screenTitle: { fontFamily: fonts.black, fontSize: 26, letterSpacing: -0.8, color: colors.onSurface },
+  balanceLabel: { fontFamily: fonts.semibold, fontSize: 11, color: colors.muted, letterSpacing: 0.3 },
+  balanceGrams: { fontFamily: fonts.displayBold, fontSize: 14.5, color: "#FFFFFF" },
+  balanceInr: { flex: 1, textAlign: "right", fontFamily: fonts.semibold, fontSize: 12.5, color: "#FFFFFF" },
+  screenTitle: { fontFamily: fonts.displayBold, fontSize: 27, letterSpacing: -0.3, color: "#FFFFFF" },
   screenSub: { fontFamily: fonts.regular, fontSize: 13, color: colors.muted, marginTop: 2 },
-  backBtn: { width: 44, height: 44, justifyContent: "center", alignItems: "center" },
-  // headers sit on a soft tinted backdrop so the glass controls read as frosted
-  header: { backgroundColor: "transparent", paddingHorizontal: 16, paddingBottom: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.goldHairline },
+  header: { backgroundColor: "transparent", paddingHorizontal: 16, paddingBottom: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.divider },
 }));

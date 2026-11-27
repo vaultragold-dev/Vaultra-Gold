@@ -8,17 +8,27 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { t } from "@/src/i18n";
 import { colors, fonts, themed } from "@/src/theme";
 
-/** Floating iOS-style liquid-glass tab bar. */
+/** Floating Layer 1 Ultra-Clear Spatial Glass Dock (matches user reference bottom bar). */
 function GlassBar() {
   return (
-    <View style={[StyleSheet.absoluteFill, styles.barClip]}>
-      {Platform.OS === "android" ? (
-        <View style={[StyleSheet.absoluteFill, { backgroundColor: colors.glassFallback }]} />
-      ) : (
-        <BlurView intensity={70} tint={colors.glassTint as any} style={StyleSheet.absoluteFill} />
-      )}
-      <View style={[StyleSheet.absoluteFill, { backgroundColor: colors.glassFill }]} />
-      <View style={styles.shine} />
+    <View style={[StyleSheet.absoluteFill, styles.barOuter]}>
+      {Platform.OS !== "android" ? (
+        <BlurView intensity={20} tint={colors.glassTint as any} style={StyleSheet.absoluteFill} />
+      ) : null}
+      <View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: colors.layer1FillB }]} />
+    </View>
+  );
+}
+
+/** Layer 3 Active transparent white-icon pill (15% white glass + crisp pure-white stroke icon). */
+function TabIcon({ Icon, focused }: { Icon: any; color: any; focused: boolean }) {
+  return (
+    <View style={[styles.iconLens, focused && styles.iconLensOn]}>
+      <Icon
+        size={19}
+        color={focused ? "#FFFFFF" : "rgba(255,255,255,0.68)"}
+        strokeWidth={focused ? 2.0 : 1.7}
+      />
     </View>
   );
 }
@@ -30,40 +40,55 @@ export default function TabLayout() {
       screenOptions={{
         headerShown: false,
         sceneStyle: { backgroundColor: "transparent" },
-        tabBarActiveTintColor: colors.brandDeep,
-        tabBarInactiveTintColor: colors.muted,
-        tabBarLabelStyle: { fontFamily: fonts.semibold, fontSize: 11, lineHeight: 14, letterSpacing: 0.2 },
+        tabBarActiveTintColor: "#FFFFFF",
+        tabBarInactiveTintColor: "rgba(255,255,255,0.64)",
+        tabBarLabelStyle: { fontFamily: fonts.semibold, fontSize: 10.5, lineHeight: 13, letterSpacing: 0.3, marginTop: 1 },
         tabBarBackground: () => <GlassBar />,
-        tabBarItemStyle: { paddingTop: 4, paddingBottom: 2 },
+        tabBarItemStyle: { paddingTop: 4, paddingBottom: 3 },
         tabBarStyle: {
           position: "absolute",
           left: 16,
           right: 16,
           bottom: Math.max(insets.bottom, 12),
           height: 68,
-          paddingBottom: 6,
-          borderRadius: 32,
+          paddingBottom: 5,
+          paddingHorizontal: 6,
+          borderRadius: 34,
           borderTopWidth: 0,
-          borderWidth: StyleSheet.hairlineWidth * 1.5,
-          borderColor: colors.glassBorder,
+          borderWidth: 0,
           backgroundColor: "transparent",
-          elevation: 8,
-          shadowColor: "#000",
-          shadowOpacity: 0.12,
-          shadowRadius: 24,
-          shadowOffset: { width: 0, height: 8 },
+          ...(Platform.OS === "android"
+            ? { elevation: 0 }
+            : { shadowColor: "#000", shadowOpacity: 0.30, shadowRadius: 24, shadowOffset: { width: 0, height: 10 } }),
         },
       }}
     >
-      <Tabs.Screen name="index" options={{ title: t("home"), tabBarIcon: ({ color }) => <Home size={22} color={color} /> }} />
-      <Tabs.Screen name="vault" options={{ title: t("vault"), tabBarIcon: ({ color }) => <Vault size={22} color={color} /> }} />
-      <Tabs.Screen name="jewellery" options={{ title: t("jewellery"), tabBarIcon: ({ color }) => <Gem size={22} color={color} /> }} />
-      <Tabs.Screen name="sip" options={{ title: t("sip"), tabBarIcon: ({ color }) => <RefreshCw size={22} color={color} /> }} />
+      <Tabs.Screen name="index" options={{ title: t("home"), tabBarIcon: ({ color, focused }) => <TabIcon Icon={Home} color={color} focused={focused} /> }} />
+      <Tabs.Screen name="vault" options={{ title: t("vault"), tabBarIcon: ({ color, focused }) => <TabIcon Icon={Vault} color={color} focused={focused} /> }} />
+      <Tabs.Screen name="jewellery" options={{ title: t("jewellery"), tabBarIcon: ({ color, focused }) => <TabIcon Icon={Gem} color={color} focused={focused} /> }} />
+      <Tabs.Screen name="sip" options={{ title: t("sip"), tabBarIcon: ({ color, focused }) => <TabIcon Icon={RefreshCw} color={color} focused={focused} /> }} />
     </Tabs>
   );
 }
 
 const styles = themed(() => ({
-  barClip: { borderRadius: 32, overflow: "hidden" },
-  shine: { position: "absolute", left: 0, right: 0, top: 0, height: "50%", backgroundColor: colors.glassHighlight },
+  barOuter: {
+    borderRadius: 34,
+    overflow: "hidden",
+    borderWidth: 1,
+    borderColor: colors.layer1Border,
+    ...(Platform.OS === "web" ? ({ backdropFilter: "blur(22px) saturate(135%)" } as any) : null),
+  },
+  iconLens: {
+    width: 50,
+    height: 30,
+    borderRadius: 15,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  iconLensOn: {
+    backgroundColor: colors.layer3ActiveFill,
+    borderWidth: 1,
+    borderColor: colors.layer3ActiveBorder,
+  },
 }));

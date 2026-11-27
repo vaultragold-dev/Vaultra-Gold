@@ -17,6 +17,8 @@ export type TenantTheme = {
   accentColor: string;
   backgroundColor?: string;
   textColor?: string;
+  adaptiveIconBackground?: string;
+  splashBackground?: string;
   font: string;
   cardRadius?: number;
 };

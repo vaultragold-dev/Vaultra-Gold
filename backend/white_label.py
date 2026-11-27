@@ -41,6 +41,11 @@ THEME_PRESETS = {
         "backgroundColor": "#FDF4F3", "font": "Inter", "cardRadius": 22,
         "homeLayout": ["prices", "banners", "trending", "sip", "buy", "karats", "categories", "promos"],
     },
+    "wine_maroon": {
+        "label": "Wine Maroon", "primaryColor": "#7A243C", "secondaryColor": "#4F2633", "accentColor": "#261119",
+        "backgroundColor": "#4F2633", "font": "Inter", "cardRadius": 22,
+        "homeLayout": ["prices", "banners", "trending", "karats", "sip", "buy", "categories", "promos"],
+    },
 }
 DEFAULT_PRESET = "royal_gold"
 
@@ -112,17 +117,27 @@ def tenant_config(j, api_base, logo_bytes=None, splash_bytes=None):
                 adaptive_bg = _sample_bg_color(temp_logo)
         except Exception:
             pass
-    splash_mode = "icon"
+    # Any uploaded splash image is shown FULL SCREEN by the app (no small native logo splash first):
+    #  - portrait poster (9:16, 2:3, 3:4, etc.) -> fills the screen edge to edge ("cover")
+    #  - square / wide image                    -> shown whole, centred on its own sampled edge colour ("contain")
+    # The phone's native splash uses a transparent icon on that exact edge colour, so the customer sees ONE splash.
+    splash_mode, splash_fit = "icon", "cover"
+    _poster_bg = None
     try:
         _sp0 = Image.open(io.BytesIO(splash_bytes)) if splash_bytes else None
-        if _sp0 is not None and _sp0.height > 1.2 * _sp0.width:
-            splash_mode = "poster"  # full-screen splash image, shown edge to edge by the app (matches App Studio preview)
+        if _sp0 is not None:
+            splash_mode = "poster"
+            _poster_bg = _sample_bg_color(_sp0)
+            if _sp0.height >= 1.15 * _sp0.width:
+                splash_fit = "cover"
+            else:
+                splash_fit = "contain"
     except Exception:
         pass
     try:
         _lg = Image.open(io.BytesIO(logo_bytes)) if logo_bytes else None
         _sp = Image.open(io.BytesIO(splash_bytes)) if splash_bytes else None
-        splash_bg = splash_background(p, _lg, _sp)
+        splash_bg = _poster_bg or splash_background(p, _lg, _sp)
     except Exception:
         pass
 
@@ -142,7 +157,7 @@ def tenant_config(j, api_base, logo_bytes=None, splash_bytes=None):
                   "font": p["font"], "cardRadius": p["cardRadius"]},
         "homeLayout": p["homeLayout"],
         "assets": {"logoUrl": abs_url(j.logo_url, api_base), "splashUrl": abs_url(j.splash_url, api_base),
-                   "splashMode": splash_mode,
+                   "splashMode": splash_mode, "splashFit": splash_fit,
                    "icon": "assets/icon.png", "adaptiveIcon": "assets/adaptive-icon.png", "splash": "assets/splash.png"},
         "support": {"phone": j.phone, "email": j.support_email or j.email},
         "storeInfo": {"name": j.business_name, "address": getattr(j, "address", "") or "", "city": getattr(j, "city", "") or "",

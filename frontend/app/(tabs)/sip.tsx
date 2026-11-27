@@ -6,6 +6,7 @@ import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { GlassBackdrop } from "@/src/components/GlassBackdrop";
+import { LiquidGlass } from "@/src/components/Glass";
 import { api } from "@/src/api";
 import { ScreenHeader } from "@/src/components/Header";
 import { useToast } from "@/src/components/Toast";
@@ -84,11 +85,12 @@ export default function SipScreen() {
         contentContainerStyle={{ padding: 16, paddingBottom: bottomChrome + 24, gap: 16 }}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={async () => { setRefreshing(true); await load(); setRefreshing(false); }} />}
       >
-        <Card testID="sip-create-card">
+        <LiquidGlass layer={1} radius={28} innerStyle={{ padding: 10 }} testID="sip-create-card">
+          <LiquidGlass layer={2} radius={22} innerStyle={{ padding: 16 }}>
           <View style={[styles.seg, { marginTop: 0, marginBottom: 16 }]}>
             {(["gold", "silver"] as const).map((m) => (
               <Pressable key={m} onPress={() => setMetal(m)} style={[styles.segBtn, metal === m && styles.segOn]} testID={`sip-metal-${m}`}>
-                <Text style={[styles.segText, metal === m && { color: colors.onSurface }]}>{m === "gold" ? "Gold SIP" : "Silver SIP"}</Text>
+                <Text style={[styles.segText, metal === m && { color: "#FFFFFF" }]}>{m === "gold" ? "Gold SIP" : "Silver SIP"}</Text>
               </Pressable>
             ))}
           </View>
@@ -97,7 +99,7 @@ export default function SipScreen() {
           <View style={styles.wrapRow}>
             {AMOUNTS.map((a) => (
               <Pressable key={a} onPress={() => setAmount(a)} style={[styles.amt, amount === a && styles.amtOn]} testID={`sip-amount-${a}`}>
-                <Text style={[styles.amtText, amount === a && { color: colors.onSurfaceInverse }]}>₹{a.toLocaleString("en-IN")}</Text>
+                <Text style={[styles.amtText, amount === a && { color: "#FFFFFF" }]}>₹{a.toLocaleString("en-IN")}</Text>
               </Pressable>
             ))}
           </View>
@@ -105,18 +107,19 @@ export default function SipScreen() {
           <View style={styles.seg}>
             {FREQS.map((f) => (
               <Pressable key={f} onPress={() => setFreq(f)} style={[styles.segBtn, freq === f && styles.segOn]} testID={`sip-freq-${f}`}>
-                <Text style={[styles.segText, freq === f && { color: colors.onSurface }]}>{f[0].toUpperCase() + f.slice(1)}</Text>
+                <Text style={[styles.segText, freq === f && { color: "#FFFFFF" }]}>{f[0].toUpperCase() + f.slice(1)}</Text>
               </Pressable>
             ))}
           </View>
           <View style={styles.proj}>
-            <CalendarClock size={18} color={colors.onBrandTertiary} />
+            <CalendarClock size={18} color="#FFFFFF" strokeWidth={1.8} />
             <Text style={styles.projText}>
               In 1 year you&apos;ll save {inr(yearly, 0)} ≈ <Text style={{ fontFamily: fonts.bold }}>{grams(yearlyGrams, 3)}</Text> of {metal === "silver" ? "999 silver" : "24K gold"}
             </Text>
           </View>
-          <Button title={token ? `Start ${metal === "silver" ? "Silver" : "Gold"} SIP` : "Sign in to start SIP"} loading={busy} onPress={start} icon={<Zap size={18} color={colors.onBrandPrimary} />} testID="sip-start-button" />
-        </Card>
+          <Button title={token ? `Start ${metal === "silver" ? "Silver" : "Gold"} SIP` : "Sign in to start SIP"} loading={busy} onPress={start} icon={<Zap size={18} color="#FFFFFF" />} testID="sip-start-button" />
+          </LiquidGlass>
+        </LiquidGlass>
 
         <Text style={styles.section}>Your SIPs</Text>
         {sips.length === 0 ? (
@@ -197,23 +200,23 @@ export default function SipScreen() {
 
 const styles = themed(() => ({
   root: { flex: 1, backgroundColor: "transparent" },
-  label: { fontFamily: fonts.semibold, fontSize: 12, color: colors.muted, textTransform: "uppercase", letterSpacing: 0.3 },
-  big: { fontFamily: fonts.black, fontSize: 34, letterSpacing: -1.2, color: colors.onSurface, marginTop: 4 },
+  label: { fontFamily: fonts.semibold, fontSize: 10.5, color: colors.muted, textTransform: "uppercase", letterSpacing: 1.2 },
+  big: { fontFamily: fonts.displayBold, fontSize: 36, letterSpacing: -0.4, color: colors.onSurface, marginTop: 4 },
   wrapRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 12 },
-  amt: { height: 36, paddingHorizontal: 12, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.border, justifyContent: "center" },
-  amtOn: { backgroundColor: colors.surfaceInverse, borderColor: colors.surfaceInverse },
-  amtText: { fontFamily: fonts.semibold, fontSize: 13, color: colors.onSurfaceTertiary },
-  seg: { flexDirection: "row", backgroundColor: colors.surfaceTertiary, borderRadius: radius.md, padding: 4, marginTop: 8 },
-  segBtn: { flex: 1, height: 40, borderRadius: 10, alignItems: "center", justifyContent: "center" },
-  segOn: { backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border },
-  segText: { fontFamily: fonts.semibold, fontSize: 13, color: colors.muted },
-  proj: { flexDirection: "row", gap: 8, alignItems: "center", backgroundColor: colors.brandTertiary, borderRadius: radius.md, padding: 12, marginVertical: 16 },
-  projText: { flex: 1, fontFamily: fonts.regular, fontSize: 13, color: colors.onBrandTertiary },
-  section: { fontFamily: fonts.black, fontSize: 20, letterSpacing: -0.6, color: colors.onSurface, marginTop: 8 },
+  amt: { height: 36, paddingHorizontal: 14, borderRadius: 12, borderWidth: 1, borderColor: colors.layer3Border, backgroundColor: colors.layer3Fill, justifyContent: "center" },
+  amtOn: { backgroundColor: colors.layer3ActiveFill, borderColor: colors.layer3ActiveBorder },
+  amtText: { fontFamily: fonts.semibold, fontSize: 13, color: "#FFFFFF" },
+  seg: { flexDirection: "row", backgroundColor: colors.layer2DeepFill, borderRadius: 16, padding: 4, marginTop: 8, borderWidth: 1, borderColor: colors.layer2DeepBorder },
+  segBtn: { flex: 1, height: 38, borderRadius: 12, alignItems: "center", justifyContent: "center" },
+  segOn: { backgroundColor: colors.layer3ActiveFill, borderWidth: 1, borderColor: colors.layer3ActiveBorder },
+  segText: { fontFamily: fonts.semibold, fontSize: 13, color: "rgba(255,255,255,0.72)" },
+  proj: { flexDirection: "row", gap: 8, alignItems: "center", backgroundColor: colors.layer2DeepFill, borderWidth: 1, borderColor: colors.layer2DeepBorder, borderRadius: 16, padding: 12, marginVertical: 16 },
+  projText: { flex: 1, fontFamily: fonts.regular, fontSize: 13, color: "#FFFFFF" },
+  section: { fontFamily: fonts.displayBold, fontSize: 22, letterSpacing: -0.2, color: colors.onSurface, marginTop: 8 },
   empty: { alignItems: "center", gap: 8, padding: 24 },
   emptyText: { fontFamily: fonts.regular, fontSize: 13, color: colors.muted, textAlign: "center" },
   sipHead: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 },
-  sipAmt: { fontFamily: fonts.black, fontSize: 20, color: colors.onSurface, letterSpacing: -0.5 },
+  sipAmt: { fontFamily: fonts.displayBold, fontSize: 22, color: colors.onSurface, letterSpacing: -0.2 },
   sipFreq: { fontFamily: fonts.medium, fontSize: 13, color: colors.muted },
   sipMeta: { fontFamily: fonts.regular, fontSize: 12, color: colors.muted, marginTop: 2 },
   mandate: { marginTop: 12, padding: 12, borderRadius: radius.md, backgroundColor: colors.brandTertiary, borderWidth: 1, borderColor: colors.goldHairline },

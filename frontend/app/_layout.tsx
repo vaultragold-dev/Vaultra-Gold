@@ -19,13 +19,13 @@ const qc = new QueryClient();
 
 /** Screens are re-mounted when the theme or language changes, so every style/label updates instantly (no app restart). */
 function ThemedStack() {
-  const { scheme, ready } = useTheme();
+  const { scheme, brandRev, ready } = useTheme();
   const { lang } = useLang();
   if (!ready) return null;
   return (
     <>
-      <StatusBar style={scheme === "dark" ? "light" : "dark"} />
-      <Stack key={`${scheme}-${lang}`} screenOptions={{ headerShown: false, contentStyle: { backgroundColor: "transparent" } }}>
+      <StatusBar style="light" />
+      <Stack key={`${scheme}-${lang}-${brandRev}`} screenOptions={{ headerShown: false, contentStyle: { backgroundColor: "transparent" } }}>
         <Stack.Screen name="(tabs)" />
         <Stack.Screen name="login" options={{ presentation: "modal" }} />
         <Stack.Screen name="profile" />
@@ -54,6 +54,9 @@ export default function RootLayout() {
     [fonts.semibold]: require("../assets/fonts/Inter-600.ttf"),
     [fonts.bold]: require("../assets/fonts/Inter-700.ttf"),
     [fonts.black]: require("../assets/fonts/Inter-800.ttf"),
+    [fonts.displayMedium]: require("../assets/fonts/Playfair-500.ttf"),
+    [fonts.display]: require("../assets/fonts/Playfair-600.ttf"),
+    [fonts.displayBold]: require("../assets/fonts/Playfair-700.ttf"),
   });
 
   if (!loaded && !error) return null;

@@ -10,6 +10,7 @@ import { api } from "@/src/api";
 import { LogoMark } from "@/src/components/Header";
 import { useToast } from "@/src/components/Toast";
 import { Button } from "@/src/components/ui";
+import { cleanPhoneInput, formatDobInput, isValidDob, isValidEmail } from "@/src/format";
 import { useApp } from "@/src/store/AppContext";
 import { colors, fonts, radius, themed } from "@/src/theme";
 
@@ -88,6 +89,8 @@ export default function Login() {
   const completeRegistration = async () => {
     setErr("");
     if (!firstName.trim()) { setErr("First name is required"); return; }
+    if (dob.trim() && !isValidDob(dob)) { setErr("Enter a valid date of birth (DD/MM/YYYY)"); return; }
+    if (email.trim() && !isValidEmail(email)) { setErr("Enter a valid email address (e.g. name@gmail.com)"); return; }
     setBusy(true);
     try {
       const activeTok = token || authToken;
@@ -148,8 +151,9 @@ export default function Login() {
               <TextInput
                 testID="login-phone-input"
                 value={phone}
-                onChangeText={(t) => setPhone(t.replace(/\D/g, "").slice(0, 10))}
+                onChangeText={(t) => setPhone(cleanPhoneInput(t))}
                 keyboardType="phone-pad"
+                maxLength={15}
                 placeholder="98765 43210"
                 placeholderTextColor={colors.mutedLight}
                 style={styles.input}
@@ -221,23 +225,35 @@ export default function Login() {
             <TextInput
               testID="login-dob-input"
               value={dob}
-              onChangeText={setDob}
+              onChangeText={(t) => setDob(formatDobInput(t))}
               placeholder="DD/MM/YYYY"
               placeholderTextColor={colors.mutedLight}
               style={[styles.field, styles.inputStandalone]}
               keyboardType="number-pad"
+              maxLength={10}
             />
+            {dob.trim().length > 0 && !isValidDob(dob) && (
+              dob.length === 10 ||
+              (dob.length >= 2 && (Number(dob.slice(0, 2)) < 1 || Number(dob.slice(0, 2)) > 31)) ||
+              (dob.length >= 5 && (Number(dob.slice(3, 5)) < 1 || Number(dob.slice(3, 5)) > 12))
+            ) ? <Text style={styles.err}>Enter a real date of birth (DD/MM/YYYY)</Text> : null}
             <Text style={styles.label}>Email</Text>
             <TextInput
               testID="login-email-input"
               value={email}
-              onChangeText={setEmail}
+              onChangeText={(t) => setEmail(t.replace(/\s/g, ""))}
               placeholder="email@example.com"
               placeholderTextColor={colors.mutedLight}
               keyboardType="email-address"
               autoCapitalize="none"
+              autoCorrect={false}
               style={[styles.field, styles.inputStandalone]}
             />
+            {email.trim() && !isValidEmail(email) ? (
+              <Text style={styles.err}>
+                {!email.includes("@") ? "Email must contain @ (e.g. name@gmail.com)" : "Enter a valid email (e.g. name@gmail.com)"}
+              </Text>
+            ) : null}
             <Text style={styles.label}>Gender</Text>
             <View style={styles.genderRow}>
               {["Male", "Female", "Other"].map((g) => (
@@ -257,7 +273,7 @@ export default function Login() {
               style={[styles.field, styles.inputStandalone]}
             />
             {err ? <Text style={styles.err} testID="login-error">{err}</Text> : null}
-            <Button title="Create Account" size="lg" loading={busy} disabled={!firstName.trim()} onPress={completeRegistration} style={{ marginTop: 16 }} testID="login-register-button" />
+            <Button title="Create Account" size="lg" loading={busy} disabled={!firstName.trim() || (dob.trim().length > 0 && !isValidDob(dob))} onPress={completeRegistration} style={{ marginTop: 16 }} testID="login-register-button" />
             <Pressable onPress={() => { if (router.canGoBack()) router.back(); else router.replace("/"); }} style={styles.resend} testID="login-skip-profile">
               <Text style={styles.resendText}>Skip for now</Text>
             </Pressable>
@@ -276,10 +292,10 @@ export default function Login() {
 const styles = themed(() => ({
   root: { flex: 1, backgroundColor: "transparent" },
   back: { width: 44, height: 44, justifyContent: "center", marginBottom: 16 },
-  title: { fontFamily: fonts.black, fontSize: 28, letterSpacing: -1, color: colors.onSurface, marginTop: 20 },
+  title: { fontFamily: fonts.displayBold, fontSize: 30, letterSpacing: -0.3, color: colors.onSurface, marginTop: 20 },
   sub: { fontFamily: fonts.regular, fontSize: 14, color: colors.muted, marginTop: 6, marginBottom: 24 },
   label: { fontFamily: fonts.semibold, fontSize: 13, color: colors.onSurfaceTertiary, marginBottom: 8, marginTop: 12 },
-  field: { flexDirection: "row", alignItems: "center", gap: 8, height: 56, borderRadius: radius.md, borderWidth: 1.5, borderColor: colors.border, paddingHorizontal: 16, backgroundColor: colors.surface },
+  field: { flexDirection: "row", alignItems: "center", gap: 8, height: 56, borderRadius: 18, borderWidth: 1, borderColor: colors.liquidRimMid, paddingHorizontal: 16, backgroundColor: colors.glassCard },
   cc: { fontFamily: fonts.semibold, fontSize: 16, color: colors.onSurface },
   inputStandalone: { fontFamily: fonts.semibold, fontSize: 17, color: colors.onSurface },
   input: { flex: 1, fontFamily: fonts.semibold, fontSize: 17, color: colors.onSurface, height: 52 },

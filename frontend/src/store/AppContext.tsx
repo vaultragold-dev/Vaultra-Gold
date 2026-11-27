@@ -4,7 +4,8 @@ import { AppState, Platform } from "react-native";
 import { API_BASE, api, setApiTenant, setToken } from "@/src/api";
 import { storage } from "@/src/utils/storage";
 import { TENANT_NAME, TENANT_PHONE } from "@/src/format";
-import { LOCKED_TENANT_ID, tenantConfig } from "@/src/tenantConfig";
+import { LOCKED_TENANT_ID, tenantConfig, type TenantTheme } from "@/src/tenantConfig";
+import { applyBrandTheme } from "@/src/theme";
 
 export const DEFAULT_TENANT = "demo-jeweller-001";
 // Branded builds identify themselves on the very first request
@@ -189,9 +190,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setTenantState(active);
       setTenantName(TENANT_NAME[active] || "");
       try {
-        const cfg = await api<{ appName?: string; assets?: { logoUrl?: string } }>(`/tenant/${active}/config`, { auth: "none" });
+        const cfg = await api<{ appName?: string; theme?: TenantTheme | null; assets?: { logoUrl?: string } }>(`/tenant/${active}/config`, { auth: "none" });
         if (cfg.assets?.logoUrl) {
           setTenantLogo(toAbsUrl(cfg.assets.logoUrl));
+        }
+        if (cfg.theme) {
+          applyBrandTheme(cfg.theme);
         }
       } catch {}
       if (t) {
@@ -205,6 +209,20 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (token) refresh();
   }, [token, tenant, refresh]);
+
+  // Always keep tenant logo & white-label brand theme (e.g. MVZA Wine) synced whenever tenant changes or HMR reloads.
+  useEffect(() => {
+    if (!tenant) return;
+    let alive = true;
+    api<{ appName?: string; theme?: TenantTheme | null; assets?: { logoUrl?: string } }>(`/tenant/${tenant}/config`, { auth: "none" })
+      .then((cfg) => {
+        if (!alive) return;
+        if (cfg.assets?.logoUrl) setTenantLogo(toAbsUrl(cfg.assets.logoUrl));
+        if (cfg.theme) applyBrandTheme(cfg.theme);
+      })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [tenant]);
 
   // Live rates: server pushes every MT5 tick over a WebSocket (no polling delay).
   // HTTP polling is only a fallback while the socket is reconnecting.
@@ -290,6 +308,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setTenantState(t);
     setTenantName(TENANT_NAME[t] || "");
     storage.setItem(TENANT_KEY, t);
+    api<{ appName?: string; theme?: TenantTheme | null; assets?: { logoUrl?: string } }>(`/tenant/${t}/config`, { auth: "none" })
+      .then((cfg) => {
+        setTenantLogo(cfg.assets?.logoUrl ? toAbsUrl(cfg.assets.logoUrl) : "");
+        applyBrandTheme(cfg.theme || null);
+      })
+      .catch(() => {});
   };
 
   const signIn = async (t: string, u: User) => {

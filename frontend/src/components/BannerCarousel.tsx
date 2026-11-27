@@ -134,10 +134,10 @@ export function BannerCarousel({ onBuy }: { onBuy?: () => void } = {}) {
 const styles = themed(() => ({
   banner: {
     aspectRatio: 2.0,
-    borderRadius: 16,
+    borderRadius: 22,
     overflow: "hidden",
-    borderWidth: 1,
-    borderColor: colors.goldHairline,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.glassBorder,
     backgroundColor: colors.surfaceInverse,
   },
   bannerBody: { position: "absolute", left: 16, right: 16, bottom: 16 },

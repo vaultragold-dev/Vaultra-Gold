@@ -11,16 +11,91 @@ const dt = (iso) => iso ? new Date(iso).toLocaleString('en-IN', { day: '2-digit'
 const dOnly = (iso) => iso ? new Date(iso).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
 const todayISO = () => new Date().toISOString().slice(0, 10);
 
+/* ── Basic form rules (same as the customer app & server) ─────────────────
+   Date of birth: DD/MM/YYYY (slashes added automatically while typing; old records like 28042002 are shown with slashes)
+   Mobile: exactly 10 digits · Email: must look like name@domain.com */
+const dobFmt = (v) => {
+  const s = String(v || '').trim();
+  if (!s) return '';
+  let m = s.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
+  if (m) return `${m[3].padStart(2, '0')}/${m[2].padStart(2, '0')}/${m[1]}`;
+  m = s.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})$/);
+  if (m) return `${m[1].padStart(2, '0')}/${m[2].padStart(2, '0')}/${m[3]}`;
+  const d = s.replace(/\D/g, '');
+  return d.length === 8 ? `${d.slice(0, 2)}/${d.slice(2, 4)}/${d.slice(4)}` : s;
+};
+const dobType = (v) => { const d = String(v || '').replace(/\D/g, '').slice(0, 8); return d.length > 4 ? `${d.slice(0, 2)}/${d.slice(2, 4)}/${d.slice(4)}` : d.length > 2 ? `${d.slice(0, 2)}/${d.slice(2)}` : d; };
+const isEmail = (v) => /^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$/.test(String(v || '').trim());
+const phone10 = (v) => { let d = String(v || '').replace(/\D/g, ''); if (d.length === 12 && d.startsWith('91')) d = d.slice(2); else if (d.length === 11 && d.startsWith('0')) d = d.slice(1); return d; };
+const isPhone10 = (v) => phone10(v).length === 10;
+const isDob = (v) => { const m = dobFmt(v).match(/^(\d{2})\/(\d{2})\/(\d{4})$/); if (!m) return false; const d = new Date(+m[3], +m[2] - 1, +m[1]); return d.getDate() === +m[1] && d.getMonth() === +m[2] - 1 && d <= new Date() && +m[3] >= 1900; };
+const PHONE_KEYS = ['phone', 'mobile', 'review_phone', 'support_phone', 'owner_phone'];
+const EMAIL_KEYS = ['email', 'support_email', 'owner_email'];
+const isPincode = (v) => /^\d{6}$/.test(String(v || '').trim());
+const isPan = (v) => /^[A-Z]{5}\d{4}[A-Z]$/.test(String(v || '').trim().toUpperCase());
+const isAadhaar = (v) => /^\d{12}$/.test(String(v || '').replace(/\D/g, ''));
+// Checks every form before it is sent, so no panel can save a 9-digit mobile, an email without @ or a DOB without slashes.
+function checkBody(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return body;
+  const out = { ...body };
+  for (const k of Object.keys(out)) {
+    const v = out[k];
+    if (typeof v !== 'string' || !v.trim()) continue;
+    const label = k.replace(/_/g, ' ').replace(/^\w/, (c) => c.toUpperCase());
+    if (PHONE_KEYS.includes(k)) { if (!isPhone10(v)) throw new Error(`${label} must be exactly 10 digits`); out[k] = phone10(v); }
+    else if (EMAIL_KEYS.includes(k)) { if (!isEmail(v)) throw new Error(`Enter a valid ${label.toLowerCase()} (e.g. name@gmail.com)`); out[k] = v.trim(); }
+    else if (k === 'dob') { if (!isDob(v)) throw new Error('Date of birth must be a valid date in DD/MM/YYYY'); out[k] = dobFmt(v); }
+    else if (k === 'pincode') { if (!isPincode(v)) throw new Error('Pincode must be exactly 6 digits'); out[k] = v.trim(); }
+    else if (k === 'pan') { if (!isPan(v)) throw new Error('PAN format must be ABCDE1234F (10 characters)'); out[k] = v.trim().toUpperCase(); }
+    else if (k === 'aadhaar') { if (!isAadhaar(v)) throw new Error('Aadhaar number must be exactly 12 digits'); out[k] = v.replace(/\D/g, ''); }
+  }
+  return out;
+}
+// Live formatting while typing, for every panel input (also inputs added later)
+document.addEventListener('input', (e) => {
+  const el = e.target;
+  if (!el || el.tagName !== 'INPUT') return;
+  const hint = `${el.id} ${el.name || ''} ${el.placeholder || ''} ${el.dataset.fmt || ''}`.toLowerCase();
+  if (el.dataset.fmt === 'dob' || /\bdob\b|dd\/mm\/yyyy|date of birth/.test(hint)) {
+    const nv = dobType(el.value); if (nv !== el.value) el.value = nv;
+  } else if (el.type === 'tel' || el.dataset.fmt === 'phone' || /mobile|phone/.test(hint)) {
+    if (/search|name|invoice/.test(hint)) return; // search boxes accept names too
+    let d = el.value.replace(/\D/g, '');
+    if (d.length > 10 && d.startsWith('91')) d = d.slice(2);
+    else if (d.length > 10 && d.startsWith('0')) d = d.slice(1);
+    const nv = d.slice(0, 10);
+    if (nv !== el.value) el.value = nv;
+  } else if (el.dataset.fmt === 'pincode' || /\bpincode\b|\bsl_pin\b/.test(hint)) {
+    const nv = el.value.replace(/\D/g, '').slice(0, 6); if (nv !== el.value) el.value = nv;
+  }
+}, true);
+document.addEventListener('blur', (e) => {
+  const el = e.target;
+  if (!el || el.tagName !== 'INPUT') return;
+  const hint = `${el.id} ${el.name || ''} ${el.placeholder || ''} ${el.dataset.fmt || ''}`.toLowerCase();
+  if (el.type === 'email' || el.dataset.fmt === 'email' || /\bemail\b/.test(hint)) {
+    const bad = el.value.trim() && !isEmail(el.value);
+    el.style.borderColor = bad ? '#DC2626' : '';
+    el.title = bad ? 'Email must contain @ and a domain, e.g. name@gmail.com' : '';
+  }
+}, true);
+
 function makeApi(tokenKey) {
   return async function api(path, opts = {}) {
     const h = { 'Content-Type': 'application/json' };
     const t = localStorage.getItem(tokenKey);
     if (t) h.Authorization = 'Bearer ' + t;
+    if (opts.body && (opts.method || 'GET') !== 'GET') opts = { ...opts, body: checkBody(opts.body) };
     const r = await fetch(API + path, { method: opts.method || 'GET', headers: h, body: opts.body ? JSON.stringify(opts.body) : undefined });
     const d = await r.json().catch(() => ({}));
     if (!r.ok) {
       let msg = d.detail;
       if (Array.isArray(msg)) msg = msg.map((e) => { const f = (e.loc || []).slice(-1)[0]; const n = String(f || '').replace(/_/g, ' '); return (n ? n[0].toUpperCase() + n.slice(1) + ': ' : '') + String(e.msg || '').replace(/^Value error, /, ''); }).join(' · ');
+      if (r.status === 401 && !path.includes('/login')) {
+        localStorage.removeItem(tokenKey);
+        if (typeof logout === 'function') logout();
+        msg = 'Session expired — please sign in again';
+      }
       const err = new Error(msg || 'Something went wrong');
       err.status = r.status;
       throw err;
