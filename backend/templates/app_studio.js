@@ -133,6 +133,65 @@ function setPhoneTab(tab) {
   });
 }
 
+function getPhoneTheme(d, presets) {
+  const pKey = d.theme_preset || 'wine_maroon';
+  const P = Object.assign({
+    primaryColor: '#D4AF37',
+    secondaryColor: '#AA820A',
+    accentColor: '#261119',
+    backgroundColor: '#4F2633',
+    cardRadius: 20
+  }, (presets && presets[pKey]) || {});
+
+  if (d.primary_color) P.primaryColor = d.primary_color;
+  if (d.secondary_color) P.secondaryColor = d.secondary_color;
+  if (d.accent_color) P.accentColor = d.accent_color;
+  if (d.background_color) P.backgroundColor = d.background_color;
+  P.textColor = d.text_color || '#FFFFFF';
+
+  // Base hex for background derivation
+  const hex = (P.backgroundColor && !['#FDF8E8','#FAFAF7','#F1F3F7','#FBF7EF','#F3F8F5','#FDF4F3'].includes(P.backgroundColor))
+    ? P.backgroundColor
+    : (P.accentColor && !['#111827','#0B1220'].includes(P.accentColor) ? P.accentColor : (P.secondaryColor || P.primaryColor || '#4F2633'));
+
+  const clean = (hex || '').replace('#', '').trim();
+  const full = clean.length === 3 ? clean.split('').map(c => c + c).join('') : clean;
+  const num = parseInt(full || '4F2633', 16);
+  const r = (num >> 16) & 255, g = (num >> 8) & 255, b = num & 255;
+
+  const rn = r / 255, gn = g / 255, bn = b / 255;
+  const max = Math.max(rn, gn, bn), min = Math.min(rn, gn, bn);
+  const l = (max + min) / 2;
+  let s = 0, h = 0;
+  if (max !== min) {
+    const delta = max - min;
+    s = l > 0.5 ? delta / (2 - max - min) : delta / (max + min);
+    if (max === rn) h = ((gn - bn) / delta + (gn < bn ? 6 : 0)) * 60;
+    else if (max === gn) h = ((bn - rn) / delta + 2) * 60;
+    else h = ((rn - gn) / delta + 4) * 60;
+  }
+
+  let bgA, bgB, bgC;
+  if (l < 0.45) {
+    const sat = Math.round(Math.min(s * 100, 55));
+    bgA = `hsl(${Math.round(h)}, ${sat}%, ${Math.round(Math.max(l * 100 + 7, 20))}%)`;
+    bgB = `hsl(${Math.round(h)}, ${sat}%, ${Math.round(Math.max(l * 100, 15))}%)`;
+    bgC = `hsl(${Math.round(h)}, ${sat}%, ${Math.round(Math.max(l * 100 - 6, 9))}%)`;
+  } else {
+    const sat = Math.min(48, Math.max(20, Math.round(s * 75)));
+    bgA = `hsl(${Math.round(h)}, ${sat}%, 23%)`;
+    bgB = `hsl(${Math.round(h)}, ${sat}%, 16%)`;
+    bgC = `hsl(${Math.round(h)}, ${sat}%, 10%)`;
+  }
+
+  return {
+    ...P,
+    bgGradient: `linear-gradient(155deg, ${bgA} 0%, ${bgB} 50%, ${bgC} 100%)`,
+    primary: P.primaryColor || '#D4AF37',
+    secondary: P.secondaryColor || '#AA820A'
+  };
+}
+
 function phone(small) {
   const d = S.draft;
   const P = Object.assign({}, S.studio.presets[d.theme_preset]);
@@ -141,8 +200,11 @@ function phone(small) {
   if (d.accent_color) P.accentColor = d.accent_color;
   if (d.background_color) P.backgroundColor = d.background_color;
   P.textColor = d.text_color || '#111827';
-  const cur = S.studio.apps.find((x) => x.id === S.studioSel) || {}; const k = cur.karats || S.studio.karats || {}; const nodata = S.studio.price?.has_live === false;
-  const r = P.cardRadius; const name = esc(d.app_name || 'Your app');
+  const cur = S.studio.apps.find((x) => x.id === S.studioSel) || {};
+  const k = cur.karats || S.studio.karats || {};
+  const nodata = S.studio.price?.has_live === false;
+  const r = P.cardRadius;
+  const name = esc(d.app_name || 'Your app');
   const val = (v) => nodata || !v ? '—' : '₹' + Number(v).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const logo = d.logo_url ? `<img src="${esc(d.logo_url)}" style="width:100%;height:100%;object-fit:cover">` : esc(initials(d.app_name || 'G'));
 
@@ -221,23 +283,268 @@ function phone(small) {
       <div style="position:absolute;bottom:16px;font-size:8px;color:rgba(255,255,255,0.4);letter-spacing:0.5px">POWERED BY VAULTRA GOLD</div>
     </div>`;
   }
-  const block = (s) => ({
-    prices: `<div style="display:flex;gap:6px"><div style="flex:1;background:${P.accentColor};border-radius:${r * .6}px;padding:8px"><div style="font-size:7px;color:${P.primaryColor};letter-spacing:.5px">LIVE RATE</div><div style="font-size:10px;color:${P.primaryColor};font-weight:700">Gold 24K</div><div style="font-size:11px;color:#fff;font-weight:700">${val(k['24K'])}</div></div><div style="flex:1;background:${P.accentColor};border-radius:${r * .6}px;padding:8px"><div style="font-size:7px;color:#cbd5e1">LIVE RATE</div><div style="font-size:10px;color:#e5e7eb;font-weight:700">Silver</div><div style="font-size:11px;color:#fff;font-weight:700">${val(cur.silver_buy || S.studio.price?.silver?.buy)}</div></div></div>`,
-    karats: `<div style="background:#fff;border:1px solid ${P.primaryColor}55;border-radius:${r * .6}px;padding:7px 9px;font-size:9px">${['24K', '22K', '18K'].map((x) => `<div style="display:flex;justify-content:space-between;padding:2px 0"><span style="color:${P.secondaryColor}">${x}</span><b style="color:${P.accentColor}">${val(k[x])}</b></div>`).join('')}</div>`,
-    sip: `<div style="background:${P.accentColor};border-radius:${r * .6}px;padding:8px;color:#fff;font-size:9px"><span style="color:${P.primaryColor};font-size:7px;letter-spacing:.6px">AUTO SIP</span><br><b>Save daily from ₹100</b></div>`,
-    banners: `<div style="height:44px;border-radius:${r * .6}px;background:linear-gradient(120deg,${P.secondaryColor},${P.primaryColor});color:#fff;font-size:9px;padding:8px"><b>Festive offer</b><br>0% making on coins</div>`,
-    buy: `<div style="background:#fff;border-radius:${r * .6}px;padding:8px;border:1px solid ${P.primaryColor}33"><div style="font-size:8px;color:#6b7280">Buy gold</div><div style="font-size:12px;font-weight:700;color:${P.textColor}">₹ 1,000</div><div style="margin-top:5px;background:${P.primaryColor};color:#fff;border-radius:${r * .5}px;text-align:center;font-size:9px;padding:5px;font-weight:700">Proceed to Buy →</div></div>`,
-    categories: `<div style="display:flex;gap:5px">${['Rings', 'Bangles', 'Chains', 'Kadas'].map((c) => `<div style="flex:1;text-align:center"><div style="height:26px;border-radius:${r * .5}px;background:${P.backgroundColor};border:1px solid ${P.primaryColor}55"></div><div style="font-size:7px;margin-top:2px;color:${P.textColor}">${c}</div></div>`).join('')}</div>`,
-    trending: `<div style="display:flex;gap:5px">${[1, 2].map(() => `<div style="flex:1;height:46px;border-radius:${r * .6}px;background:#fff;border:1px solid ${P.primaryColor}33"></div>`).join('')}</div>`,
-    promos: `<div style="background:#fff;border-radius:${r * .6}px;padding:7px;font-size:9px;color:${P.textColor};border:1px solid ${P.primaryColor}33">Refer & Earn · FAQs</div>`,
-  }[s] || '');
-  const sections = small ? P.homeLayout.slice(0, 4) : P.homeLayout;
-  return `<div class="phone ${small ? 'sm' : ''}" style="background:${P.backgroundColor}">
-    <div style="display:flex;align-items:center;gap:6px;padding:10px 10px 8px;background:#fff;border-bottom:1px solid ${P.primaryColor}55">
-      <div style="width:22px;height:22px;border-radius:${Math.max(4, r * .35)}px;background:linear-gradient(135deg,${P.primaryColor},${P.secondaryColor});color:#fff;font-size:9px;font-weight:800;display:flex;align-items:center;justify-content:center;overflow:hidden">${logo}</div>
-      <b style="font-size:11px;color:${P.textColor};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${name}</b></div>
-    <div style="display:flex;flex-direction:column;gap:7px;padding:9px">${sections.map(block).join('')}</div></div>`;
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // 3-LAYER SPATIAL LIQUID GLASS NATIVE iOS CUSTOMER APP PREVIEW (REAL UI/UX)
+  // ════════════════════════════════════════════════════════════════════════════
+  const th = getPhoneTheme(d, S.studio?.presets);
+  const fmt2 = (v) => nodata || !v ? '—' : Number(v).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const fmt0 = (v) => nodata || !v ? '—' : Number(v).toLocaleString('en-IN', { maximumFractionDigits: 0 });
+
+  const goldBuy = k['24K'] || S.studio.price?.buy || 12458.90;
+  const silverBuy = cur.silver_buy || S.studio.price?.silver?.buy || 152.40;
+  const k24 = fmt2(k['24K'] || goldBuy);
+  const k22 = fmt2(k['22K'] || (goldBuy * 22 / 24));
+  const k18 = fmt2(k['18K'] || (goldBuy * 18 / 24));
+  const gPrice = fmt0(goldBuy);
+  const sPrice = fmt2(silverBuy);
+
+  const logoMark = d.logo_url
+    ? `<img src="${esc(d.logo_url)}" style="width:100%;height:100%;object-fit:cover;border-radius:8px">`
+    : `<div style="width:100%;height:100%;background:linear-gradient(135deg,${th.primary},${th.secondary});color:#fff;font-size:10px;font-weight:800;display:flex;align-items:center;justify-content:center;border-radius:8px">${esc(initials(name || 'G'))}</div>`;
+
+  return `<div class="phone ${small ? 'sm' : ''}" style="width:280px;height:575px;border-radius:38px;border:8px solid #16140F;box-shadow:0 22px 50px rgba(0,0,0,0.45);position:relative;display:flex;flex-direction:column;overflow:hidden;background:${th.bgGradient};font-family:Inter,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif">
+    
+    <!-- iPhone Dynamic Island -->
+    <div style="position:absolute;top:6px;left:50%;transform:translateX(-50%);width:74px;height:18px;background:#000;border-radius:20px;z-index:20;display:flex;align-items:center;justify-content:space-between;padding:0 7px;box-shadow:0 1px 4px rgba(0,0,0,0.4)">
+      <div style="width:7px;height:7px;border-radius:50%;background:#09090b;box-shadow:inset 0 0 2px rgba(255,255,255,0.4)"></div>
+      <div style="width:5px;height:5px;border-radius:50%;background:#1e1b4b;opacity:0.7"></div>
+    </div>
+
+    <!-- iOS Status Bar -->
+    <div style="display:flex;justify-content:space-between;align-items:center;color:rgba(255,255,255,0.92);font-size:9px;font-weight:700;padding:8px 14px 4px;z-index:15;position:relative">
+      <span>9:41</span>
+      <div style="display:flex;align-items:center;gap:4px">
+        <span style="font-size:8px">5G</span>
+        <span style="display:inline-block;width:15px;height:8px;border:1px solid rgba(255,255,255,0.8);border-radius:2.5px;padding:1px">
+          <span style="display:block;height:100%;width:80%;background:#10B981;border-radius:1px"></span>
+        </span>
+      </div>
+    </div>
+
+    <!-- Scrollable Screen Body (Simulates Live Mobile App Scrolling) -->
+    <div class="phone-screen-scroll" style="flex:1;overflow-y:auto;overflow-x:hidden;scrollbar-width:none;-ms-overflow-style:none;padding-bottom:54px;display:flex;flex-direction:column;gap:5px">
+      
+      <!-- Top Liquid Glass App Header -->
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;padding:4px 10px 4px;position:relative;z-index:10">
+        <div style="display:flex;align-items:center;gap:6px">
+          <div style="width:26px;height:26px;border-radius:9px;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.22);display:flex;align-items:center;justify-content:center;color:#fff;font-size:11px">☰</div>
+          <div style="width:26px;height:26px;border-radius:9px;box-shadow:0 2px 6px rgba(0,0,0,0.3);border:1px solid rgba(255,255,255,0.25);overflow:hidden">${logoMark}</div>
+          <div style="display:flex;flex-direction:column;line-height:1.15">
+            <b style="font-size:11px;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:96px">${name}</b>
+            <span style="font-size:6.5px;color:${th.primary};font-weight:700;letter-spacing:0.5px">24K 999.0 DIGITAL GOLD</span>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:4px">
+          <div style="background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.22);border-radius:16px;padding:2.5px 6px;display:flex;align-items:center;gap:3px;font-size:7.5px;color:#fff;font-weight:700">
+            <span style="color:${th.primary}">🪙</span> 0.00g
+          </div>
+          <div style="width:24px;height:24px;border-radius:50%;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.22);display:flex;align-items:center;justify-content:center;position:relative;font-size:9.5px;color:#fff">
+            🔔
+            <span style="position:absolute;top:3px;right:3px;width:4px;height:4px;border-radius:50%;background:#EF4444"></span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Live Ticker Capsule -->
+      <div style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.18);border-radius:20px;padding:3px 9px;margin:2px 10px 4px;display:flex;align-items:center;justify-content:space-between;font-size:7.5px;color:#fff">
+        <div style="display:flex;align-items:center;gap:3px">
+          <span style="width:5px;height:5px;border-radius:50%;background:#10B981;box-shadow:0 0 6px #10B981"></span>
+          <span style="font-weight:800;letter-spacing:0.4px">LIVE TICKER</span>
+        </div>
+        <div style="display:flex;gap:6px;font-size:7.5px">
+          <span>Gold 24K: <b>₹${gPrice}</b> <span style="color:#10B981">▲0.8%</span></span>
+          <span style="opacity:0.35">|</span>
+          <span>Silver: <b>₹${sPrice}</b> <span style="color:#10B981">▲1.2%</span></span>
+        </div>
+      </div>
+
+      <!-- 3-Layer Spatial Glass Rate & Quick Action Card (Core Mobile UI Component) -->
+      <div style="background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.20);border-radius:20px;padding:8px;margin:3px 10px;box-shadow:0 4px 14px rgba(0,0,0,0.16)">
+        <div style="display:flex;gap:6px">
+          <!-- Gold 24K Card -->
+          <div style="flex:1;background:rgba(0,0,0,0.24);border:1px solid rgba(255,255,255,0.18);border-radius:13px;padding:7px;display:flex;flex-direction:column;justify-content:space-between">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <div style="display:flex;align-items:center;gap:3px">
+                <span style="width:4px;height:4px;border-radius:50%;background:#fff"></span>
+                <span style="font-size:7px;color:#fff;font-weight:800;letter-spacing:0.4px">GOLD 24K</span>
+              </div>
+              <span style="font-size:7px;color:#10B981;font-weight:800">▲0.8%</span>
+            </div>
+            <div style="font-size:12px;font-weight:900;color:#fff;margin:4px 0 6px">
+              ₹${gPrice}<span style="font-size:7.5px;font-weight:500;opacity:0.75">/g</span>
+            </div>
+            <div style="background:linear-gradient(135deg,${th.primary},${th.secondary});color:#fff;border-radius:10px;text-align:center;font-size:7.5px;font-weight:800;padding:3.5px 5px;box-shadow:0 2px 6px rgba(0,0,0,0.2)">
+              Buy Gold →
+            </div>
+          </div>
+          <!-- Silver 999 Card -->
+          <div style="flex:1;background:rgba(0,0,0,0.24);border:1px solid rgba(255,255,255,0.18);border-radius:13px;padding:7px;display:flex;flex-direction:column;justify-content:space-between">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <div style="display:flex;align-items:center;gap:3px">
+                <span style="width:4px;height:4px;border-radius:50%;background:#fff"></span>
+                <span style="font-size:7px;color:#cbd5e1;font-weight:800;letter-spacing:0.4px">SILVER 999</span>
+              </div>
+              <span style="font-size:7px;color:#10B981;font-weight:800">▲1.2%</span>
+            </div>
+            <div style="font-size:12px;font-weight:900;color:#fff;margin:4px 0 6px">
+              ₹${sPrice}<span style="font-size:7.5px;font-weight:500;opacity:0.75">/g</span>
+            </div>
+            <div style="background:rgba(255,255,255,0.12);color:#fff;border:1px solid rgba(255,255,255,0.25);border-radius:10px;text-align:center;font-size:7.5px;font-weight:800;padding:3.5px 5px">
+              Buy Silver →
+            </div>
+          </div>
+        </div>
+
+        <!-- 4 Squircle Quick Action Tiles -->
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:5px;margin-top:7px">
+          <div style="background:rgba(212,175,55,0.18);border:1px solid rgba(212,175,55,0.5);border-radius:11px;padding:5px 2px;text-align:center;color:#fff">
+            <div style="font-size:11px;line-height:1">🪙</div>
+            <div style="font-size:7px;font-weight:800;margin-top:2px">Buy</div>
+          </div>
+          <div style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.22);border-radius:11px;padding:5px 2px;text-align:center;color:#fff">
+            <div style="font-size:11px;line-height:1">🔄</div>
+            <div style="font-size:7px;font-weight:700;margin-top:2px;opacity:0.9">SIP</div>
+          </div>
+          <div style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.22);border-radius:11px;padding:5px 2px;text-align:center;color:#fff">
+            <div style="font-size:11px;line-height:1">🏛️</div>
+            <div style="font-size:7px;font-weight:700;margin-top:2px;opacity:0.9">Vault</div>
+          </div>
+          <div style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.22);border-radius:11px;padding:5px 2px;text-align:center;color:#fff">
+            <div style="font-size:11px;line-height:1">🏪</div>
+            <div style="font-size:7px;font-weight:700;margin-top:2px;opacity:0.9">Store</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Festive Offer Promo Banner -->
+      <div style="background:linear-gradient(135deg,rgba(255,255,255,0.13) 0%,rgba(255,255,255,0.05) 100%);border:1px solid rgba(255,255,255,0.24);border-radius:14px;padding:7px 9px;margin:2px 10px;display:flex;align-items:center;justify-content:space-between;color:#fff">
+        <div>
+          <div style="font-size:6.5px;color:${th.primary};font-weight:800;letter-spacing:0.5px">FESTIVE GOLD DHAMAKA</div>
+          <div style="font-size:9px;font-weight:800;line-height:1.2">0% Making on Gold Coins</div>
+          <div style="font-size:7px;opacity:0.8;margin-top:1px">Start Auto SIP from ₹100/day</div>
+        </div>
+        <div style="background:linear-gradient(135deg,${th.primary},${th.secondary});color:#fff;border-radius:7px;font-size:7.5px;font-weight:800;padding:3.5px 7px;white-space:nowrap;box-shadow:0 2px 6px rgba(0,0,0,0.25)">
+          Explore →
+        </div>
+      </div>
+
+      <!-- Hallmarked Karat Rates Card -->
+      <div style="background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.18);border-radius:14px;padding:7px 9px;margin:2px 10px;font-size:7.5px;color:#fff">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px">
+          <span style="font-weight:800;color:${th.primary};letter-spacing:0.4px">LIVE KARAT RATES</span>
+          <span style="font-size:6.5px;color:#10B981;font-weight:700">● 100% HALLMARKED</span>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:2.5px">
+          <div style="display:flex;justify-content:space-between;padding:1.5px 0;border-bottom:1px solid rgba(255,255,255,0.08)">
+            <span style="opacity:0.85">Gold 24K (999.0 Purity)</span>
+            <b>₹${k24} /g</b>
+          </div>
+          <div style="display:flex;justify-content:space-between;padding:1.5px 0;border-bottom:1px solid rgba(255,255,255,0.08)">
+            <span style="opacity:0.85">Gold 22K (916 Jewellery)</span>
+            <b>₹${k22} /g</b>
+          </div>
+          <div style="display:flex;justify-content:space-between;padding:1.5px 0;border-bottom:1px solid rgba(255,255,255,0.08)">
+            <span style="opacity:0.85">Gold 18K (750 Diamond)</span>
+            <b>₹${k18} /g</b>
+          </div>
+          <div style="display:flex;justify-content:space-between;padding:1.5px 0">
+            <span style="opacity:0.85">Silver 999 (Fine Silver)</span>
+            <b>₹${sPrice} /g</b>
+          </div>
+        </div>
+      </div>
+
+      <!-- Instant Buy Widget -->
+      <div style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.22);border-radius:15px;padding:8px 9px;margin:3px 10px;color:#fff">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px">
+          <span style="font-size:9px;font-weight:800">Instant Buy 24K Gold</span>
+          <span style="font-size:6.5px;color:${th.primary};background:rgba(255,255,255,0.09);padding:1.5px 5px;border-radius:8px">🔒 5-Min Price Lock</span>
+        </div>
+        <!-- Toggle -->
+        <div style="display:flex;background:rgba(0,0,0,0.25);border-radius:16px;padding:2px;margin-bottom:5px">
+          <div style="flex:1;background:rgba(255,255,255,0.18);border-radius:14px;text-align:center;font-size:7px;font-weight:800;padding:2.5px;color:#fff">₹ In Rupees</div>
+          <div style="flex:1;text-align:center;font-size:7px;font-weight:600;padding:2.5px;color:rgba(255,255,255,0.6)">gm In Grams</div>
+        </div>
+        <!-- Chips -->
+        <div style="display:flex;gap:3.5px;margin-bottom:5px">
+          <div style="flex:1;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.2);border-radius:7px;padding:2.5px 0;text-align:center;font-size:7px;color:rgba(255,255,255,0.85)">₹500</div>
+          <div style="flex:1;background:rgba(212,175,55,0.22);border:1px solid ${th.primary};border-radius:7px;padding:2.5px 0;text-align:center;font-size:7px;font-weight:800;color:#fff">₹1,000</div>
+          <div style="flex:1;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.2);border-radius:7px;padding:2.5px 0;text-align:center;font-size:7px;color:rgba(255,255,255,0.85)">₹2,000</div>
+          <div style="flex:1;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.2);border-radius:7px;padding:2.5px 0;text-align:center;font-size:7px;color:rgba(255,255,255,0.85)">₹5,000</div>
+        </div>
+        <!-- Amount Box -->
+        <div style="background:rgba(0,0,0,0.32);border:1px solid rgba(255,255,255,0.2);border-radius:9px;padding:4.5px 7px;display:flex;justify-content:space-between;align-items:center;margin-bottom:3px">
+          <span style="font-size:10.5px;font-weight:900;color:#fff">₹ 1,000</span>
+          <span style="font-size:7px;color:#94A3B8">Est: ~0.0802 gm</span>
+        </div>
+        <div style="font-size:6px;color:rgba(255,255,255,0.65);text-align:right;margin-bottom:5px">Incl. 3% GST · 100% Insured IDBI Trusteeship</div>
+        <div style="background:linear-gradient(135deg,${th.primary},${th.secondary});color:#fff;border-radius:10px;padding:6px;text-align:center;font-size:8.5px;font-weight:800;letter-spacing:0.3px;box-shadow:0 3px 10px rgba(0,0,0,0.3)">
+          Proceed to Buy →
+        </div>
+      </div>
+
+      <!-- Categories Row -->
+      <div style="padding:3px 10px;margin-bottom:3px">
+        <div style="font-size:7px;font-weight:800;color:rgba(255,255,255,0.7);letter-spacing:0.4px;margin-bottom:4px">SHOP BY CATEGORY</div>
+        <div style="display:flex;gap:5px">
+          <div style="flex:1;text-align:center">
+            <div style="height:32px;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.22);border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:13px">💍</div>
+            <div style="font-size:6.5px;color:rgba(255,255,255,0.85);margin-top:2px">Rings</div>
+          </div>
+          <div style="flex:1;text-align:center">
+            <div style="height:32px;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.22);border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:13px">⭕</div>
+            <div style="font-size:6.5px;color:rgba(255,255,255,0.85);margin-top:2px">Bangles</div>
+          </div>
+          <div style="flex:1;text-align:center">
+            <div style="height:32px;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.22);border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:13px">⛓️</div>
+            <div style="font-size:6.5px;color:rgba(255,255,255,0.85);margin-top:2px">Chains</div>
+          </div>
+          <div style="flex:1;text-align:center">
+            <div style="height:32px;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.22);border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:13px">🪙</div>
+            <div style="font-size:6.5px;color:rgba(255,255,255,0.85);margin-top:2px">Coins</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Auto SIP Banner -->
+      <div style="background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.18);border-radius:12px;padding:6px 9px;margin:2px 10px 10px;display:flex;align-items:center;justify-content:space-between">
+        <div>
+          <div style="font-size:6.5px;color:${th.primary};font-weight:800">DAILY GOLD SIP</div>
+          <div style="font-size:8px;font-weight:800;color:#fff">Save daily from ₹100</div>
+        </div>
+        <span style="font-size:11px;color:#fff">→</span>
+      </div>
+    </div>
+
+    <!-- Pinned Floating Glass Tab Bar -->
+    <div style="position:absolute;bottom:6px;left:8px;right:8px;height:40px;background:rgba(255,255,255,0.12);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);border:1px solid rgba(255,255,255,0.28);border-radius:24px;display:flex;align-items:center;justify-content:space-around;padding:0 3px;z-index:25;box-shadow:0 6px 20px rgba(0,0,0,0.35)">
+      <div style="display:flex;flex-direction:column;align-items:center;color:#fff">
+        <span style="font-size:11px">🏠</span>
+        <span style="font-size:6px;font-weight:800;color:${th.primary}">Home</span>
+      </div>
+      <div style="display:flex;flex-direction:column;align-items:center;color:rgba(255,255,255,0.7)">
+        <span style="font-size:11px">🏛️</span>
+        <span style="font-size:6px;font-weight:600">Vault</span>
+      </div>
+      <div style="display:flex;flex-direction:column;align-items:center;color:rgba(255,255,255,0.7)">
+        <span style="font-size:11px">💎</span>
+        <span style="font-size:6px;font-weight:600">Jewellery</span>
+      </div>
+      <div style="display:flex;flex-direction:column;align-items:center;color:rgba(255,255,255,0.7)">
+        <span style="font-size:11px">🔄</span>
+        <span style="font-size:6px;font-weight:600">SIP</span>
+      </div>
+      <div style="display:flex;flex-direction:column;align-items:center;color:rgba(255,255,255,0.7)">
+        <span style="font-size:11px">👤</span>
+        <span style="font-size:6px;font-weight:600">Profile</span>
+      </div>
+    </div>
+    <!-- iOS Home Indicator -->
+    <div style="position:absolute;bottom:2px;left:50%;transform:translateX(-50%);width:70px;height:3px;background:rgba(255,255,255,0.6);border-radius:99px;z-index:30"></div>
+  </div>`;
 }
+
 
 function stepper(a) {
   const st = S.studio.statuses; const cur = st.findIndex((s) => s.key === a.app_status);
