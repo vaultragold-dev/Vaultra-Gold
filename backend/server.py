@@ -16,6 +16,7 @@ import time
 import os, re, json, logging, uuid, random, asyncio, hmac, hashlib, secrets, math
 import white_label as wl
 import kyc_setu as ks
+import store_signing as ss
 import bcrypt, jwt
 
 ROOT_DIR = Path(__file__).parent
@@ -5016,7 +5017,8 @@ async def ms_update(jid: str, body: AppStudioUpdate, request: Request, admin: Ma
     j.store_hours = (body.store_hours or "").strip()
     j.logo_url, j.splash_url, j.app_version = body.logo_url, body.splash_url, body.app_version
     j.support_email, j.store_short, j.store_long, j.store_keywords = clean_email(body.support_email, label="Support email"), body.store_short.strip(), body.store_long.strip(), body.store_keywords.strip()
-    j.store_creds_key = (body.store_creds_key or "").strip().upper()
+    if (body.store_creds_key or "").strip():  # blank keeps the auto-generated key (signing secrets live under it)
+        j.store_creds_key = body.store_creds_key.strip().upper()
     if body.domain is not None:
         try:
             j.domain = normalize_domain(body.domain)
@@ -5093,6 +5095,235 @@ def _gh_repo():
     return (os.environ.get("GITHUB_REPO") or "vaultragold-dev/Vaultra-Gold").strip()
 
 
+# ─── Store signing automation (App Studio -> Step 5 -> Store Signing & Accounts) ─────────────────────────
+from fastapi import Form
+
+ANDROID_PLATFORMS = ("android_apk", "android_bundle", "android", "all")
+IOS_PLATFORMS = ("ios", "all")
+
+
+def _gh_signing():
+    return ss.GitHub((os.environ.get("GITHUB_TOKEN") or "").strip(), _gh_repo())
+
+
+async def _signing_call(fn, *args):
+    try:
+        return await run_in_threadpool(fn, *args)
+    except ss.SigningError as e:
+        raise HTTPException(e.status, str(e))
+    except _requests.RequestException as e:
+        raise HTTPException(502, f"GitHub / Apple unreachable ({type(e).__name__}). Please try again.")
+
+
+async def _ensure_store_key(db, j) -> str:
+    if j.store_creds_key:
+        return j.store_creds_key
+    taken = {k for (k,) in (await db.execute(select(Jeweller.store_creds_key).where(Jeweller.id != j.id))).all() if k}
+    j.store_creds_key = ss.make_store_key(j.business_name, j.id, taken)
+    return j.store_creds_key
+
+
+async def _android_ks(jid):
+    return ss.unseal(await _setting(f"signing_android:{jid}"))
+
+
+async def _apple_accounts():
+    return (ss.unseal(await _setting("apple_accounts")) or {}).get("items", [])
+
+
+async def _apple_sel(jid):
+    raw = await _setting(f"signing_apple:{jid}")
+    return json.loads(raw) if raw else {}
+
+
+async def _play_sel(jid):
+    raw = await _setting(f"signing_play:{jid}")
+    return json.loads(raw) if raw else {}
+
+
+async def _create_android(db, j, replace: bool = False):
+    key = await _ensure_store_key(db, j)
+    old = await _android_ks(j.id)
+    ks_data = None if replace else old
+    if not ks_data:
+        if old:  # keep the replaced keystore forever - an app already on Play may still need it
+            await _setting(f"signing_android_old:{j.id}:{int(time.time())}", ss.seal(old))
+        ks_data = await _signing_call(ss.generate_keystore, j.business_name)
+        ks_data["synced_at"] = None
+        await _setting(f"signing_android:{j.id}", ss.seal(ks_data))  # save before pushing: never lose a generated key
+    gh = _gh_signing()
+    await _signing_call(gh.put_many, ss.android_secrets(ks_data, key))
+    ks_data["synced_at"], ks_data["key"] = now_iso(), key
+    await _setting(f"signing_android:{j.id}", ss.seal(ks_data))
+    return ks_data
+
+
+async def _ensure_signing(db, j, platform: str, submit: bool):
+    """Called before every cloud build: creates whatever can be created automatically and stops early with a clear
+    message for what only a person can provide (Apple account, Play service account)."""
+    await _ensure_store_key(db, j)
+    gh = _gh_signing()
+    if platform in ANDROID_PLATFORMS:
+        ks_data = await _android_ks(j.id)
+        if not ks_data or not ks_data.get("synced_at") or ks_data.get("key") != j.store_creds_key:
+            await _create_android(db, j)
+    if platform in IOS_PLATFORMS and not (await _apple_sel(j.id)).get("synced_at"):
+        if not await _signing_call(gh.exists, "APPLE_TEAM_ID"):
+            raise HTTPException(400, "Connect an Apple Developer account first: App Studio -> Step 5 -> Store Signing -> Apple account")
+    if submit and platform in ("android_bundle", "android", "all") and not (await _play_sel(j.id)).get("synced_at"):
+        if not await _signing_call(gh.exists, "PLAY_SERVICE_ACCOUNT_JSON"):
+            raise HTTPException(400, "Add the Google Play service-account JSON in Step 5 -> Store Signing -> Play auto-upload, or untick 'Upload to store'")
+
+
+async def _shop(db, jid):
+    j = (await db.execute(select(Jeweller).where(Jeweller.id == jid))).scalar_one_or_none()
+    if not j:
+        raise HTTPException(404, "Shop not found")
+    return j
+
+
+def _acc_public(a):
+    return {"id": a["id"], "name": a["name"], "team_id": a["team_id"], "key_id": a["key_id"],
+            "issuer_id": ss.mask(a["issuer_id"], 6), "verified_at": a.get("verified_at"), "is_default": bool(a.get("is_default"))}
+
+
+@api.get("/master/app-studio/{jid}/signing")
+async def ms_signing_status(jid: str, admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
+    j = await _shop(db, jid)
+    ks_data = await _android_ks(jid)
+    sel = await _apple_sel(jid)
+    accs = await _apple_accounts()
+    play = await _play_sel(jid)
+    try:
+        gh = await run_in_threadpool(_gh_signing().check)
+    except ss.SigningError as e:
+        gh = {"ok": False, "error": str(e)}
+    return {
+        "store_key": j.store_creds_key or "",
+        "github": gh,
+        "android": {"ready": bool(ks_data and ks_data.get("synced_at")), "created": bool(ks_data),
+                    "alias": (ks_data or {}).get("alias", ""), "password": ss.mask((ks_data or {}).get("password", "")),
+                    "sha256": (ks_data or {}).get("sha256", ""), "created_at": (ks_data or {}).get("created_at"),
+                    "valid_to": (ks_data or {}).get("valid_to"), "synced_at": (ks_data or {}).get("synced_at")},
+        "apple": {"selected": sel.get("account_id") or "", "synced_at": sel.get("synced_at"),
+                  "accounts": [_acc_public(a) for a in accs]},
+        "play": {"ready": bool(play.get("synced_at")), "synced_at": play.get("synced_at"), "client_email": play.get("client_email", "")},
+    }
+
+
+class AndroidSigningIn(BaseModel):
+    replace: bool = False
+    confirm: str = ""
+
+
+@api.post("/master/app-studio/{jid}/signing/android")
+async def ms_signing_android(jid: str, body: AndroidSigningIn, admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
+    j = await _shop(db, jid)
+    if body.replace and body.confirm.strip().upper() != "REPLACE":
+        raise HTTPException(400, "Type REPLACE to confirm - an app already on Play Store can only be updated with its original keystore")
+    ks_data = await _create_android(db, j, replace=body.replace)
+    await audit(db, "master", admin, "app.signing.android", j.business_name, {"replace": body.replace, "sha256": ks_data["sha256"], "key": j.store_creds_key}, j.id)
+    await db.commit()
+    return {"ok": True, "message": ("New keystore created" if body.replace else "Android keystore ready") + f" · saved to GitHub as *_{j.store_creds_key}"}
+
+
+@api.get("/master/app-studio/{jid}/signing/android/backup")
+async def ms_signing_backup(jid: str, admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
+    j = await _shop(db, jid)
+    ks_data = await _android_ks(jid)
+    if not ks_data:
+        raise HTTPException(404, "No keystore yet - it is created on the first build")
+    data = ss.keystore_backup_zip(ks_data, j.business_name, j.store_creds_key or "", j.bundle_id or "")
+    await audit(db, "master", admin, "app.signing.backup", j.business_name, {"key": j.store_creds_key}, j.id)
+    await db.commit()
+    fn = f"{(j.bundle_id or 'app').replace('.', '-')}-keystore-backup.zip"
+    return Response(content=data, media_type="application/zip", headers={"Content-Disposition": f'attachment; filename="{fn}"'})
+
+
+@api.post("/master/apple-accounts")
+async def ms_apple_add(name: str = Form(...), team_id: str = Form(...), key_id: str = Form(...), issuer_id: str = Form(...),
+                       jid: str = Form(""), p8: UploadFile = File(...),
+                       admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
+    raw = (await p8.read())[:20000].decode("utf-8", errors="ignore")
+    try:
+        acc = ss.clean_apple(team_id, key_id, issuer_id, raw)
+    except ss.SigningError as e:
+        raise HTTPException(e.status, str(e))
+    await _signing_call(ss.verify_apple, acc)
+    accs = [a for a in await _apple_accounts() if a["key_id"] != acc["key_id"]]
+    acc.update(id=uuid.uuid4().hex[:12], name=(name or "").strip()[:80] or acc["team_id"], verified_at=now_iso())
+    accs.append(acc)
+    await _setting("apple_accounts", ss.seal({"items": accs}))
+    await audit(db, "master", admin, "app.signing.apple_add", acc["name"], {"team_id": acc["team_id"], "key_id": acc["key_id"]})
+    await db.commit()
+    out = {"ok": True, "account": _acc_public(acc), "message": f"Apple key verified for team {acc['team_id']}"}
+    if jid:
+        out.update(await _attach_apple(db, admin, await _shop(db, jid), acc["id"]))
+    return out
+
+
+async def _attach_apple(db, admin, j, account_id: str):
+    key = await _ensure_store_key(db, j)
+    gh = _gh_signing()
+    if account_id in ("", "default"):  # fall back to the unsuffixed platform secrets
+        for n in ss.APPLE_SECRET_NAMES:
+            await _signing_call(gh.delete, f"{n}_{key}")
+        await _setting(f"signing_apple:{j.id}", json.dumps({"account_id": "default", "synced_at": None}))
+        msg = "Using the Vaultra default Apple account"
+    else:
+        acc = next((a for a in await _apple_accounts() if a["id"] == account_id), None)
+        if not acc:
+            raise HTTPException(404, "Apple account not found")
+        await _signing_call(gh.put_many, ss.apple_secrets(acc, key))
+        await _setting(f"signing_apple:{j.id}", json.dumps({"account_id": acc["id"], "synced_at": now_iso()}))
+        msg = f"Apple account {acc['name']} connected · saved to GitHub as *_{key}"
+    await audit(db, "master", admin, "app.signing.apple", j.business_name, {"account": account_id, "key": key}, j.id)
+    await db.commit()
+    return {"ok": True, "message": msg}
+
+
+class AppleSelectIn(BaseModel):
+    account_id: str = ""
+
+
+@api.post("/master/app-studio/{jid}/signing/apple")
+async def ms_signing_apple(jid: str, body: AppleSelectIn, admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
+    return await _attach_apple(db, admin, await _shop(db, jid), body.account_id)
+
+
+@api.post("/master/apple-accounts/{aid}/default")
+async def ms_apple_default(aid: str, admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
+    accs = await _apple_accounts()
+    acc = next((a for a in accs if a["id"] == aid), None)
+    if not acc:
+        raise HTTPException(404, "Apple account not found")
+    vals = {k.rsplit("_", 1)[0]: v for k, v in ss.apple_secrets(acc, "X").items()}
+    await _signing_call(_gh_signing().put_many, vals)
+    for a in accs:
+        a["is_default"] = a["id"] == aid
+    await _setting("apple_accounts", ss.seal({"items": accs}))
+    await audit(db, "master", admin, "app.signing.apple_default", acc["name"], {"team_id": acc["team_id"]})
+    await db.commit()
+    return {"ok": True, "message": f"{acc['name']} is now the Vaultra default Apple account"}
+
+
+@api.post("/master/app-studio/{jid}/signing/play")
+async def ms_signing_play(jid: str, file: UploadFile = File(...), admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
+    j = await _shop(db, jid)
+    raw = (await file.read())[:50000].decode("utf-8", errors="ignore")
+    try:
+        js = ss.clean_play_json(raw)
+    except ss.SigningError as e:
+        raise HTTPException(e.status, str(e))
+    key = await _ensure_store_key(db, j)
+    await _signing_call(_gh_signing().put, f"PLAY_SERVICE_ACCOUNT_JSON_{key}", js)
+    email = json.loads(js).get("client_email", "")
+    await _setting(f"signing_play:{j.id}", json.dumps({"synced_at": now_iso(), "client_email": email}))
+    await audit(db, "master", admin, "app.signing.play", j.business_name, {"client_email": email, "key": key}, j.id)
+    await db.commit()
+    return {"ok": True, "message": f"Play upload key saved for {email}"}
+
+
 @api.post("/master/app-studio/{jid}/build")
 async def ms_trigger_build(jid: str, body: AppBuildTrigger, request: Request, admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
     j = (await db.execute(select(Jeweller).where(Jeweller.id == jid))).scalar_one_or_none()
@@ -5107,6 +5338,8 @@ async def ms_trigger_build(jid: str, body: AppBuildTrigger, request: Request, ad
     platform = body.platform if body.platform in ("android_apk", "android_bundle", "android", "ios", "all") else "android_apk"
     if body.submit and platform == "android_apk":
         raise HTTPException(400, "Store upload needs a Play Store .AAB or iOS build, not a test APK")
+    # Keystore / store key are created automatically; Apple / Play accounts must already be connected
+    await _ensure_signing(db, j, platform, body.submit)
     # Every cloud build gets the next version code / build number: Play and App Store Connect reject a repeated one.
     j.app_build_number = int(j.app_build_number or 0) + 1
     inputs = {

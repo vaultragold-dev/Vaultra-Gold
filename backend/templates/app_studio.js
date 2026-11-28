@@ -14,7 +14,7 @@ const loadStudio = () => safe(async () => {
   S.studio = await api('/master/app-studio');
   if (!S.studio.apps.some((a) => a.id === S.studioSel)) S.studioSel = S.studio.apps[0]?.id || '';
   pickDraft();
-  if (S.studioSel) checkBuildStatus(S.studioSel);
+  if (S.studioSel) { checkBuildStatus(S.studioSel); loadSigning(S.studioSel); }
 }, 'studio');
 
 function pickDraft() {
@@ -45,7 +45,7 @@ function pickDraft() {
   } : null;
 }
 
-function studioSelect(id) { S.studioSel = id; pickDraft(); render(); checkBuildStatus(id); }
+function studioSelect(id) { S.studioSel = id; pickDraft(); render(); checkBuildStatus(id); loadSigning(id); }
 function dset(k, v, rerender) { S.draft[k] = v; if (rerender) render(); else { const pv = $('#studio-preview'); if (pv) pv.innerHTML = phone(); } }
 
 async function checkBuildStatus(id) {
@@ -97,7 +97,7 @@ function renderBuildCenter(id) {
     <div style="font-size:12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:8px 10px;margin-bottom:8px">
       🔐 Signing &amp; store account: <b>${credKey ? esc(credKey) + ' (jeweller\'s own Play / App Store account)' : 'Vaultra default secrets'}</b> ·
       backend <b>${esc(((cur.config || {}).apiBaseUrl) || '')}</b>${/^https:\/\//i.test(((cur.config || {}).apiBaseUrl) || '') ? '' : ' <span class="badge red">must be https:// for store builds</span>'}
-      <div class="sub" style="margin-top:4px">Apple (4.2.6 / 4.3) and Google reject many re-skinned apps from one account — each jeweller's app goes to the jeweller's own developer account. Set the "Store account key" in Step 3 and add that jeweller's secrets in GitHub (see the App Kit README).</div>
+      <div class="sub" style="margin-top:4px">Apple (4.2.6 / 4.3) and Google reject many re-skinned apps from one account — each jeweller's app goes to the jeweller's own developer account. Signing keys are handled in <b>Store Signing &amp; Accounts</b> above: the Android keystore is created automatically, the Apple account is connected once.</div>
     </div>
     <label style="display:flex;align-items:center;gap:8px;font-size:12.5px;margin-bottom:6px;cursor:pointer">
       <input type="checkbox" id="studio-submit" ${submitOn ? 'checked' : ''} onchange="S.studioSubmit=this.checked" ${isRunning ? 'disabled' : ''}>
@@ -569,6 +569,7 @@ S.studioStep = S.studioStep || 1;
 function setStudioStep(step) {
   S.studioStep = step;
   render();
+  if (step === 5 && S.studioSel) loadSigning(S.studioSel);
 }
 async function studioSaveAndNext(nextStep) {
   const b = document.getElementById('studio-save'); if (b) b.disabled = true;
@@ -913,6 +914,10 @@ function vStudio() {
       </div>
       <p class="sub" style="margin-top:0;margin-bottom:14px">Compile real production Android (.APK / .AAB) and iOS binaries in the cloud. Once downloaded, upload directly to Google Play Console and Apple App Store!</p>
 
+      <div id="studio-signing-box" style="margin-bottom:16px">
+        ${renderSigning(a.id)}
+      </div>
+
       <div id="studio-build-box">
         ${renderBuildCenter(a.id)}
       </div>
@@ -1064,7 +1069,8 @@ async function studioBuild(id, platform) {
     toast(res.message || 'Cloud build started! Progress will update automatically.');
     await checkBuildStatus(id);
     render();
-  } catch (e) { toast(e.message, true); }
+    loadSigning(id);
+  } catch (e) { toast(e.message, true); loadSigning(id); }
 }
 
 async function studioCancelBuild(id) {
@@ -1119,4 +1125,161 @@ function ctlSet() { const b = $('#ctl-save'); if (b) b.textContent = 'Save contr
 async function ctlSave() {
   const shops = {}; S.ctl.shops.forEach((s) => { shops[s.id] = { rates: $('#r_' + s.id).checked, booking: $('#b_' + s.id).checked, kyc_buy: $('#k_' + s.id).checked }; });
   try { await api('/master/v3/controls', { method: 'PUT', body: { rates: $('#g_rates').checked, booking: $('#g_booking').checked, min_investment: Number($('#g_min').value || 500), max_investment: Number($('#g_max').value || 200000), daily_limit: Number($('#g_daily').value || 200000), shops } }); toast('Controls saved'); loadCtl(); } catch (e) { toast(e.message, true); }
+}
+
+
+/* ── App Studio: Store Signing & Accounts (auto Android keystore, Apple account, Play upload key) ── */
+S.signing = S.signing || {}; S.signTab = S.signTab || 'android'; S.appleNew = false;
+
+async function loadSigning(id) {
+  if (!id) return;
+  try { S.signing[id] = await api(`/master/app-studio/${id}/signing`); } catch (e) { S.signing[id] = { error: e.message }; }
+  paintSigning(id);
+}
+function paintSigning(id) { const box = $('#studio-signing-box'); if (box && S.studioSel === id) box.innerHTML = renderSigning(id); }
+function setSignTab(t) { S.signTab = t; paintSigning(S.studioSel); }
+const sgDate = (v) => v ? new Date(v).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
+const sgRow = (k, v) => `<div style="display:flex;gap:10px;padding:3px 0;font-size:12px"><span style="width:120px;color:#64748b;flex-shrink:0">${k}</span><span style="min-width:0;overflow:hidden;text-overflow:ellipsis">${v}</span></div>`;
+
+function renderSigning(id) {
+  const s = S.signing[id];
+  const head = `<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px">
+      <div><b style="font-size:14px">🔐 Store Signing &amp; Accounts</b>
+        <div class="sub">Android keystore is created automatically · Apple account is connected once · keys are saved encrypted in GitHub Secrets</div></div>
+      ${s && s.store_key ? `<span class="badge">Store account key: <code>${esc(s.store_key)}</code></span>` : ''}
+    </div>`;
+  if (!s) return `<div style="border:1px solid #e2e8f0;border-radius:10px;padding:12px">${head}<div class="sub">Loading signing status…</div></div>`;
+  if (s.error) return `<div style="border:1px solid #e2e8f0;border-radius:10px;padding:12px">${head}<span class="badge red">${esc(s.error)}</span> <button class="btn sm" onclick="loadSigning('${id}')">↻ Retry</button></div>`;
+  const gh = s.github && !s.github.ok ? `<div class="note" style="margin-bottom:8px;background:#FEF2F2;border:1px solid #FECACA;color:#991B1B;padding:8px 10px;border-radius:8px;font-size:12px">⚠ ${esc(s.github.error || 'GitHub token cannot save secrets')}</div>` : '';
+  const tab = (k, l, ok) => `<button class="btn sm ${S.signTab === k ? 'primary' : ''}" onclick="setSignTab('${k}')">${l} ${ok ? '✓' : ''}</button>`;
+  let body = '';
+
+  if (S.signTab === 'android') {
+    const a = s.android || {};
+    body = a.ready ? `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><b>Android upload keystore</b><span class="badge green">✓ Ready · saved in GitHub</span></div>
+      ${sgRow('Alias', `<code>${esc(a.alias)}</code>`)}${sgRow('Password', `<code>${esc(a.password)}</code>`)}
+      ${sgRow('Created', `${sgDate(a.created_at)} · valid till ${sgDate(a.valid_to)}`)}${sgRow('SHA-256', `<code style="font-size:11px">${esc(a.sha256)}</code>`)}
+      ${sgRow('GitHub', `4 secrets · <code>ANDROID_*_${esc(s.store_key)}</code> · synced ${sgDate(a.synced_at)}`)}
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+        <button class="btn sm primary" onclick="signBackup('${id}')">⬇ Download Keystore Backup (.zip)</button>
+        <button class="btn sm" onclick="signAndroid('${id}', false)">↻ Re-sync to GitHub</button>
+        <button class="btn sm danger" onclick="signAndroid('${id}', true)" title="Never after the app is live on Play Store">⚠ Replace keystore</button>
+      </div>
+      <div class="sub" style="margin-top:6px">Every update is signed with this same keystore. Keep the backup safe — it is also stored encrypted on the server.</div>`
+    : `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><b>Android upload keystore</b><span class="badge amber">${a.created ? '⚠ Created, not yet saved to GitHub' : '⏳ Created automatically on the first build'}</span></div>
+      <div class="sub" style="line-height:1.5">When you press <b>Build</b>, the server creates this shop's keystore (strong password, valid 25 years), saves the 4 secrets in GitHub and keeps an encrypted backup — nothing to type.</div>
+      <div style="margin-top:8px"><button class="btn sm primary" onclick="signAndroid('${id}', false)">⚡ ${a.created ? 'Save to GitHub now' : 'Create now (without building)'}</button></div>`;
+  } else if (S.signTab === 'ios') {
+    const ap = s.apple || {}; const accs = ap.accounts || [];
+    const sel = S.appleNew || (!ap.selected && !accs.length) ? 'new' : (ap.selected || 'default');
+    const def = accs.find((x) => x.is_default);
+    const opts = `<option value="default" ${sel === 'default' ? 'selected' : ''}>Vaultra default Apple account${def ? ' — ' + esc(def.name) : ''}</option>`
+      + accs.map((x) => `<option value="${x.id}" ${sel === x.id ? 'selected' : ''}>${esc(x.name)} (Team ${esc(x.team_id)})</option>`).join('')
+      + `<option value="new" ${sel === 'new' ? 'selected' : ''}>+ Connect a new Apple account…</option>`;
+    const cur = accs.find((x) => x.id === sel);
+    body = `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><b>Apple Developer account</b>
+        ${ap.synced_at ? '<span class="badge green">✓ Connected</span>' : sel === 'default' && def ? '<span class="badge green">✓ Using Vaultra default</span>' : '<span class="badge amber">Connect once</span>'}</div>
+      <select class="select" onchange="appleSelect('${id}', this.value)" style="margin-bottom:8px">${opts}</select>
+      ${sel === 'new' ? `
+        <div class="sub" style="margin-bottom:8px;line-height:1.5">Apple does not let software create these keys — copy them once from App Store Connect → Users and Access → Integrations → App Store Connect API (role <b>App Manager</b>). After this, certificates and provisioning profiles are created automatically on every build.</div>
+        <div class="grid g2">
+          <div class="field"><label>Account name</label><input class="input" id="ap_name" placeholder="XYZ Jewellers Pvt Ltd"></div>
+          <div class="field"><label>Team ID</label><input class="input" id="ap_team" maxlength="10" placeholder="A1B2C3D4E5" oninput="this.value=this.value.toUpperCase()"></div>
+          <div class="field"><label>Key ID</label><input class="input" id="ap_kid" maxlength="12" placeholder="2X9R4HXF34" oninput="this.value=this.value.toUpperCase()"></div>
+          <div class="field"><label>Issuer ID</label><input class="input" id="ap_iss" placeholder="69a6de7e-xxxx-xxxx-xxxx-xxxxxxxxxxxx"></div>
+          <div class="field" style="grid-column:1/-1"><label>.p8 key file (downloadable only once from Apple)</label><input class="input" type="file" id="ap_p8" accept=".p8" style="padding-top:8px"></div>
+        </div>
+        <button class="btn sm primary" id="ap_btn" onclick="appleConnect('${id}')">🔗 Verify with Apple &amp; Connect</button>`
+      : cur ? `${sgRow('Team ID', `<code>${esc(cur.team_id)}</code>`)}${sgRow('Key ID', `<code>${esc(cur.key_id)}</code>`)}${sgRow('Apple check', `✓ verified ${sgDate(cur.verified_at)}`)}
+          ${sgRow('GitHub', ap.synced_at && ap.selected === cur.id ? `4 secrets · <code>*_${esc(s.store_key)}</code> · synced ${sgDate(ap.synced_at)}` : '—')}
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+            <button class="btn sm" onclick="appleSelect('${id}', '${cur.id}')">↻ Re-sync to GitHub</button>
+            ${cur.is_default ? '' : `<button class="btn sm" onclick="appleDefault('${cur.id}')">★ Make Vaultra default</button>`}
+          </div>`
+      : `<div class="sub">${def ? `Builds use the Vaultra default Apple account (${esc(def.name)}).` : 'No Vaultra default Apple account yet — connect one and press "Make Vaultra default", or connect this jeweller\'s own account.'}</div>`}
+      <div class="sub" style="margin-top:8px">Once connected, an Apple account can be picked for other jewellers from this list — no need to fill the form again.</div>`;
+  } else {
+    const p = s.play || {};
+    body = `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><b>Google Play auto-upload</b>${p.ready ? `<span class="badge green">✓ ${esc(p.client_email)}</span>` : '<span class="badge">Optional</span>'}</div>
+      <div class="sub" style="line-height:1.5;margin-bottom:8px">Only needed for <b>"Upload to store after build"</b>. Without it, download the .AAB and upload it in Play Console. Google requires the <b>first</b> .AAB of a new app to be uploaded by hand; later updates can go automatically.</div>
+      <div class="field"><label>Service account JSON (Play Console → Setup → API access, role Release manager)</label><input class="input" type="file" id="pl_json" accept=".json,application/json" style="padding-top:8px"></div>
+      <button class="btn sm primary" id="pl_btn" onclick="playUpload('${id}')">Save to GitHub</button>`;
+  }
+
+  return `<div style="border:1px solid #e2e8f0;border-radius:10px;padding:12px;background:#fff">${head}${gh}
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">${tab('android', '🤖 Android signing', s.android?.ready)}${tab('ios', '🍎 Apple account', !!s.apple?.synced_at)}${tab('play', '▶ Play auto-upload (optional)', s.play?.ready)}</div>
+    <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px">${body}</div></div>`;
+}
+
+async function signAndroid(id, replace) {
+  let confirmText = '';
+  if (replace) {
+    confirmText = prompt('Replacing the keystore means an app already on Play Store can NOT be updated any more (unless Google resets the upload key).\nThe old keystore is kept as a backup.\n\nType REPLACE to continue:') || '';
+    if (confirmText.trim().toUpperCase() !== 'REPLACE') return;
+  }
+  toast('Working on the Android keystore…');
+  try { const r = await api(`/master/app-studio/${id}/signing/android`, { method: 'POST', body: { replace, confirm: confirmText } }); toast(r.message); }
+  catch (e) { toast(e.message, true); }
+  loadSigning(id);
+}
+
+async function signAuthFetch(path, opts = {}) {
+  const tok = localStorage.getItem('master_token') || '';
+  if (!tok) { if (typeof logout === 'function') logout(); throw new Error('Session expired — please sign in again'); }
+  const r = await fetch(API + path, { ...opts, headers: { ...(opts.headers || {}), Authorization: 'Bearer ' + tok } });
+  if (r.status === 401) { localStorage.removeItem('master_token'); if (typeof logout === 'function') logout(); throw new Error('Session expired — please sign in again'); }
+  if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error((typeof d.detail === 'string' && d.detail) || 'Request failed'); }
+  return r;
+}
+
+async function signBackup(id) {
+  try {
+    const r = await signAuthFetch(`/master/app-studio/${id}/signing/android/backup`);
+    const blob = await r.blob(); const cd = r.headers.get('Content-Disposition') || '';
+    const fn = (cd.match(/filename="([^"]+)"/) || [])[1] || 'keystore-backup.zip';
+    const u = URL.createObjectURL(blob); const el = document.createElement('a'); el.href = u; el.download = fn; document.body.appendChild(el); el.click(); el.remove(); URL.revokeObjectURL(u);
+    toast('Keystore backup downloaded — keep it safe');
+  } catch (e) { toast(e.message, true); }
+}
+
+async function appleSelect(id, aid) {
+  if (aid === 'new') { S.appleNew = true; paintSigning(id); return; }
+  S.appleNew = false;
+  try { const r = await api(`/master/app-studio/${id}/signing/apple`, { method: 'POST', body: { account_id: aid } }); toast(r.message); }
+  catch (e) { toast(e.message, true); }
+  loadSigning(id);
+}
+
+async function appleConnect(id) {
+  const f = $('#ap_p8')?.files?.[0];
+  const vals = { name: $('#ap_name').value.trim(), team_id: $('#ap_team').value.trim(), key_id: $('#ap_kid').value.trim(), issuer_id: $('#ap_iss').value.trim() };
+  if (!vals.team_id || !vals.key_id || !vals.issuer_id || !f) return toast('Fill Team ID, Key ID, Issuer ID and choose the .p8 file', true);
+  const b = $('#ap_btn'); if (b) { b.disabled = true; b.textContent = 'Checking with Apple…'; }
+  try {
+    const fd = new FormData(); Object.entries(vals).forEach(([k, v]) => fd.append(k, v)); fd.append('jid', id); fd.append('p8', f);
+    const r = await (await signAuthFetch('/master/apple-accounts', { method: 'POST', body: fd })).json();
+    S.appleNew = false; toast(r.message || 'Apple account connected');
+  } catch (e) { toast(e.message, true); if (b) { b.disabled = false; b.textContent = '🔗 Verify with Apple & Connect'; } return; }
+  loadSigning(id);
+}
+
+async function appleDefault(aid) {
+  try { const r = await api(`/master/apple-accounts/${aid}/default`, { method: 'POST', body: {} }); toast(r.message); }
+  catch (e) { toast(e.message, true); }
+  loadSigning(S.studioSel);
+}
+
+async function playUpload(id) {
+  const f = $('#pl_json')?.files?.[0]; if (!f) return toast('Choose the service account JSON file', true);
+  const b = $('#pl_btn'); if (b) { b.disabled = true; b.textContent = 'Saving…'; }
+  try {
+    const fd = new FormData(); fd.append('file', f);
+    const r = await (await signAuthFetch(`/master/app-studio/${id}/signing/play`, { method: 'POST', body: fd })).json();
+    toast(r.message);
+  } catch (e) { toast(e.message, true); }
+  loadSigning(id);
 }
