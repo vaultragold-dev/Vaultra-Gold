@@ -62,6 +62,8 @@ class Jeweller(Base):
     store_long = Column(Text, default="")
     store_keywords = Column(String(100), default="")
     support_email = Column(String(200), default="")
+    store_creds_key = Column(String(40), default="")  # suffix of the GitHub secrets holding THIS jeweller's Play/App Store credentials
+    app_build_number = Column(Integer, default=0)  # monotonic Android versionCode / iOS buildNumber, +1 per cloud build
     min_redemption_grams = Column(Float, default=1.0)
     status = Column(String(20), default="active")  # active, suspended, pending
     created_at = Column(DateTime(timezone=True), default=utcnow)

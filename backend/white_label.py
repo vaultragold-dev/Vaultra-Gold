@@ -148,6 +148,10 @@ def tenant_config(j, api_base, logo_bytes=None, splash_bytes=None):
         "bundleId": bundle,
         "packageName": bundle,
         "version": j.app_version or "1.0.0",
+        # Store build number: Android versionCode and iOS CFBundleVersion. Incremented by the backend on every
+        # cloud build so each upload to Play / App Store Connect is unique (stores reject a repeated number).
+        "versionCode": int(getattr(j, "app_build_number", 0) or 0) or 1,
+        "buildNumber": str(int(getattr(j, "app_build_number", 0) or 0) or 1),
         "apiBaseUrl": api_base,
         "theme": {"preset": j.theme_preset or DEFAULT_PRESET, "primaryColor": p["primaryColor"],
                   "secondaryColor": p["secondaryColor"], "accentColor": p["accentColor"],
@@ -986,4 +990,30 @@ API request, and uses this jeweller's theme, logo and home layout.
 - `store/screenshots/` — 1290×2796 (iPhone 6.7") images, also accepted by Google Play
 - `store/feature-graphic.png` — Google Play 1024×500
 - Privacy policy and terms URLs are hosted by the platform (see listing.md)
+
+## Publishing model (important for approval)
+Every jeweller app must be published from the JEWELLER'S OWN Google Play Console and Apple Developer
+accounts (Apple guideline 4.2.6 / 4.3 and Google Play's repetitive-content policy reject many re-skinned
+apps uploaded from a single account). Vaultra builds the app and uploads it INTO the jeweller's account.
+
+1. The jeweller creates a Google Play Console account (one-time fee) and an Apple Developer Program
+   account (needs a D-U-N-S number for the business) and adds Vaultra as a user/admin.
+2. In Google Play Console -> Setup -> API access, create a service account with "Release manager" rights
+   and download its JSON key. Create the app entry once (name `{name}`, package `{bundle}`).
+3. In App Store Connect -> Users and Access -> Integrations -> App Store Connect API, create a key with
+   "App Manager" role; note the Key ID, Issuer ID and download the .p8 file. Note the Team ID.
+4. In the Vaultra GitHub repository add these secrets with the jeweller's **Store account key** as suffix
+   (set in Master -> App Studio, e.g. `SHARMA`):
+   - `ANDROID_KEYSTORE_BASE64_SHARMA`, `ANDROID_KEYSTORE_PASSWORD_SHARMA`, `ANDROID_KEY_ALIAS_SHARMA`, `ANDROID_KEY_PASSWORD_SHARMA`
+     (upload keystore: `keytool -genkeypair -v -keystore upload.keystore -alias upload -keyalg RSA -keysize 2048 -validity 10000`,
+     then `base64 -w0 upload.keystore`). Keep it forever - it is needed for every update.
+   - `PLAY_SERVICE_ACCOUNT_JSON_SHARMA` (the JSON key from step 2)
+   - `APPLE_TEAM_ID_SHARMA`, `ASC_KEY_ID_SHARMA`, `ASC_ISSUER_ID_SHARMA`, `ASC_API_KEY_P8_BASE64_SHARMA` (from step 3)
+   Secrets without a suffix (`ANDROID_KEYSTORE_BASE64`, `APPLE_TEAM_ID`, ...) are the platform defaults used
+   when a jeweller has no key of its own.
+5. Build from Master -> App Studio. Tick "Upload to store after build" to push the .AAB to the Play
+   internal track and the .IPA to TestFlight automatically; otherwise download and upload by hand.
+
+Each build gets a new version code / build number automatically; bump "App Release Version" (1.0.1 ...)
+in App Studio before a public release.
 """

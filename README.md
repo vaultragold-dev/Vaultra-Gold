@@ -23,3 +23,28 @@ docker compose up -d --build
 - **Backend API:** `http://localhost:8001/api/health`
 - **Master Admin Console:** `http://localhost:8001/api/admin/master`
 - **Jeweller Shop Console:** `http://localhost:8001/api/admin/jeweller`
+
+## Store publishing (per jeweller)
+
+The base app in `frontend/` is never published. Master -> App Studio builds one branded app per jeweller and
+every build is store-ready:
+
+- Release-signed Android `.aab`/`.apk` (upload keystore from GitHub secrets, debug signing fails the build)
+- App Store-signed iOS `.ipa` (automatic signing with an App Store Connect API key)
+- Unique `versionCode` / build number per build (App Studio increments it), Face ID usage string,
+  export-compliance flag, HTTPS-only backend (`PUBLIC_BASE_URL`), no cleartext traffic
+- Optional one-click upload to Google Play internal track and TestFlight ("Upload to store after build")
+
+Apple (4.2.6 / 4.3) and Google reject many re-skinned apps from one account, so each jeweller's app is published
+from the **jeweller's own** Play Console / Apple Developer account. Set the jeweller's "Store account key" in
+App Studio and add that jeweller's secrets to this repository with the key as suffix:
+
+| Purpose | Secrets (add `_<KEY>` suffix per jeweller; without suffix = platform default) |
+|---|---|
+| Android upload keystore | `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD` |
+| Google Play upload | `PLAY_SERVICE_ACCOUNT_JSON` (Play Console -> Setup -> API access, Release manager) |
+| iOS signing + TestFlight | `APPLE_TEAM_ID`, `ASC_KEY_ID`, `ASC_ISSUER_ID`, `ASC_API_KEY_P8_BASE64` (App Store Connect API key, App Manager) |
+| iOS (optional) | `IOS_DIST_P12_BASE64`, `IOS_DIST_P12_PASSWORD` (existing Apple Distribution certificate) |
+
+Backend `.env`: `PUBLIC_BASE_URL=https://...` (store builds refuse plain http), `GITHUB_TOKEN` with `actions:write`.
+The App Kit `README.md` (download from App Studio) has the step-by-step for onboarding a jeweller's accounts.

@@ -1,5 +1,17 @@
 name: Build Branded Jeweller App (Android & iOS)
 
+# Triggered by Master -> App Studio -> Build (POST /api/master/app-studio/{jid}/build).
+#
+# Store credentials are GitHub Actions secrets. Each jeweller publishes from ITS OWN Play Console / Apple
+# Developer account (Apple 4.2.6 / 4.3, Play repetitive-content policy), so every secret can carry the
+# jeweller's "Store account key" as suffix, e.g. ANDROID_KEYSTORE_BASE64_SHARMA. A secret without suffix is
+# the platform default used when the jeweller has none of its own.
+#
+#   Android:  ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD
+#             PLAY_SERVICE_ACCOUNT_JSON            (only for "Upload to store")
+#   iOS:      APPLE_TEAM_ID, ASC_KEY_ID, ASC_ISSUER_ID, ASC_API_KEY_P8_BASE64
+#             IOS_DIST_P12_BASE64, IOS_DIST_P12_PASSWORD   (optional: existing Apple Distribution certificate)
+
 on:
   workflow_dispatch:
     inputs:
@@ -16,18 +28,22 @@ on:
         required: true
         default: "in.vaultra.sharmagold"
       theme_preset:
-        description: "Theme Preset (e.g. royal_gold, rose_gold, midnight_luxe, ivory_classic, emerald_heritage)"
+        description: "Theme Preset (royal_gold, rose_gold, midnight_luxe, ivory_classic, emerald_heritage, wine_maroon)"
         required: true
         type: string
         default: "royal_gold"
       app_version:
-        description: "App Version"
+        description: "App Version shown in the store (1.0.0)"
         required: true
         default: "1.0.0"
-      api_base_url:
-        description: "Live Backend URL (e.g. http://54.152.192.240)"
+      version_code:
+        description: "Android versionCode / iOS build number (App Studio increments this on every build)"
         required: true
-        default: "http://54.152.192.240"
+        default: "1"
+      api_base_url:
+        description: "Live Backend URL - must be https:// for store builds"
+        required: true
+        default: "https://master.vaultragold.com"
       platform:
         description: "Target Platform"
         required: true
@@ -39,6 +55,18 @@ on:
           - ios
           - all
         default: "android_apk"
+      credentials_key:
+        description: "Suffix of the GitHub secrets holding this jeweller's store credentials (e.g. SHARMA). Empty = platform defaults"
+        required: false
+        default: ""
+      submit:
+        description: "After building, upload the .AAB to Google Play (internal track) and the .IPA to TestFlight"
+        required: false
+        type: boolean
+        default: false
+
+env:
+  SUBMIT: ${{ (inputs.submit == true || inputs.submit == 'true') && 'yes' || 'no' }}
 
 jobs:
   prepare-branding:
@@ -47,6 +75,20 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Guard - store builds need an HTTPS backend
+        env:
+          API_BASE_URL: ${{ inputs.api_base_url }}
+          PLATFORM: ${{ inputs.platform }}
+        run: |
+          if echo "$API_BASE_URL" | grep -qiE '^https://'; then
+            echo "Backend: $API_BASE_URL (https OK)"
+          elif [ "$PLATFORM" = "android_apk" ] && [ "$SUBMIT" = "no" ]; then
+            echo "::warning::Plain-http backend ($API_BASE_URL): this test APK allows cleartext traffic and must not be uploaded to a store."
+          else
+            echo "::error::Store builds need an https:// backend URL (got $API_BASE_URL). iOS ATS blocks plain http and Google Play rejects cleartext for a payments/KYC app."
+            exit 1
+          fi
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -63,6 +105,7 @@ jobs:
           BUNDLE_ID: ${{ inputs.bundle_id }}
           THEME_PRESET: ${{ inputs.theme_preset }}
           APP_VERSION: ${{ inputs.app_version }}
+          VERSION_CODE: ${{ inputs.version_code }}
           API_BASE_URL: ${{ inputs.api_base_url }}
         run: |
           python - << 'EOF'
@@ -78,6 +121,7 @@ jobs:
               bundle_id = os.environ["BUNDLE_ID"]
               theme_preset = os.environ["THEME_PRESET"]
               app_version = os.environ["APP_VERSION"]
+              app_build_number = int(os.environ.get("VERSION_CODE") or "1")
               logo_url = ""
               splash_url = ""
               city = "India"
@@ -147,7 +191,7 @@ jobs:
               # Full-screen poster for the in-app splash (uploaded splash image), else the square splash
               full = "assets/splash-original.png" if "assets/splash-original.png" in zf.namelist() else "assets/splash.png"
               Path("frontend/assets/images/splash-full.png").write_bytes(zf.read(full))
-          print("Successfully generated white-label branding for:", j.app_name, j.bundle_id)
+          print("Successfully generated white-label branding for:", j.app_name, j.bundle_id, "versionCode", cfg["versionCode"])
           EOF
 
       - name: Upload Branded App Kit & Store Graphics (.zip)
@@ -162,7 +206,7 @@ jobs:
             frontend/assets/images/splash-full.png
 
   build-android:
-    name: "2. Build Android (.apk & .aab)"
+    name: "2. Build Android (.apk & .aab) - release-signed"
     needs: prepare-branding
     if: ${{ inputs.platform == 'android_apk' || inputs.platform == 'android_bundle' || inputs.platform == 'android' || inputs.platform == 'all' }}
     runs-on: ubuntu-latest
@@ -179,7 +223,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -205,31 +249,100 @@ jobs:
         working-directory: frontend
         env:
           EXPO_PUBLIC_BACKEND_URL: ${{ inputs.api_base_url }}
+          APP_VERSION_CODE: ${{ inputs.version_code }}
         run: npx --yes expo prebuild --platform android --clean --no-install
 
-      - name: Ensure Android Uses Cleartext HTTP Traffic
-        working-directory: frontend/android/app/src/main
+      # Release builds are signed with the jeweller's UPLOAD keystore. Expo's template signs "release" with the
+      # debug keystore, which Google Play rejects ("signed in debug mode") - so a missing keystore fails the build.
+      - name: Configure release signing (upload keystore)
+        working-directory: frontend/android
+        env:
+          KS_T: ${{ secrets[format('ANDROID_KEYSTORE_BASE64_{0}', inputs.credentials_key)] }}
+          KS_G: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KSP_T: ${{ secrets[format('ANDROID_KEYSTORE_PASSWORD_{0}', inputs.credentials_key)] }}
+          KSP_G: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KA_T: ${{ secrets[format('ANDROID_KEY_ALIAS_{0}', inputs.credentials_key)] }}
+          KA_G: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KP_T: ${{ secrets[format('ANDROID_KEY_PASSWORD_{0}', inputs.credentials_key)] }}
+          KP_G: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          CRED_KEY: ${{ inputs.credentials_key }}
         run: |
-          sed -i 's/<application /<application android:usesCleartextTraffic="true" /g' AndroidManifest.xml
-          grep -i "usesCleartextTraffic" AndroidManifest.xml || true
+          KS="${KS_T:-$KS_G}"; KSP="${KSP_T:-$KSP_G}"; KA="${KA_T:-$KA_G}"; KP="${KP_T:-$KP_G}"
+          if [ -z "$KS" ] || [ -z "$KSP" ] || [ -z "$KA" ]; then
+            SUF=""; [ -n "$CRED_KEY" ] && SUF=" (or with suffix _$CRED_KEY for this jeweller)"
+            echo "::error::No Android upload keystore configured. Add the GitHub secrets ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD$SUF. A debug-signed build is rejected by Google Play, so the build stops here."
+            exit 1
+          fi
+          KP="${KP:-$KSP}"
+          KS_FILE="$GITHUB_WORKSPACE/frontend/android/app/upload.keystore"
+          echo "$KS" | base64 -d > "$KS_FILE"
+          # Fail early with a clear message if password/alias do not match the keystore
+          keytool -list -keystore "$KS_FILE" -storepass "$KSP" -alias "$KA" > /dev/null
+          [ -n "$KS_T" ] && echo "Using jeweller keystore (secret suffix _$CRED_KEY)" || echo "Using platform default keystore"
+          cat >> app/build.gradle << 'GRADLE'
+
+          // Vaultra App Studio: release builds are signed with the upload keystore from CI (never the debug key)
+          android {
+              signingConfigs {
+                  release {
+                      storeFile file(System.getenv("VAULTRA_KEYSTORE_FILE"))
+                      storePassword System.getenv("VAULTRA_KEYSTORE_PASSWORD")
+                      keyAlias System.getenv("VAULTRA_KEY_ALIAS")
+                      keyPassword System.getenv("VAULTRA_KEY_PASSWORD")
+                  }
+              }
+              buildTypes {
+                  release {
+                      signingConfig signingConfigs.release
+                  }
+              }
+          }
+          GRADLE
+          {
+            echo "VAULTRA_KEYSTORE_FILE=$KS_FILE"
+            echo "VAULTRA_KEYSTORE_PASSWORD=$KSP"
+            echo "VAULTRA_KEY_ALIAS=$KA"
+            echo "VAULTRA_KEY_PASSWORD=$KP"
+          } >> "$GITHUB_ENV"
 
       - name: Build Android APK / AAB
         working-directory: frontend/android
         env:
           TARGET_PLATFORM: ${{ inputs.platform }}
           EXPO_PUBLIC_BACKEND_URL: ${{ inputs.api_base_url }}
+          APP_VERSION_CODE: ${{ inputs.version_code }}
         run: |
           chmod +x gradlew
+          GOPTS="--no-daemon --build-cache -PreactNativeArchitectures=arm64-v8a,armeabi-v7a -Dorg.gradle.parallel=true -Dorg.gradle.jvmargs=-Xmx3072m"
           if [ "$TARGET_PLATFORM" = "android_apk" ]; then
             echo "Building Release APK only (Fast Mode)..."
-            ./gradlew assembleRelease --no-daemon --build-cache -PreactNativeArchitectures=arm64-v8a,armeabi-v7a -Dorg.gradle.parallel=true -Dorg.gradle.jvmargs="-Xmx3072m -XX:MaxMetaspaceSize=512m"
+            ./gradlew assembleRelease $GOPTS
           elif [ "$TARGET_PLATFORM" = "android_bundle" ]; then
             echo "Building Play Store AAB Bundle only..."
-            ./gradlew bundleRelease --no-daemon --build-cache -PreactNativeArchitectures=arm64-v8a,armeabi-v7a -Dorg.gradle.parallel=true -Dorg.gradle.jvmargs="-Xmx3072m -XX:MaxMetaspaceSize=512m"
+            ./gradlew bundleRelease $GOPTS
           else
             echo "Building both Release APK and Play Store AAB..."
-            ./gradlew assembleRelease bundleRelease --no-daemon --build-cache -PreactNativeArchitectures=arm64-v8a,armeabi-v7a -Dorg.gradle.parallel=true -Dorg.gradle.jvmargs="-Xmx3072m -XX:MaxMetaspaceSize=512m"
+            ./gradlew assembleRelease bundleRelease $GOPTS
           fi
+
+      - name: Verify release signature (never debug-signed)
+        working-directory: frontend/android
+        run: |
+          APKSIGNER=$(ls -d "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -n 1)
+          found=0
+          for f in $(find app/build/outputs/apk -name '*.apk' 2>/dev/null); do
+            found=1
+            "$APKSIGNER" verify --print-certs "$f" | tee /tmp/cert.txt
+            if grep -qi "Android Debug" /tmp/cert.txt; then echo "::error::$f is signed with the DEBUG key"; exit 1; fi
+          done
+          for f in $(find app/build/outputs/bundle -name '*.aab' 2>/dev/null); do
+            found=1
+            jarsigner -verify -verbose:summary -certs "$f" | tee /tmp/cert.txt
+            if grep -qi "Android Debug" /tmp/cert.txt; then echo "::error::$f is signed with the DEBUG key"; exit 1; fi
+            grep -qi "jar verified" /tmp/cert.txt || { echo "::error::$f signature could not be verified"; exit 1; }
+          done
+          [ "$found" = "1" ] || { echo "::error::No build output found"; exit 1; }
+          echo "Release signature OK (versionCode ${{ inputs.version_code }})"
 
       - name: Upload Ready-to-Install Android APK & Play Store AAB
         uses: actions/upload-artifact@v4
@@ -240,8 +353,38 @@ jobs:
             frontend/android/app/build/outputs/bundle/**/*.aab
           if-no-files-found: warn
 
+      - name: Prepare Play Console service account
+        if: ${{ env.SUBMIT == 'yes' && inputs.platform != 'android_apk' }}
+        env:
+          SA_T: ${{ secrets[format('PLAY_SERVICE_ACCOUNT_JSON_{0}', inputs.credentials_key)] }}
+          SA_G: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          CRED_KEY: ${{ inputs.credentials_key }}
+        run: |
+          SA="${SA_T:-$SA_G}"
+          if [ -z "$SA" ]; then
+            echo "::error::Upload to Play requested but no PLAY_SERVICE_ACCOUNT_JSON secret (suffix _$CRED_KEY or default). Create a service account in the jeweller's Play Console (Setup -> API access, Release manager) and add its JSON key."
+            exit 1
+          fi
+          printf '%s' "$SA" > "$RUNNER_TEMP/play-sa.json"
+          echo "PLAY_SA_FILE=$RUNNER_TEMP/play-sa.json" >> "$GITHUB_ENV"
+          AAB=$(find frontend/android/app/build/outputs/bundle -name '*.aab' | head -n 1)
+          [ -n "$AAB" ] || { echo "::error::No .aab to upload"; exit 1; }
+          echo "PLAY_AAB=$AAB" >> "$GITHUB_ENV"
+
+      # The app entry must already exist in the jeweller's Play Console (created once by hand with this package name).
+      - name: Upload .AAB to Google Play (internal testing track)
+        if: ${{ env.SUBMIT == 'yes' && inputs.platform != 'android_apk' }}
+        uses: r0adkll/upload-google-play@v1.1.3
+        with:
+          serviceAccountJson: ${{ env.PLAY_SA_FILE }}
+          packageName: ${{ inputs.bundle_id }}
+          releaseFiles: ${{ env.PLAY_AAB }}
+          track: internal
+          status: completed
+          releaseName: ${{ inputs.app_version }} (${{ inputs.version_code }})
+
   build-ios:
-    name: "3. Build iOS (.ipa / Xcode Archive)"
+    name: "3. Build iOS (.ipa) - App Store signed"
     needs: prepare-branding
     if: ${{ inputs.platform == 'ios' || inputs.platform == 'all' }}
     runs-on: macos-latest
@@ -271,6 +414,54 @@ jobs:
           fi
           xcodebuild -version
 
+      # App Store Connect API key (per jeweller via suffix, else platform default). Xcode uses it for automatic
+      # cloud signing: it creates/refreshes the App Store provisioning profile for this bundle id by itself.
+      - name: Resolve Apple signing credentials
+        env:
+          TEAM_T: ${{ secrets[format('APPLE_TEAM_ID_{0}', inputs.credentials_key)] }}
+          TEAM_G: ${{ secrets.APPLE_TEAM_ID }}
+          KID_T: ${{ secrets[format('ASC_KEY_ID_{0}', inputs.credentials_key)] }}
+          KID_G: ${{ secrets.ASC_KEY_ID }}
+          ISS_T: ${{ secrets[format('ASC_ISSUER_ID_{0}', inputs.credentials_key)] }}
+          ISS_G: ${{ secrets.ASC_ISSUER_ID }}
+          P8_T: ${{ secrets[format('ASC_API_KEY_P8_BASE64_{0}', inputs.credentials_key)] }}
+          P8_G: ${{ secrets.ASC_API_KEY_P8_BASE64 }}
+          P12_T: ${{ secrets[format('IOS_DIST_P12_BASE64_{0}', inputs.credentials_key)] }}
+          P12_G: ${{ secrets.IOS_DIST_P12_BASE64 }}
+          P12P_T: ${{ secrets[format('IOS_DIST_P12_PASSWORD_{0}', inputs.credentials_key)] }}
+          P12P_G: ${{ secrets.IOS_DIST_P12_PASSWORD }}
+          CRED_KEY: ${{ inputs.credentials_key }}
+        run: |
+          TEAM="${TEAM_T:-$TEAM_G}"; KID="${KID_T:-$KID_G}"; ISS="${ISS_T:-$ISS_G}"; P8="${P8_T:-$P8_G}"
+          if [ -z "$TEAM" ] || [ -z "$KID" ] || [ -z "$ISS" ] || [ -z "$P8" ]; then
+            SUF=""; [ -n "$CRED_KEY" ] && SUF=" (or with suffix _$CRED_KEY for this jeweller)"
+            echo "::error::No Apple signing credentials. Add the GitHub secrets APPLE_TEAM_ID, ASC_KEY_ID, ASC_ISSUER_ID, ASC_API_KEY_P8_BASE64$SUF (App Store Connect -> Users and Access -> Integrations -> App Store Connect API, role App Manager). An unsigned .ipa cannot be submitted, so the build stops here."
+            exit 1
+          fi
+          mkdir -p "$HOME/private_keys" "$HOME/.appstoreconnect/private_keys"
+          echo "$P8" | base64 -d > "$HOME/private_keys/AuthKey_$KID.p8"
+          cp "$HOME/private_keys/AuthKey_$KID.p8" "$HOME/.appstoreconnect/private_keys/AuthKey_$KID.p8"
+          {
+            echo "APPLE_TEAM_ID=$TEAM"
+            echo "ASC_KEY_ID=$KID"
+            echo "ASC_ISSUER_ID=$ISS"
+            echo "ASC_KEY_PATH=$HOME/private_keys/AuthKey_$KID.p8"
+          } >> "$GITHUB_ENV"
+          [ -n "$TEAM_T" ] && echo "Using jeweller Apple account (secret suffix _$CRED_KEY)" || echo "Using platform default Apple account"
+          # Optional: an existing Apple Distribution certificate (.p12). Without it Xcode cloud-signing manages one.
+          P12="${P12_T:-$P12_G}"; P12P="${P12P_T:-$P12P_G}"
+          if [ -n "$P12" ]; then
+            KC="$RUNNER_TEMP/build.keychain-db"; KCP=$(uuidgen)
+            security create-keychain -p "$KCP" "$KC"
+            security set-keychain-settings -lut 21600 "$KC"
+            security unlock-keychain -p "$KCP" "$KC"
+            echo "$P12" | base64 -d > "$RUNNER_TEMP/dist.p12"
+            security import "$RUNNER_TEMP/dist.p12" -k "$KC" -P "$P12P" -T /usr/bin/codesign -T /usr/bin/security
+            security set-key-partition-list -S apple-tool:,apple: -s -k "$KCP" "$KC" > /dev/null
+            security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
+            echo "Imported Apple Distribution certificate"
+          fi
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -286,27 +477,63 @@ jobs:
         working-directory: frontend
         env:
           EXPO_PUBLIC_BACKEND_URL: ${{ inputs.api_base_url }}
+          APP_VERSION_CODE: ${{ inputs.version_code }}
         run: npx --yes expo prebuild --platform ios --clean --no-install
 
-      - name: Build iOS via EAS or Xcode Archive
-        working-directory: frontend
+      - name: Install CocoaPods
+        working-directory: frontend/ios
+        run: pod install --repo-update
+
+      - name: Archive (automatic signing via App Store Connect API key)
+        working-directory: frontend/ios
         env:
-          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
           EXPO_PUBLIC_BACKEND_URL: ${{ inputs.api_base_url }}
+          APP_VERSION_CODE: ${{ inputs.version_code }}
         run: |
-          if [ -n "$EXPO_TOKEN" ]; then
-            npx --yes eas-cli build --platform ios --profile production --non-interactive
-          else
-            cd ios
-            pod install --repo-update
-            WORKSPACE=$(ls -d *.xcworkspace | head -n 1)
-            SCHEME="${WORKSPACE%.xcworkspace}"
-            xcodebuild -workspace "$WORKSPACE" -scheme "$SCHEME" -configuration Release -sdk iphoneos -archivePath "$RUNNER_TEMP/app.xcarchive" archive CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" EXPANDED_CODE_SIGN_IDENTITY="" DEVELOPMENT_TEAM="" COMPILER_INDEX_STORE_ENABLE=NO
-            mkdir -p "$RUNNER_TEMP/Payload"
-            cp -r "$RUNNER_TEMP/app.xcarchive/Products/Applications/"*.app "$RUNNER_TEMP/Payload/"
-            cd "$RUNNER_TEMP"
-            zip -r "$GITHUB_WORKSPACE/frontend/ios-unsigned.ipa" Payload
-          fi
+          WORKSPACE=$(ls -d *.xcworkspace | head -n 1)
+          SCHEME="${WORKSPACE%.xcworkspace}"
+          echo "SCHEME=$SCHEME" >> "$GITHUB_ENV"
+          xcodebuild -workspace "$WORKSPACE" -scheme "$SCHEME" -configuration Release \
+            -destination 'generic/platform=iOS' -archivePath "$RUNNER_TEMP/app.xcarchive" archive \
+            DEVELOPMENT_TEAM="$APPLE_TEAM_ID" CODE_SIGN_STYLE=Automatic COMPILER_INDEX_STORE_ENABLE=NO \
+            -allowProvisioningUpdates -allowProvisioningDeviceRegistration \
+            -authenticationKeyPath "$ASC_KEY_PATH" -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID"
+
+      - name: Export signed .ipa (App Store distribution)
+        working-directory: frontend/ios
+        env:
+          BUNDLE_ID: ${{ inputs.bundle_id }}
+          APP_VERSION: ${{ inputs.app_version }}
+          VERSION_CODE: ${{ inputs.version_code }}
+        run: |
+          cat > "$RUNNER_TEMP/ExportOptions.plist" << PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>destination</key><string>export</string>
+            <key>signingStyle</key><string>automatic</string>
+            <key>teamID</key><string>$APPLE_TEAM_ID</string>
+            <key>uploadSymbols</key><true/>
+            <key>manageAppVersionAndBuildNumber</key><false/>
+          </dict></plist>
+          PLIST
+          xcodebuild -exportArchive -archivePath "$RUNNER_TEMP/app.xcarchive" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" -exportPath "$RUNNER_TEMP/export" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$ASC_KEY_PATH" -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID"
+          IPA=$(ls "$RUNNER_TEMP"/export/*.ipa | head -n 1)
+          [ -n "$IPA" ] || { echo "::error::exportArchive produced no .ipa"; exit 1; }
+          OUT="$GITHUB_WORKSPACE/frontend/${BUNDLE_ID}-${APP_VERSION}-${VERSION_CODE}.ipa"
+          cp "$IPA" "$OUT"
+          echo "IPA_PATH=$OUT" >> "$GITHUB_ENV"
+          codesign -dv --verbose=2 "$RUNNER_TEMP/app.xcarchive/Products/Applications/"*.app 2>&1 | grep -E "Authority|TeamIdentifier" || true
+
+      - name: Upload .ipa to App Store Connect (TestFlight)
+        if: ${{ env.SUBMIT == 'yes' }}
+        run: |
+          xcrun altool --upload-app -f "$IPA_PATH" -t ios --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID"
+          echo "Uploaded to App Store Connect - processing takes a few minutes, then it appears under TestFlight."
 
       - name: Upload iOS Build Artifact
         uses: actions/upload-artifact@v4

@@ -4915,6 +4915,11 @@ def _public_base(request: Request):
     return f"{proto}://{host}"
 
 
+def _site_base(request: Request):
+    """Public HTTPS origin baked into branded apps and store kits. PUBLIC_BASE_URL in .env wins over the request host."""
+    return (os.environ.get("PUBLIC_BASE_URL") or "").strip().rstrip("/") or _public_base(request)
+
+
 def app_studio_row(j, base):
     cfg = wl.tenant_config(j, base)
     return {"id": j.id, "business_name": j.business_name, "city": j.city, "status": j.status, "phone": j.phone, "email": j.email,
@@ -4927,6 +4932,7 @@ def app_studio_row(j, base):
             "app_status": j.app_status or "details_pending", "support_email": j.support_email or "",
             "store_short": j.store_short or "", "store_long": j.store_long or "", "store_keywords": j.store_keywords or "",
             "domain": j.domain or "", "admin_domain": j.admin_domain or "", "suggested_bundle_id": wl.default_bundle_id(j.business_name), "config": cfg,
+            "store_creds_key": getattr(j, "store_creds_key", "") or "", "app_build_number": int(getattr(j, "app_build_number", 0) or 0),
             "karats": karat_rates(j.id), "silver_buy": silver_rate(j.id)[0]}
 
 
@@ -4950,7 +4956,7 @@ def _status_after_edit(j):
 
 @api.get("/master/app-studio")
 async def ms_list(request: Request, admin: MasterAdmin = Depends(get_master_admin), db: AsyncSession = Depends(get_db)):
-    base = _public_base(request)
+    base = _site_base(request)
     js = (await db.execute(select(Jeweller).order_by(Jeweller.created_at))).scalars().all()
     presets = {k: {kk: vv for kk, vv in v.items()} for k, v in wl.THEME_PRESETS.items()}
     return {"presets": presets, "statuses": [{"key": s, "label": wl.APP_STATUS_LABEL[s]} for s in wl.APP_STATUSES],
@@ -4978,6 +4984,8 @@ class AppStudioUpdate(BaseModel):
     store_keywords: str = Field(default="", max_length=100)
     domain: str = ""
     admin_domain: str = ""
+    # Suffix of the GitHub secrets that hold this jeweller's own Play / App Store credentials (e.g. SHARMA)
+    store_creds_key: str = Field(default="", pattern=r"^[A-Za-z0-9_]{0,40}$")
 
 
 @api.put("/master/app-studio/{jid}")
@@ -5008,6 +5016,7 @@ async def ms_update(jid: str, body: AppStudioUpdate, request: Request, admin: Ma
     j.store_hours = (body.store_hours or "").strip()
     j.logo_url, j.splash_url, j.app_version = body.logo_url, body.splash_url, body.app_version
     j.support_email, j.store_short, j.store_long, j.store_keywords = clean_email(body.support_email, label="Support email"), body.store_short.strip(), body.store_long.strip(), body.store_keywords.strip()
+    j.store_creds_key = (body.store_creds_key or "").strip().upper()
     if body.domain is not None:
         try:
             j.domain = normalize_domain(body.domain)
@@ -5021,7 +5030,7 @@ async def ms_update(jid: str, body: AppStudioUpdate, request: Request, admin: Ma
     j.app_status = _status_after_edit(j)
     await audit(db, "master", admin, "app.update", j.business_name, {"app_name": j.app_name, "bundle_id": bundle, "theme": j.theme_preset}, j.id)
     await db.commit()
-    return app_studio_row(j, _public_base(request))
+    return app_studio_row(j, _site_base(request))
 
 
 class AppStatusUpdate(BaseModel):
@@ -5040,7 +5049,7 @@ async def ms_status(jid: str, body: AppStatusUpdate, request: Request, admin: Ma
     j.app_status = body.status
     await audit(db, "master", admin, "app.status", j.business_name, {"status": body.status}, j.id)
     await db.commit()
-    return app_studio_row(j, _public_base(request))
+    return app_studio_row(j, _site_base(request))
 
 
 async def _file_bytes(url, db):
@@ -5056,6 +5065,17 @@ async def _file_bytes(url, db):
 
 class AppBuildTrigger(BaseModel):
     platform: str = "android_apk"  # android_apk, android_bundle, android, ios, all
+    submit: bool = False  # also upload the .AAB to Play (internal track) / the .IPA to TestFlight
+
+
+def _build_base(request: Request) -> str:
+    """HTTPS origin the branded app will talk to. Plain http is refused: iOS ATS blocks it and Play rejects
+    cleartext for a payments/KYC app. Override with PUBLIC_BASE_URL=https://... (ALLOW_HTTP_BUILD=1 for test APKs only)."""
+    base = _site_base(request)
+    if not base.lower().startswith("https://") and os.environ.get("ALLOW_HTTP_BUILD", "0") != "1":
+        raise HTTPException(400, "Store builds need an HTTPS backend. Open the Master panel over https:// or set "
+                                 "PUBLIC_BASE_URL=https://your-domain in backend/.env (set ALLOW_HTTP_BUILD=1 only for test APKs).")
+    return base
 
 
 def _gh_headers():
@@ -5083,15 +5103,23 @@ async def ms_trigger_build(jid: str, body: AppBuildTrigger, request: Request, ad
     headers = _gh_headers()
     gh_repo = _gh_repo()
     gh_ref = (os.environ.get("GITHUB_REF") or "main").strip()
-    public_url = _public_base(request)
+    public_url = _build_base(request)
+    platform = body.platform if body.platform in ("android_apk", "android_bundle", "android", "ios", "all") else "android_apk"
+    if body.submit and platform == "android_apk":
+        raise HTTPException(400, "Store upload needs a Play Store .AAB or iOS build, not a test APK")
+    # Every cloud build gets the next version code / build number: Play and App Store Connect reject a repeated one.
+    j.app_build_number = int(j.app_build_number or 0) + 1
     inputs = {
         "tenant_id": str(j.id),
         "app_name": str(j.app_name),
         "bundle_id": str(j.bundle_id),
         "theme_preset": str(j.theme_preset if j.theme_preset in wl.THEME_PRESETS else "royal_gold"),
         "app_version": str(j.app_version or "1.0.0"),
+        "version_code": str(j.app_build_number),
         "api_base_url": str(public_url),
-        "platform": body.platform if body.platform in ("android_apk", "android_bundle", "android", "ios", "all") else "android_apk",
+        "platform": platform,
+        "credentials_key": str(j.store_creds_key or ""),
+        "submit": "true" if body.submit else "false",
     }
     def _dispatch_and_find():
         url = f"https://api.github.com/repos/{gh_repo}/actions/workflows/build-branded-app.yml/dispatches"
@@ -5116,7 +5144,10 @@ async def ms_trigger_build(jid: str, body: AppBuildTrigger, request: Request, ad
         "app_name": j.app_name,
         "bundle_id": j.bundle_id,
         "app_version": j.app_version or "1.0.0",
+        "build_number": j.app_build_number,
         "platform": inputs["platform"],
+        "submit": body.submit,
+        "credentials_key": inputs["credentials_key"],
         "started_at": now_iso(),
     }
     await _setting(f"app_build:{j.id}", json.dumps(meta))
@@ -5125,7 +5156,7 @@ async def ms_trigger_build(jid: str, body: AppBuildTrigger, request: Request, ad
     return {
         "ok": True,
         "run_id": run_id,
-        "message": f"Cloud build ({inputs['platform']}) started for {j.app_name}...",
+        "message": f"Cloud build #{j.app_build_number} ({inputs['platform']}) started for {j.app_name}" + (" - will upload to the store when done" if body.submit else "") + "...",
         "row": app_studio_row(j, public_url),
     }
 
@@ -5232,7 +5263,7 @@ async def ms_download_build(jid: str, kind: str, request: Request, token: str = 
     if kind == "kit":
         logo, splash = await _file_bytes(j.logo_url, db), await _file_bytes(j.splash_url, db)
         rates = karat_rates(j.id) | {"silver": silver_rate(j.id)[0]}
-        data, _ = await run_in_threadpool(wl.build_app_kit, j, _public_base(request), rates, logo, splash)
+        data, _ = await run_in_threadpool(wl.build_app_kit, j, _site_base(request), rates, logo, splash)
         return Response(content=data, media_type="application/zip", headers={"Content-Disposition": f'attachment; filename="{slug}-store-kit.zip"'})
 
     if kind not in ("apk", "aab", "ipa"):
@@ -5298,7 +5329,7 @@ async def ms_kit(jid: str, request: Request, admin: MasterAdmin = Depends(get_ma
     rates = karat_rates(j.id) | {"silver": silver_rate(j.id)[0]}
     if RATE_FEED["source"] == "offline" and not PRICE.get("real"):
         rates = {}
-    data, _ = await run_in_threadpool(wl.build_app_kit, j, _public_base(request), rates, logo, splash)
+    data, _ = await run_in_threadpool(wl.build_app_kit, j, _site_base(request), rates, logo, splash)
     await audit(db, "master", admin, "app.kit_export", j.business_name, {"bundle_id": j.bundle_id}, j.id)
     await db.commit()
     fname = f"{wl.slugify(j.app_name, '-')}-app-kit.zip"

@@ -9,7 +9,7 @@ async function openShopAdmin(jid) {
 }
 
 /* Master console: App Studio — white-label app per jeweller */
-S.studio = null; S.studioSel = ''; S.draft = null; S.buildState = {}; S.buildTimer = null;
+S.studio = null; S.studioSel = ''; S.draft = null; S.buildState = {}; S.buildTimer = null; S.studioSubmit = false;
 const loadStudio = () => safe(async () => {
   S.studio = await api('/master/app-studio');
   if (!S.studio.apps.some((a) => a.id === S.studioSel)) S.studioSel = S.studio.apps[0]?.id || '';
@@ -35,6 +35,7 @@ function pickDraft() {
     logo_url: a.logo_url,
     splash_url: a.splash_url,
     app_version: a.app_version,
+    store_creds_key: a.store_creds_key || '',
     support_email: a.support_email || a.email,
     domain: a.domain || '',
     admin_domain: a.admin_domain || '',
@@ -84,11 +85,24 @@ function renderBuildCenter(id) {
       }).join('')}</div>`
     : '';
 
+  const cur = (S.studio?.apps || []).find((x) => x.id === id) || {};
+  const credKey = (S.draft && S.studio && S.studioSel === id ? S.draft.store_creds_key : cur.store_creds_key) || '';
+  const lastNo = Number(cur.app_build_number || 0);
+  const submitOn = !!S.studioSubmit;
   return `<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px">
       <div><b style="font-size:14px">📲 Multi-Tenant App Builder & Direct Downloads (Android & iOS)</b>
-        <div class="sub">Compiles real Android (.APK / .AAB) and iOS (.IPA) binaries in GitHub Actions cloud runners</div></div>
+        <div class="sub">Compiles store-signed Android (.AAB / .APK) and iOS (.IPA) binaries in GitHub Actions cloud runners · ${lastNo ? `last build #${lastNo}` : 'no build yet'} · next build #${lastNo + 1} · v${esc(cur.app_version || '1.0.0')}</div></div>
       ${statusBadgeHtml}
     </div>
+    <div style="font-size:12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:8px 10px;margin-bottom:8px">
+      🔐 Signing &amp; store account: <b>${credKey ? esc(credKey) + ' (jeweller\'s own Play / App Store account)' : 'Vaultra default secrets'}</b> ·
+      backend <b>${esc(((cur.config || {}).apiBaseUrl) || '')}</b>${/^https:\/\//i.test(((cur.config || {}).apiBaseUrl) || '') ? '' : ' <span class="badge red">must be https:// for store builds</span>'}
+      <div class="sub" style="margin-top:4px">Apple (4.2.6 / 4.3) and Google reject many re-skinned apps from one account — each jeweller's app goes to the jeweller's own developer account. Set the "Store account key" in Step 3 and add that jeweller's secrets in GitHub (see the App Kit README).</div>
+    </div>
+    <label style="display:flex;align-items:center;gap:8px;font-size:12.5px;margin-bottom:6px;cursor:pointer">
+      <input type="checkbox" id="studio-submit" ${submitOn ? 'checked' : ''} onchange="S.studioSubmit=this.checked" ${isRunning ? 'disabled' : ''}>
+      <span><b>Upload to store after build</b> — .AAB → Google Play internal testing track, .IPA → TestFlight (needs PLAY_SERVICE_ACCOUNT_JSON / App Store Connect API key secrets; the app entry must already exist in Play Console)</span>
+    </label>
     ${jobsHtml}
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
       <button class="btn gold" onclick="studioBuild('${id}','android_apk')" id="studio-build-apk" ${isRunning ? 'disabled' : ''}>
@@ -684,9 +698,12 @@ function vStudio() {
         </div>
       </div>
       
-      <div class="grid g2">
-        <div class="field"><label>App Release Version</label><input class="input" value="${esc(d.app_version)}" oninput="dset('app_version',this.value)"></div>
+      <div class="grid g3">
+        <div class="field"><label>App Release Version <span class="sub" style="font-weight:400">· build #${Number((S.studio.apps.find((x) => x.id === S.studioSel) || {}).app_build_number || 0) + 1} next</span></label><input class="input" value="${esc(d.app_version)}" placeholder="1.0.0" oninput="dset('app_version',this.value)">
+          <div class="hint">Bump (1.0.1 …) before each public release. The build number (versionCode) increases automatically on every cloud build.</div></div>
         <div class="field"><label>Customer Support Email *</label><input class="input" type="email" data-fmt="email" placeholder="support@yourstore.com" value="${esc(d.support_email)}" oninput="dset('support_email',this.value)"></div>
+        <div class="field"><label>Store account key</label><input class="input" maxlength="40" placeholder="e.g. SHARMA (blank = Vaultra default)" value="${esc(d.store_creds_key || '')}" oninput="dset('store_creds_key',this.value.toUpperCase().replace(/[^A-Z0-9_]/g,''))">
+          <div class="hint">Suffix of the GitHub secrets that hold THIS jeweller's Play Console / App Store Connect credentials (ANDROID_KEYSTORE_BASE64_<b>KEY</b>, PLAY_SERVICE_ACCOUNT_JSON_<b>KEY</b>, APPLE_TEAM_ID_<b>KEY</b>, ASC_KEY_ID_<b>KEY</b> …). Apple &amp; Google require each jeweller's app to be published from the jeweller's own developer account.</div></div>
       </div>
 
       <div style="margin-top:16px;padding-top:16px;border-top:1px solid #e2e8f0">
@@ -1040,7 +1057,9 @@ async function studioBuild(id, platform) {
   try {
     const saved = await api('/master/app-studio/' + id, { method: 'PUT', body: S.draft });
     S.studio.apps = S.studio.apps.map((x) => x.id === saved.id ? saved : x);
-    const res = await api(`/master/app-studio/${id}/build`, { method: 'POST', body: { platform: platform || 'android_apk' } });
+    const submit = !!S.studioSubmit && platform !== 'android_apk';
+    if (!!S.studioSubmit && platform === 'android_apk') toast('Test APKs are never uploaded to a store — building without upload');
+    const res = await api(`/master/app-studio/${id}/build`, { method: 'POST', body: { platform: platform || 'android_apk', submit } });
     if (res.row) S.studio.apps = S.studio.apps.map((x) => x.id === res.row.id ? res.row : x);
     toast(res.message || 'Cloud build started! Progress will update automatically.');
     await checkBuildStatus(id);

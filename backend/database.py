@@ -66,5 +66,7 @@ async def init_db():
             "ALTER TABLE sips ADD COLUMN IF NOT EXISTS last_status VARCHAR(20) DEFAULT ''",
             "ALTER TABLE sips ADD COLUMN IF NOT EXISTS last_error TEXT DEFAULT ''",
             "ALTER TABLE sips ADD COLUMN IF NOT EXISTS last_run TIMESTAMP WITH TIME ZONE",
+            "ALTER TABLE jewellers ADD COLUMN IF NOT EXISTS store_creds_key VARCHAR(40) DEFAULT ''",
+            "ALTER TABLE jewellers ADD COLUMN IF NOT EXISTS app_build_number INTEGER DEFAULT 0",
         ):
             await conn.execute(text(stmt))
